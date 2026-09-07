@@ -1,6 +1,44 @@
 # CHANGELOG
 
 
+## v0.5.0 (2026-09-07)
+
+### Features
+
+- **sources**: Ajouter plusieurs sources depuis l'interface, bibliotheque comprise
+  ([`1276a80`](https://github.com/gsoulat/sortilege/commit/1276a80bf6074784fec993dec32b36a011671d9c))
+
+On ne pouvait que CHOISIR parmi les racines declarees dans l'environnement. On peut desormais en
+  ajouter, avec un explorateur de dossiers plutot qu'une saisie de chemin a l'aveugle.
+
+Perimetre autorise : les racines sources ET la racine de bibliotheque. Cette derniere n'est pas un
+  oubli — scanner une bibliotheque deja rangee est un usage a part entiere : la normaliser, corriger
+  d'anciens noms, rattraper ce qui a ete classe a la main. C'est exactement le cas pour lequel on
+  sort FileBot d'habitude.
+
+Une source ajoutee doit vivre sous une de ces zones. Le conteneur ne voit que ses volumes, et
+  accepter un chemin libre offrirait un parcours de tout ce qui est monte. Le message de refus
+  indique les zones autorisees et comment en ouvrir une autre, plutot que de se contenter d'un «
+  interdit ».
+
+L'explorateur (GET /api/settings/browse) applique le meme confinement : on ne descend que sous une
+  zone autorisee et le bouton « Remonter » disparait des qu'on atteint sa racine, plutot que de
+  proposer une navigation qui echouera.
+
+Les fichiers deja dans la bibliotheque sont marques in_library. Sans ce marqueur, scanner ses
+  propres Films proposerait de les deplacer alors qu'ils sont au bon endroit : du bruit dans la file
+  de revue, et une operation nulle dans le journal d'annulation si elle etait appliquee.
+
+Une racine venue du compose ne peut pas etre retiree depuis l'interface — elle n'appartient pas aux
+  preferences.
+
+Correction : l'interface envoyait un patch partiel apres un Object.assign, ce qui laissait une
+  fenetre ou deux enregistrements rapproches pouvaient s'entrecroiser et perdre un champ. Elle
+  envoie desormais l'etat complet, ce qui est idempotent et supprime la course.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.4.0 (2026-09-07)
 
 ### Features
