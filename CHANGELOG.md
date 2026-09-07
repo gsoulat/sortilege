@@ -1,6 +1,46 @@
 # CHANGELOG
 
 
+## v0.3.0 (2026-09-07)
+
+### Features
+
+- **ui**: Rendre Bibliotheque, File de revue et Reglages fonctionnelles
+  ([`90f3383`](https://github.com/gsoulat/sortilege/commit/90f33836f478ea223c8624de6e22794e1d6b0b20))
+
+Les trois onglets etaient desactives. Ils repondent maintenant a de vraies donnees, et l'API est
+  decoupee en modules — main.py devenait un fourre-tout.
+
+Bibliotheque : scan des racines sources, avec ce que le parseur et la sonde comprennent de chaque
+  fichier. Aucune cle d'API n'est requise a cette etape, ce qui permet de juger la reconnaissance
+  avant meme de configurer quoi que ce soit. La resolution mesuree prime sur celle annoncee dans le
+  nom. Filtres par type et par « lecture douteuse » (qualite < 0.6) pour aller droit aux cas
+  problematiques.
+
+Le scanner ecarte les echantillons et bandes-annonces, les fichiers sous 50 Mo et les dossiers
+  systeme des NAS (@eaDir, .@__thumb, #recycle). Un verrou empeche deux scans concurrents : ils
+  doubleraient la charge disque pour un resultat identique.
+
+File de revue : plutot que des donnees factices, elle enonce precisement ce qui manque pour qu'elle
+  se remplisse — compute_score, une cle TMDB, core/matching. La detection appelle reellement
+  compute_score et intercepte NotImplementedError, donc l'ecran se debloquera tout seul le jour ou
+  la fonction sera ecrite.
+
+Reglages : diagnostic (ffprobe, racines, cle TMDB, mode simulation), chemins, seuils, fournisseurs,
+  resolveur IA. En LECTURE SEULE et a dessein : toute la configuration vient de l'environnement, une
+  ecriture depuis l'UI creerait un second etat de verite invisible dans le compose. Aucune valeur
+  secrete n'est renvoyee, seulement des booleens « configure ou non » — cette reponse finit dans la
+  console du navigateur.
+
+Chaque diagnostic enonce la consequence concrete, pas seulement l'absence : un « ffprobe manquant »
+  sans effet enonce n'aide personne a decider s'il faut agir.
+
+Le stockage du dernier scan est en memoire, assume et temporaire jusqu'aux modeles SQLModel. Rien
+  n'est encore applique au disque, donc rien de precieux n'est perdu au redemarrage.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.2.0 (2026-09-07)
 
 ### Features
