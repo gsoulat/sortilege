@@ -1,6 +1,51 @@
 # CHANGELOG
 
 
+## v0.8.0 (2026-09-07)
+
+### Features
+
+- **auth**: Fermer l'API derriere le mot de passe
+  ([`25dc6e8`](https://github.com/gsoulat/sortilege/commit/25dc6e8bbd42baf1ea07476fb6ea61271de10fdb))
+
+SORTILEGE_ADMIN_PASSWORD etait EXIGE au demarrage mais n'etait utilise nulle part. L'application
+  refusait de demarrer sans mot de passe tout en etant entierement ouverte : pire qu'une absence
+  d'authentification, puisqu'elle en donnait l'illusion. Sur un LAN, pour un outil qui deplace des
+  fichiers.
+
+Toute l'API est desormais fermee par defaut, via une LISTE BLANCHE de routes publiques et non une
+  liste noire : oublier d'ouvrir une route rend une page inaccessible, ce qui se voit tout de suite
+  ; oublier d'en fermer une ne se voit jamais. Seuls /api/health (necessaire au HEALTHCHECK du
+  conteneur, qui n'a pas de session) et /api/auth/* restent ouverts.
+
+L'interface elle-meme reste servie sans session — c'est elle qui affiche l'ecran de connexion.
+  Seules les donnees et les actions sont protegees.
+
+Le mot de passe n'est pas stocke : il EST la variable d'environnement. Le hacher ne servirait a rien
+  puisque la source de verite est deja en clair dans le .env. La comparaison est en revanche faite
+  en temps constant, sans quoi la duree des reponses laisserait deduire le prefixe correct. Ce qui
+  part vers le navigateur ne contient jamais le mot de passe : seulement un jeton date, signe avec
+  SECRET_KEY, en cookie HttpOnly + SameSite=Lax. Regenerer SECRET_KEY deconnecte donc tout le monde,
+  ce qui est le comportement attendu.
+
+Verrouillage apres 8 echecs pendant 5 minutes : sans cela un mot de passe faible tombe en quelques
+  minutes sur un LAN. La reponse passe alors en 429 et non 401 — le probleme n'est plus le mot de
+  passe.
+
+Cote interface, fetch est enveloppe une fois pour toutes : un 401 ramene a la connexion au lieu de
+  laisser chaque vue afficher son erreur cryptique. Traiter le cas dans chaque appel aurait garanti
+  un oubli quelque part.
+
+Les tests parcourent les 13 routes une par une pour verifier qu'aucune n'est accessible sans session
+  : une seule oubliee rendrait la protection decorative. Le fixture de test_api.py se connecte
+  desormais, ces tests portant sur le comportement des endpoints et non sur leur protection.
+
+Retire au passage argon2-cffi et sqlmodel des dependances : declares mais importes nulle part, ils
+  alourdissaient l'image en laissant croire a un usage. sqlmodel reviendra avec la persistance.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.7.0 (2026-09-07)
 
 ### Features
