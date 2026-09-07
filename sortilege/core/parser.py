@@ -43,6 +43,11 @@ _VERBOSE = re.compile(
 # Numerotation absolue de fansub : « [Groupe] Titre - 147 [1080p] ».
 _ABSOLUTE = re.compile(r"[\s._-]-[\s._-](?P<absolute>\d{1,4})(?!\d)")
 
+# « 07.mkv », « ep07.mkv », « episode 7.mkv » — uniquement exploitable a
+# l'interieur d'un dossier de saison, sinon « 2012.mkv » deviendrait l'episode
+# 2012.
+_BARE_EPISODE = re.compile(r"^(?:[ée]p(?:isode)?[\s._-]*)?(?P<episode>\d{1,3})$", re.IGNORECASE)
+
 _YEAR = re.compile(r"(?<!\d)(?P<year>19\d{2}|20\d{2})(?!\d)")
 # Une annee entre parentheses ou crochets est une annee de sortie declaree,
 # jamais un nombre du titre. Elle prime sur tout le reste.
@@ -80,6 +85,67 @@ _NOISE = re.compile(
 
 _SEPARATORS = re.compile(r"[._]+")
 _MULTISPACE = re.compile(r"\s{2,}")
+
+# Dossiers qui ne portent aucune information de titre : classement, decoupage
+# de disque, structure de support, pistes annexes. Les inclure dans le contexte
+# ferait deriver le titre (« Films Dune Part Two » au lieu de « Dune Part Two »)
+# et pourrait meme fournir une fausse annee.
+_GENERIC_DIR = re.compile(
+    r"^(?:"
+    r"cd\s*\d+|disc\s*\d+|disk\s*\d+|part\s*\d+|"
+    # Le nom est normalise (underscores -> espaces) avant le test, d'ou le
+    # separateur souple : « VIDEO_TS » arrive ici sous la forme « VIDEO TS ».
+    r"video[\s_-]?ts|bdmv|stream|playlist|certificate|"
+    r"s(?:aison|eason)?\s*\d{1,2}|"
+    r"subs?|subtitles|sous[-\s]?titres|extras|featurettes|bonus|"
+    r"movies?|films?|series|s[ée]ries|tv[-\s]?shows?|animes?|mangas?|"
+    r"downloads?|t[ée]l[ée]chargements?|complete|int[ée]grale|new|divers"
+    r")$",
+    re.IGNORECASE,
+)
+
+# « Season 02 », « Saison 2 », « S03 » : le numero est exploitable meme quand le
+# dossier n'apporte rien au titre.
+_SEASON_DIR = re.compile(r"^s(?:aison|eason)?[\s._-]*(?P<season>\d{1,2})$", re.IGNORECASE)
+
+
+# Noms de fichiers qui ne designent rien : sorties d'encodeur, structures de
+# disque, ou simple « film.mkv ». Dans ces cas le titre est forcement porte par
+# un dossier, et s'obstiner sur le nom de fichier donne « movie » pour titre.
+_UNINFORMATIVE_STEM = re.compile(
+    r"^(?:"
+    r"films?|movies?|video|vid|main|title|index|output|encode|"
+    r"vts[_\s-]\d+[_\s-]\d+|title[_\s-]?t?\d+|\d{1,5}|"
+    r"[ée]p(?:isode)?[\s._-]*\d{1,3}|"
+    r"video[\s_-]?ts|bdmv"
+    r")$",
+    re.IGNORECASE,
+)
+
+
+def _is_uninformative_stem(stem: str) -> bool:
+    return _UNINFORMATIVE_STEM.match(_SEPARATORS.sub(" ", stem).strip()) is not None
+
+
+def _is_informative_dir(name: str) -> bool:
+    """Ce dossier apporte-t-il quelque chose au titre ?"""
+    cleaned = _SEPARATORS.sub(" ", name).strip()
+    if len(cleaned) < 2:
+        return False
+    return _GENERIC_DIR.match(cleaned) is None
+
+
+def _season_from_dirs(chain: list[str]) -> int | None:
+    """Numero de saison porte par un dossier.
+
+    Arborescence tres frequente : « Severance/Season 02/ep07.mkv ». Le nom de
+    fichier seul ne dit pas la saison, le dossier si.
+    """
+    for name in reversed(chain):
+        cleaned = _SEPARATORS.sub(" ", name).strip()
+        if m := _SEASON_DIR.match(cleaned):
+            return int(m.group("season"))
+    return None
 
 
 @dataclass(slots=True)
@@ -154,14 +220,35 @@ def _clean_title(raw: str, cut_at: int | None) -> str:
     return title
 
 
-def parse(path: Path) -> ParsedName:
+def _title_from_folder(name: str) -> str:
+    """Titre porte par un nom de dossier, ampute de son annee.
+
+    « Severance (2022) » doit donner « Severance », pas « Severance 2022 » :
+    l'annee est deja captee separement, la laisser dans le titre ferait chuter
+    la similarite face au libelle du fournisseur.
+    """
+    _, year_text = _find_year(name)
+    cut = name.rfind(year_text) if year_text else -1
+    return _clean_title(name, cut if cut > 0 else None)
+
+
+def parse(path: Path, ancestors: list[str] | None = None) -> ParsedName:
     """Analyse un chemin de fichier video.
 
-    Le dossier parent est joint au nom : beaucoup de releases mettent l'annee
-    ou le titre complet uniquement sur le dossier.
+    Les dossiers parents sont joints au nom : beaucoup de releases ne mettent
+    l'annee ou le titre complet que sur le dossier.
+
+    ``ancestors`` est la chaine de dossiers entre la racine source et le
+    fichier, du plus haut au plus bas. Sans elle on se rabat sur le seul parent
+    immediat, ce qui echoue des qu'il y a un sous-dossier : sur
+    « Dune (2024)/CD1/film.mkv » le parent est « CD1 », et sur
+    « Severance/Season 02/ep.mkv » c'est « Season 02 » — dans les deux cas le
+    titre et l'annee sont un cran plus haut.
     """
     stem = path.stem
-    context = f"{path.parent.name} {stem}"
+    chain = ancestors if ancestors is not None else [path.parent.name]
+    informative = [d for d in chain if _is_informative_dir(d)]
+    context = " ".join([*informative, stem])
     lowered = context.lower()
     signals: list[str] = []
 
@@ -184,6 +271,19 @@ def parse(path: Path) -> ParsedName:
             kind = MediaKind.EPISODE
             signals.append(f"motif episodique {name}")
             break
+
+    # Saison portee par un dossier plutot que par le nom de fichier.
+    if season is None:
+        if (folder_season := _season_from_dirs(chain)) is not None:
+            season = folder_season
+            signals.append("saison lue sur le dossier")
+            # Un numero d'episode nu (« 07.mkv », « ep07.mkv ») ne devient
+            # exploitable qu'une fois la saison connue.
+            if episode is None and (m := _BARE_EPISODE.search(stem)):
+                episode = int(m.group("episode"))
+                kind = MediaKind.EPISODE
+                cut_at = m.start()
+                signals.append("numero d'episode nu dans un dossier de saison")
 
     if kind is MediaKind.MOVIE and fansub_group:
         # Un groupe de fansub en tete + un nombre isole : tres probablement un
@@ -209,9 +309,17 @@ def parse(path: Path) -> ParsedName:
     language = _find_language(lowered)
 
     title = _clean_title(stem, cut_at)
-    if not title:
-        title = _clean_title(path.parent.name, None)
-        signals.append("titre repris du dossier parent")
+
+    # Le nom de fichier n'a rien donne (« film.mkv », « 00001.m2ts »,
+    # « ep07.mkv ») : on remonte la chaine des dossiers, du plus proche au plus
+    # lointain. C'est le cas normal des arborescences a sous-dossiers.
+    if not title or _is_uninformative_stem(stem):
+        for folder in reversed(informative):
+            folder_title = _title_from_folder(folder)
+            if folder_title:
+                title = folder_title
+                signals.append(f"titre repris du dossier « {folder} »")
+                break
 
     return ParsedName(
         raw=stem,

@@ -1,9 +1,13 @@
 """Reglages et diagnostics.
 
-Volontairement en LECTURE SEULE. Toute la configuration vient de
-l'environnement : c'est ce qui permet de reconstruire le conteneur a
-l'identique et d'auditer un deploiement depuis le seul .env. Une UI qui
-ecrirait ailleurs creerait un second etat de verite, invisible dans le compose.
+Deux natures de reglages, deliberement separees :
+
+- **Deploiement** (lecture seule) : points de montage, cles d'API, secrets. Ils
+  viennent de l'environnement et doivent correspondre aux volumes du
+  conteneur ; les modifier depuis l'UI produirait une configuration qui ne
+  survit pas a un redemarrage.
+- **Usage** (modifiable) : quelles sources scanner, ou ranger chaque type de
+  media, avec quel gabarit. Ces choix appartiennent a l'utilisateur.
 
 Aucune valeur secrete n'est renvoyee, seulement des booleens « configure ou
 non » : cette reponse traverse le reseau et finit dans la console du
@@ -12,12 +16,58 @@ navigateur.
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 
 from ..config import get_settings
+from ..core.preferences import KINDS, PreferenceError, Preferences
 from ..core.probe import ffprobe_available
+from .deps import get_store
 
 router = APIRouter(prefix="/api/settings", tags=["reglages"])
+
+
+class PreferencesIn(BaseModel):
+    enabled_sources: list[str] = Field(default_factory=list)
+    destinations: dict[str, str] = Field(default_factory=dict)
+    templates: dict[str, str] = Field(default_factory=dict)
+
+
+@router.get("/preferences")
+def read_preferences() -> dict[str, object]:
+    """Preferences courantes, et les choix possibles pour les alimenter."""
+    conf = get_settings()
+    store = get_store()
+    prefs = store.load()
+
+    return {
+        "enabled_sources": prefs.enabled_sources,
+        "destinations": prefs.destinations,
+        "templates": {k: prefs.template_for(k) for k in KINDS},
+        "available_sources": [{"path": str(p), "exists": p.is_dir()} for p in conf.source_roots],
+        "library_root": str(conf.library_root),
+        "resolved_destinations": {k: str(store.destination_root(k)) for k in KINDS},
+    }
+
+
+@router.put("/preferences")
+def write_preferences(body: PreferencesIn) -> dict[str, object]:
+    store = get_store()
+    current = store.load()
+
+    merged = Preferences(
+        enabled_sources=body.enabled_sources,
+        destinations={**current.destinations, **body.destinations},
+        templates={**current.templates, **body.templates},
+    )
+
+    try:
+        store.save(merged)
+    except PreferenceError as exc:
+        # 400 et non 500 : c'est une saisie a corriger, pas une panne.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return read_preferences()
 
 
 @router.get("")

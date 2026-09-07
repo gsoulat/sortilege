@@ -119,7 +119,13 @@ def scan(
                 result.errors.append(f"{path.name} : {exc}")
                 continue
 
-            parsed = parse(path)
+            # Toute la chaine de dossiers entre la racine et le fichier, pas
+            # seulement le parent immediat : sur « Dune (2024)/CD1/film.mkv »
+            # ou « Severance/Season 02/ep07.mkv », l'information utile est plus
+            # haut que le dossier direct.
+            ancestors = list(path.relative_to(root).parts[:-1])
+
+            parsed = parse(path, ancestors)
             probe = inspect(path) if deep else FileProbe()
 
             result.files.append(

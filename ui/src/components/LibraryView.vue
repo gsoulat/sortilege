@@ -8,28 +8,82 @@ const loading = ref(false)
 const error = ref(null)
 const deep = ref(true)
 const filter = ref('all')
+const collapsed = ref(new Set())
 
-const files = computed(() => {
-  const all = data.value?.files ?? []
-  if (filter.value === 'all') return all
-  if (filter.value === 'weak') return all.filter((f) => f.parsed.quality < 0.6)
-  return all.filter((f) => f.parsed.kind === filter.value)
+const all = computed(() => data.value?.files ?? [])
+
+const counts = computed(() => ({
+  all: all.value.length,
+  movie: all.value.filter((f) => f.parsed.kind === 'movie').length,
+  episode: all.value.filter((f) => f.parsed.kind === 'episode').length,
+  anime: all.value.filter((f) => f.parsed.kind === 'anime').length,
+  weak: all.value.filter((f) => f.parsed.quality < 0.6).length,
+}))
+
+const visible = computed(() => {
+  if (filter.value === 'all') return all.value
+  if (filter.value === 'weak') return all.value.filter((f) => f.parsed.quality < 0.6)
+  return all.value.filter((f) => f.parsed.kind === filter.value)
 })
 
-const counts = computed(() => {
-  const all = data.value?.files ?? []
-  return {
-    all: all.length,
-    movie: all.filter((f) => f.parsed.kind === 'movie').length,
-    episode: all.filter((f) => f.parsed.kind === 'episode').length,
-    anime: all.filter((f) => f.parsed.kind === 'anime').length,
-    weak: all.filter((f) => f.parsed.quality < 0.6).length,
+/**
+ * Les films restent a plat ; les series et animes sont regroupes par titre puis
+ * par saison. Une liste plate de 300 episodes est illisible, et c'est justement
+ * l'arborescence que Sortilege produira sur le disque.
+ */
+const groups = computed(() => {
+  const movies = []
+  const shows = new Map()
+
+  for (const f of visible.value) {
+    if (f.parsed.kind === 'movie' || f.parsed.kind === 'unknown') {
+      movies.push(f)
+      continue
+    }
+    const key = f.parsed.title || '(sans titre)'
+    if (!shows.has(key)) shows.set(key, new Map())
+    const seasons = shows.get(key)
+    // Un anime en numerotation absolue n'a pas de saison : on le range sous une
+    // cle distincte plutot que de lui en inventer une.
+    const season = f.parsed.season ?? (f.parsed.absolute_episode != null ? 'abs' : '?')
+    if (!seasons.has(season)) seasons.set(season, [])
+    seasons.get(season).push(f)
   }
+
+  const out = []
+  for (const [title, seasons] of [...shows.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+    const ordered = [...seasons.entries()].sort((a, b) => {
+      if (typeof a[0] === 'number' && typeof b[0] === 'number') return a[0] - b[0]
+      return String(a[0]).localeCompare(String(b[0]))
+    })
+    out.push({
+      title,
+      kind: seasons.values().next().value[0].parsed.kind,
+      total: [...seasons.values()].reduce((n, l) => n + l.length, 0),
+      year: [...seasons.values()][0][0].parsed.year,
+      seasons: ordered.map(([season, files]) => ({
+        season,
+        files: files.sort((a, b) => (a.parsed.episode ?? a.parsed.absolute_episode ?? 0) - (b.parsed.episode ?? b.parsed.absolute_episode ?? 0)),
+      })),
+    })
+  }
+  return { movies, shows: out }
 })
+
+function toggle(title) {
+  const next = new Set(collapsed.value)
+  next.has(title) ? next.delete(title) : next.add(title)
+  collapsed.value = next
+}
+
+function seasonLabel(season) {
+  if (season === 'abs') return 'Numérotation absolue'
+  if (season === '?') return 'Saison inconnue'
+  return `Saison ${String(season).padStart(2, '0')}`
+}
 
 async function load() {
-  const res = await fetch('/api/library')
-  data.value = await res.json()
+  data.value = await (await fetch('/api/library')).json()
 }
 
 async function runScan() {
@@ -42,7 +96,7 @@ async function runScan() {
       return
     }
     data.value = await res.json()
-  } catch (e) {
+  } catch {
     error.value = 'Impossible de joindre le serveur.'
   } finally {
     loading.value = false
@@ -56,9 +110,7 @@ function duration(seconds) {
   return h > 0 ? `${h} h ${String(m).padStart(2, '0')}` : `${m} min`
 }
 
-function size(bytes) {
-  return `${(bytes / 1024 ** 3).toFixed(1)} Go`
-}
+const size = (bytes) => `${(bytes / 1024 ** 3).toFixed(1)} Go`
 
 function episodeLabel(p) {
   if (p.season != null && p.episode != null) {
@@ -91,7 +143,6 @@ onMounted(load)
     </div>
 
     <p v-if="error" class="error">{{ error }}</p>
-
     <p v-for="(e, i) in data?.errors ?? []" :key="i" class="error">{{ e }}</p>
 
     <div v-if="data?.total" class="filters">
@@ -121,43 +172,67 @@ onMounted(load)
       </p>
     </div>
 
-    <ul v-else class="files">
-      <li v-for="f in files" :key="f.relative_path" :class="{ skipped: f.skipped_reason }">
-        <div class="row-head">
-          <span class="kind" :class="f.parsed.kind">{{ KIND_LABELS[f.parsed.kind] }}</span>
-          <span class="title">{{ f.parsed.title || '(titre non lu)' }}</span>
-          <span v-if="f.parsed.year" class="year">{{ f.parsed.year }}</span>
-          <span v-if="episodeLabel(f.parsed)" class="ep">{{ episodeLabel(f.parsed) }}</span>
-          <span v-if="f.probe.declared_id" class="badge id" title="Identifiant déclaré dans un .nfo ou les tags">
-            {{ f.probe.declared_id }}
+    <template v-else>
+      <!-- Séries et animes : regroupés par titre puis par saison -->
+      <section v-for="show in groups.shows" :key="show.title" class="show">
+        <button class="show-head" @click="toggle(show.title)">
+          <span class="chevron" :class="{ closed: collapsed.has(show.title) }">▾</span>
+          <span class="kind" :class="show.kind">{{ KIND_LABELS[show.kind] }}</span>
+          <span class="show-title">{{ show.title }}</span>
+          <span v-if="show.year" class="year">{{ show.year }}</span>
+          <span class="count">
+            {{ show.seasons.length }} saison{{ show.seasons.length > 1 ? 's' : '' }} ·
+            {{ show.total }} épisode{{ show.total > 1 ? 's' : '' }}
           </span>
-          <span class="quality" :class="{ low: f.parsed.quality < 0.6 }">
-            {{ (f.parsed.quality * 100).toFixed(0) }}%
-          </span>
+        </button>
+
+        <div v-if="!collapsed.has(show.title)" class="seasons">
+          <div v-for="s in show.seasons" :key="s.season" class="season">
+            <div class="season-head">{{ seasonLabel(s.season) }} · {{ s.files.length }}</div>
+            <ul class="files compact">
+              <li v-for="f in s.files" :key="f.relative_path">
+                <span class="ep">{{ episodeLabel(f.parsed) ?? '—' }}</span>
+                <span class="path">{{ f.relative_path }}</span>
+                <span v-if="f.probe.declared_id" class="badge id">{{ f.probe.declared_id }}</span>
+                <span class="quality" :class="{ low: f.parsed.quality < 0.6 }">
+                  {{ (f.parsed.quality * 100).toFixed(0) }}%
+                </span>
+              </li>
+            </ul>
+          </div>
         </div>
+      </section>
 
-        <div class="path">{{ f.relative_path }}</div>
-
-        <div class="meta">
-          <span v-if="f.parsed.resolution">{{ f.parsed.resolution }}</span>
-          <span v-if="f.parsed.codec">{{ f.parsed.codec }}</span>
-          <span v-if="f.probe.duration_seconds">{{ duration(f.probe.duration_seconds) }}</span>
-          <span v-if="f.parsed.language">{{ f.parsed.language }}</span>
-          <span v-if="f.parsed.fansub_group">[{{ f.parsed.fansub_group }}]</span>
-          <span>{{ size(f.size_bytes) }}</span>
-          <span v-if="!f.probe.probed" class="dim" title="ffprobe absent ou lecture désactivée">
-            contenu non lu
-          </span>
-        </div>
-
-        <div v-if="f.skipped_reason" class="skip-note">{{ f.skipped_reason }}</div>
-      </li>
-    </ul>
+      <!-- Films : à plat, le regroupement par saga vient des métadonnées -->
+      <ul v-if="groups.movies.length" class="files">
+        <li v-for="f in groups.movies" :key="f.relative_path" :class="{ skipped: f.skipped_reason }">
+          <div class="row-head">
+            <span class="kind" :class="f.parsed.kind">{{ KIND_LABELS[f.parsed.kind] }}</span>
+            <span class="title">{{ f.parsed.title || '(titre non lu)' }}</span>
+            <span v-if="f.parsed.year" class="year">{{ f.parsed.year }}</span>
+            <span v-if="f.probe.declared_id" class="badge id">{{ f.probe.declared_id }}</span>
+            <span class="quality" :class="{ low: f.parsed.quality < 0.6 }">
+              {{ (f.parsed.quality * 100).toFixed(0) }}%
+            </span>
+          </div>
+          <div class="path">{{ f.relative_path }}</div>
+          <div class="meta">
+            <span v-if="f.parsed.resolution">{{ f.parsed.resolution }}</span>
+            <span v-if="f.parsed.codec">{{ f.parsed.codec }}</span>
+            <span v-if="f.probe.duration_seconds">{{ duration(f.probe.duration_seconds) }}</span>
+            <span v-if="f.parsed.language">{{ f.parsed.language }}</span>
+            <span>{{ size(f.size_bytes) }}</span>
+            <span v-if="!f.probe.probed" class="dim">contenu non lu</span>
+          </div>
+          <div v-if="f.skipped_reason" class="skip-note">{{ f.skipped_reason }}</div>
+        </li>
+      </ul>
+    </template>
   </div>
 </template>
 
 <style scoped>
-.library { display: flex; flex-direction: column; gap: 16px; }
+.library { display: flex; flex-direction: column; gap: 14px; }
 
 .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
 .left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
@@ -189,17 +264,46 @@ button.primary {
 .empty h3 { margin: 0 0 8px; font-size: 14px; color: var(--text); text-transform: none; letter-spacing: 0; }
 .empty p { margin: 0 auto; max-width: 460px; font-size: 13px; color: var(--text-dim); line-height: 1.6; }
 
-.files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.files li {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: 8px; padding: 10px 13px;
+/* --- Séries groupées --- */
+.show { background: var(--surface); border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+.show-head {
+  width: 100%; display: flex; align-items: center; gap: 9px;
+  padding: 11px 14px; border: none; border-radius: 0; background: none; text-align: left;
 }
+.show-head:hover { background: var(--surface-2); }
+.chevron { color: var(--text-faint); font-size: 10px; transition: transform .15s; }
+.chevron.closed { transform: rotate(-90deg); }
+.show-title { font-weight: 500; font-size: 14px; }
+.count { margin-left: auto; font-size: 11.5px; color: var(--text-faint); }
+
+.seasons { border-top: 1px solid var(--border); }
+.season { padding: 9px 14px 11px; }
+.season + .season { border-top: 1px solid color-mix(in srgb, var(--border) 60%, transparent); }
+.season-head {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text-faint); margin-bottom: 6px;
+}
+
+.files.compact { gap: 2px; }
+.files.compact li {
+  display: flex; align-items: center; gap: 10px;
+  background: none; border: none; padding: 3px 0; border-radius: 0;
+}
+.files.compact .ep {
+  font-family: var(--mono); font-size: 11.5px; color: var(--accent);
+  min-width: 62px; flex: none;
+}
+.files.compact .path { margin: 0; flex: 1; }
+
+/* --- Films à plat --- */
+.files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.files li { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 13px; }
 .files li.skipped { opacity: .5; }
 
 .row-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .kind {
   font-size: 10px; padding: 2px 7px; border-radius: 4px; letter-spacing: .04em;
-  background: var(--surface-2); color: var(--text-dim);
+  background: var(--surface-2); color: var(--text-dim); flex: none;
 }
 .kind.movie { color: #7dd3fc; }
 .kind.episode { color: #a78bfa; }
@@ -208,9 +312,9 @@ button.primary {
 .year, .ep { font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
 .badge.id {
   font-size: 10px; font-family: var(--mono); padding: 2px 6px; border-radius: 4px;
-  color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent);
+  color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent); flex: none;
 }
-.quality { margin-left: auto; font-size: 11px; font-family: var(--mono); color: var(--ok); }
+.quality { margin-left: auto; font-size: 11px; font-family: var(--mono); color: var(--ok); flex: none; }
 .quality.low { color: var(--warn); }
 
 .path { font-family: var(--mono); font-size: 11px; color: var(--text-faint); margin-top: 3px; word-break: break-all; }

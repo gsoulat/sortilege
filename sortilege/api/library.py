@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException
 
 from ..config import get_settings
 from ..core.scanner import ScanResult, scan
+from .deps import get_store
 from .schemas import ScanOut, scan_to_out
 
 logger = logging.getLogger(__name__)
@@ -43,13 +44,22 @@ def run_scan(deep: bool = True, limit: int | None = 500) -> ScanOut:
             detail="Aucune racine source configuree (SORTILEGE_SOURCE_ROOTS).",
         )
 
+    # Les racines effectivement parcourues dependent des preferences : on peut
+    # exclure un montage reseau lent qu'on ne veut pas reparcourir a chaque fois.
+    roots = get_store().resolved_sources()
+    if not roots:
+        raise HTTPException(
+            status_code=400,
+            detail="Aucune source selectionnee. Active au moins une racine dans les réglages.",
+        )
+
     # Un scan est du travail bloquant : deux scans concurrents doubleraient la
     # charge disque pour un resultat identique.
     if not _lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="Un scan est deja en cours.")
 
     try:
-        result = scan(settings.source_roots, deep=deep, limit=limit)
+        result = scan(roots, deep=deep, limit=limit)
         _last_scan = result
         _last_deep = deep
         logger.info(

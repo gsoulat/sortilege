@@ -62,6 +62,13 @@ TOKENS: tuple[Token, ...] = (
     Token("title", "Titre", "Le Fabuleux Destin d'Amélie Poulain", "identite"),
     Token("original_title", "Titre original", "Amélie", "identite"),
     Token("year", "Année", "2001", "identite"),
+    # Saga / franchise, depuis belongs_to_collection chez TMDB. Vide pour un
+    # film isole — et un segment vide disparait du chemin, donc le meme gabarit
+    # sert aux deux cas sans conditionnel.
+    # Films : belongs_to_collection chez TMDB. Series : deduit du prefixe du
+    # titre (« Star Trek: Discovery » -> « Star Trek »), TMDB n'exposant aucun
+    # champ de franchise pour les series.
+    Token("collection", "Saga / Franchise", "Star Trek", "identite"),
     Token("season", "Saison", "2", "episode"),
     Token("episode", "Épisode", "7", "episode"),
     Token("episode_title", "Titre de l'épisode", "Le Silence", "episode"),
@@ -82,9 +89,18 @@ PRESETS: dict[str, dict[str, str]] = {
     "jellyfin": {
         # L'annee passe par le conditionnel et non par « ({year}) » en dur :
         # un film sans annee produirait sinon un « () » vide dans le chemin.
-        "movie": "Films/{title}{? year: ($)}/{title}{? year: ($)}{? resolution: [$]}",
+        #
+        # {collection} regroupe les sagas : tous les Hunger Games sous un meme
+        # dossier. Aucun conditionnel n'est necessaire — un jeton vide produit
+        # un segment vide, et un segment vide disparait du chemin. Le meme
+        # gabarit sert donc au film isole comme au film de saga.
+        "movie": (
+            "Films/{collection}/{title}{? year: ($)}/{title}{? year: ($)}{? resolution: [$]}"
+        ),
+        # Franchise / serie / saison. Le premier segment disparait quand la
+        # serie n'appartient a aucune franchise.
         "episode": (
-            "Series/{title}{? year: ($)}/Season {season:02}/"
+            "Series/{collection}/{title}{? year: ($)}/Season {season:02}/"
             "{title} - S{season:02}E{episode:02}{? episode_title: - $}"
         ),
         # Numerotation absolue : c'est ce que portent les releases de fansub, et
@@ -95,7 +111,7 @@ PRESETS: dict[str, dict[str, str]] = {
     "plex": {
         # Plex accepte un identifiant entre accolades dans le nom, mais les
         # accolades sont la syntaxe des jetons : on ne l'expose pas ici.
-        "movie": "Movies/{title}{? year: ($)}/{title}{? year: ($)}",
+        "movie": "Movies/{collection}/{title}{? year: ($)}/{title}{? year: ($)}",
         "episode": (
             "TV Shows/{title}{? year: ($)}/Season {season:02}/{title} - s{season:02}e{episode:02}"
         ),

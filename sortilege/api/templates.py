@@ -24,6 +24,13 @@ PREVIEW_SAMPLES: dict[str, list[dict[str, object]]] = {
             "imdb_id": "tt15239678",
         },
         {
+            "title": "Hunger Games : L'Embrasement",
+            "year": 2013,
+            "collection": "Hunger Games - Saga",
+            "resolution": "1080p",
+            "language": "vff",
+        },
+        {
             "title": "Le Fabuleux Destin d'Amélie Poulain",
             "year": 2001,
             "resolution": "1080p",
@@ -41,6 +48,15 @@ PREVIEW_SAMPLES: dict[str, list[dict[str, object]]] = {
             "episode_title": "Chikhai Bardo",
             "resolution": "1080p",
             "language": "multi",
+        },
+        {
+            "title": "Star Trek: Discovery",
+            "year": 2017,
+            "collection": "Star Trek",
+            "season": 3,
+            "episode": 4,
+            "episode_title": "Forget Me Not",
+            "resolution": "1080p",
         },
         {
             "title": "Kaamelott",

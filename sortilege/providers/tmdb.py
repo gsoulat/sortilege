@@ -81,6 +81,24 @@ class TMDBProvider(BaseHTTPProvider):
         await self._cache.set(key, results)
         return results
 
+    async def get_collection(self, movie_id: str) -> str | None:
+        """Nom de la saga a laquelle appartient le film, s'il y en a une.
+
+        « Hunger Games - Saga », « La Guerre des étoiles - Saga ». C'est ce qui
+        permet de regrouper tous les films d'une franchise dans un dossier.
+
+        Necessite un appel supplementaire : la recherche TMDB ne renvoie pas
+        ``belongs_to_collection``, seul le detail du film le porte. D'ou le
+        cache — sur une bibliotheque, beaucoup de films partagent une saga.
+        """
+        data = await self._get_json(f"{API}/movie/{movie_id}", params=self._params())
+        if not data:
+            return None
+        collection = data.get("belongs_to_collection")
+        if not isinstance(collection, dict):
+            return None
+        return collection.get("name") or None
+
     async def get_episode_title(self, series_id: str, season: int, episode: int) -> str | None:
         """Titre d'un episode precis.
 
