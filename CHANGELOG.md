@@ -1,6 +1,64 @@
 # CHANGELOG
 
 
+## v0.2.0 (2026-09-07)
+
+### Features
+
+- **probe**: Reconnaitre les fichiers par leur contenu, pas que par leur nom
+  ([`d37e66b`](https://github.com/gsoulat/sortilege/commit/d37e66b1b33427fb1540f680322305c21df88699))
+
+C'est l'approche de Plex et la raison pour laquelle il se trompe moins. Trois sources s'ajoutent au
+  parseur, et leur valeur ne vient pas de leur nombre mais du fait qu'elles sont DECORRELEES de lui
+  : un nom de release et une duree ne se trompent pas de la meme facon, donc leur accord vaut
+  confirmation.
+
+- Fichier .nfo (convention Kodi/Emby, ecrite par Radarr et Sonarr) : un tmdbid ou imdbid declare
+  n'est pas une ressemblance a evaluer, c'est une reponse. Gere le XML Kodi, les champs plats,
+  <uniqueid type="...">, et retombe sur une recherche d'identifiant en texte brut pour les .nfo de
+  release en ASCII art. - Tags du conteneur MKV/MP4 : titre reel, serie, numero d'episode. - Duree :
+  separe film et episode sans rien lire du nom. - Resolution reelle : un fichier etiquete 1080p
+  encode en 1280x720 est frequent ; on range d'apres la mesure, pas d'apres l'etiquette.
+
+Trois consequences dans la politique de decision : - un identifiant concordant court-circuite le
+  score et applique — le faire passer par le calcul reviendrait a douter d'une certitude ; - un
+  identifiant designant une AUTRE oeuvre rejette quel que soit le score ; - une duree incompatible
+  bloque l'application automatique et renvoie en revue.
+
+Signals gagne external_id_match, runtime_plausible et container_title_similarity ; Policy gagne
+  trust_external_ids pour les sources dont on ne fait pas confiance aux .nfo.
+
+ffmpeg est ajoute a l'image pour ffprobe. Le code degrade proprement sans lui, mais on ne veut pas
+  de cette degradation par defaut. Aucun test ne depend du binaire : le parsing .nfo, la fusion et
+  les bornes de duree sont purs.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+- **providers**: Tmdb et AniList, tolerants aux pannes et mis en cache
+  ([`16b4c0f`](https://github.com/gsoulat/sortilege/commit/16b4c0f7408a06527339b4b818a2ebdd6ba565f9))
+
+TMDB couvre films et series — c'est aussi la source vers laquelle FileBot a bascule apres les
+  restrictions d'API de TheTVDB. AniList couvre les animes et n'est pas substituable : les releases
+  de fansub portent un titre romaji et AniList expose romaji, anglais, natif et synonymes, ce dont
+  la comparaison de titres a besoin.
+
+Candidate.all_titles() renvoie tous les libelles connus. Sans cela « Very Bad Trip » ne trouve
+  jamais « The Hangover » et la moitie d'une bibliotheque francaise echoue.
+
+Deux principes tenus par le socle commun :
+
+- Un fournisseur en panne renvoie une liste vide, jamais une exception. Quota depasse ou reseau
+  coupe font baisser provider_agreement, donc le score, donc le fichier part en revue manuelle. On
+  degrade vers l'humain, jamais vers une decision hasardeuse. - Un fournisseur ne decide rien : il
+  propose des candidats bruts, la ponderation appartient au scoring.
+
+Cache TTL en memoire : une bibliotheque contient des dizaines d'episodes de la meme serie, sans
+  cache on interroge une fois par fichier et le quota saute. La popularite est normalisee 0->1 par
+  chaque fournisseur, les echelles brutes (votes TMDB, popularite AniList) n'etant pas comparables.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.1.0 (2026-09-07)
 
 ### Bug Fixes
