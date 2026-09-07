@@ -1,6 +1,69 @@
 # CHANGELOG
 
 
+## v0.6.0 (2026-09-07)
+
+### Features
+
+- **core**: Calcul de confiance, plan de rangement et journal d'annulation
+  ([`44ff50a`](https://github.com/gsoulat/sortilege/commit/44ff50a0f8126d7804ebc7db964fbf0f79f1832f))
+
+Les trois pieces qui manquaient pour que le pipeline tourne de bout en bout.
+
+compute_score ------------- Ecrit comme une BASE A AJUSTER : les poids sont des constantes nommees
+  et documentees, pas des valeurs enfouies. La bonne facon de les regler est de lancer un scan,
+  regarder ce qui atterrit en revue, et deplacer le curseur du signal qui a mal juge.
+
+Trois etages : une base de preuves ponderees, des modificateurs signes, puis des plafonds.
+
+Deux principes gouvernent les poids :
+
+- **Les contradictions pesent plus lourd que les confirmations.** Trouver l'annee juste est
+  ordinaire (+0.20), en trouver une fausse est alarmant (-0.35). Une annee absente ne fait rien : «
+  je ne sais pas » n'est pas « c'est faux ». - **L'accord entre fournisseurs progresse de facon non
+  lineaire** (0 / +0.12 / +0.18). L'essentiel de l'information est dans le fait qu'une SECONDE
+  source confirme ; la troisieme ajoute peu.
+
+Les plafonds traitent ce qu'aucun bonus ne doit effacer : l'homonymie non tranchee borne a 0.75,
+  donc sous le seuil d'application automatique quels que soient les autres signaux. Et la confiance
+  de l'IA est un plafond, pas un terme additif — elle dit « je crois reconnaitre cette oeuvre », pas
+  « les donnees concordent ».
+
+Un credit de depart a ete ajoute apres coup : sans lui, un fichier au titre correct mais sans annee
+  ni second fournisseur tombait sous le seuil de rejet, donc ecarte en silence alors qu'il etait
+  seulement ambigu. Or matching a deja elimine les candidats sous 0.35 de similarite — tout ce qui
+  arrive au scoring est deja une piste serieuse et merite au minimum un regard.
+
+Les tests portent sur des PROPRIETES (ordres, asymetries, plafonds), pas sur des nombres : regler
+  les poids ne doit pas casser la suite, changer la logique si.
+
+planner ------- Un plan est un OBJET, pas une action — le choix qui separe Sortilege de Radarr. Un
+  echec (aucun candidat, gabarit invalide, destination hors racine) ne leve pas : il produit un plan
+  REJECT porteur du motif, sinon un seul fichier interromprait le traitement de toute la
+  bibliotheque.
+
+Les valeurs du gabarit suivent un ordre de preference constant : ce que dit le FOURNISSEUR, puis le
+  FICHIER, puis le NOM.
+
+journal ------- Le seul module qui ecrit sur le disque. Trois regles absolues :
+
+- **Rien n'ecrase jamais rien.** Deux encodages du meme episode produisent la meme destination ;
+  c'est a l'utilisateur de trancher, pas a l'outil. Perdre un fichier serait le pire defaut possible
+  pour un rangeur. - **Chaque operation est fsync sur le disque avant d'etre oubliee.** Sans cela le
+  journal peut rester en cache pendant qu'un fichier est deja deplace : on perdrait la trace de ce
+  qu'on vient de faire. - **La simulation ne touche a rien** et suit exactement le meme chemin de
+  verification.
+
+Journal en JSON Lines et non en JSON : on ajoute sans relire le fichier entier, et un journal
+  tronque par une coupure reste exploitable jusqu'a sa derniere ligne complete.
+
+L'annulation se fait dans l'ordre inverse — deux operations peuvent avoir touche des chemins
+  imbriques, et defaire chronologiquement recreerait des collisions. Une annulation qui echoue
+  laisse son entree au journal : elle reste a faire.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.5.0 (2026-09-07)
 
 ### Features
