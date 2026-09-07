@@ -16,7 +16,10 @@ Syntaxe
 
 Exemple
 -------
-    Series/{title}{? year: ($)}/Season {season:02}/{title} - S{season:02}E{episode:02}{? episode_title: - $}
+    Series/{title}{? year: ($)}/Season {season:02}/
+    {title} - S{season:02}E{episode:02}{? episode_title: - $}
+
+(ecrit sur une seule ligne en pratique ; coupe ici pour la lisibilite)
 """
 
 from __future__ import annotations
@@ -77,22 +80,26 @@ TOKEN_NAMES = frozenset(t.name for t in TOKENS)
 # Gabarits prets a l'emploi, proposes en un clic dans l'UI.
 PRESETS: dict[str, dict[str, str]] = {
     "jellyfin": {
-        "movie": "Films/{title} ({year})/{title} ({year}){? resolution: [$]}",
+        # L'annee passe par le conditionnel et non par « ({year}) » en dur :
+        # un film sans annee produirait sinon un « () » vide dans le chemin.
+        "movie": "Films/{title}{? year: ($)}/{title}{? year: ($)}{? resolution: [$]}",
         "episode": (
             "Series/{title}{? year: ($)}/Season {season:02}/"
             "{title} - S{season:02}E{episode:02}{? episode_title: - $}"
         ),
-        "anime": "Animes/{title}/{title} - {episode:03}{? episode_title: - $}",
+        # Numerotation absolue : c'est ce que portent les releases de fansub, et
+        # {episode} est souvent absent tant que la correspondance saison/episode
+        # n'a pas ete resolue chez le provider.
+        "anime": "Animes/{title}/{title} - {absolute_episode:03}{? episode_title: - $}",
     },
     "plex": {
         # Plex accepte un identifiant entre accolades dans le nom, mais les
         # accolades sont la syntaxe des jetons : on ne l'expose pas ici.
-        "movie": "Movies/{title} ({year})/{title} ({year})",
+        "movie": "Movies/{title}{? year: ($)}/{title}{? year: ($)}",
         "episode": (
-            "TV Shows/{title} ({year})/Season {season:02}/"
-            "{title} - s{season:02}e{episode:02}"
+            "TV Shows/{title}{? year: ($)}/Season {season:02}/{title} - s{season:02}e{episode:02}"
         ),
-        "anime": "Anime/{title}/{title} - {episode:03}",
+        "anime": "Anime/{title}/{title} - {absolute_episode:03}",
     },
 }
 

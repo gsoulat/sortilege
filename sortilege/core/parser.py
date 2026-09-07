@@ -9,15 +9,24 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 VIDEO_EXTENSIONS = {
-    ".mkv", ".mp4", ".avi", ".m4v", ".mov", ".wmv", ".ts", ".m2ts", ".mpg", ".mpeg",
+    ".mkv",
+    ".mp4",
+    ".avi",
+    ".m4v",
+    ".mov",
+    ".wmv",
+    ".ts",
+    ".m2ts",
+    ".mpg",
+    ".mpeg",
 }
 
 
-class MediaKind(str, Enum):
+class MediaKind(StrEnum):
     MOVIE = "movie"
     EPISODE = "episode"
     ANIME = "anime"
@@ -35,6 +44,9 @@ _VERBOSE = re.compile(
 _ABSOLUTE = re.compile(r"[\s._-]-[\s._-](?P<absolute>\d{1,4})(?!\d)")
 
 _YEAR = re.compile(r"(?<!\d)(?P<year>19\d{2}|20\d{2})(?!\d)")
+# Une annee entre parentheses ou crochets est une annee de sortie declaree,
+# jamais un nombre du titre. Elle prime sur tout le reste.
+_YEAR_DELIMITED = re.compile(r"[(\[](?P<year>19\d{2}|20\d{2})[)\]]")
 _RESOLUTION = re.compile(r"(?P<res>\d{3,4}[pi]|4[kK]|[Uu][Hh][Dd])")
 _FANSUB_GROUP = re.compile(r"^\[(?P<group>[^\]]{2,30})\]")
 
@@ -95,6 +107,26 @@ def is_video(path: Path) -> bool:
     return path.suffix.lower() in VIDEO_EXTENSIONS
 
 
+def _find_year(context: str) -> tuple[int | None, str]:
+    """Trouve l'annee de sortie, en evitant les nombres du titre.
+
+    « Blade Runner 2049 (2017) » et « 2012 (2009) » cassent la lecture naive :
+    le premier nombre a l'air d'une annee mais appartient au titre. Deux regles
+    suffisent a couvrir la quasi-totalite des cas reels :
+
+    1. Une annee entre parentheses ou crochets gagne toujours.
+    2. Sinon, on prend la DERNIERE occurrence — un titre precede son annee.
+    """
+    if m := _YEAR_DELIMITED.search(context):
+        return int(m.group("year")), m.group("year")
+
+    matches = list(_YEAR.finditer(context))
+    if not matches:
+        return None, ""
+    last = matches[-1]
+    return int(last.group("year")), last.group("year")
+
+
 def _find_source(haystack: str) -> str | None:
     for label, needles in _SOURCES.items():
         if any(n in haystack for n in needles):
@@ -115,7 +147,9 @@ def _clean_title(raw: str, cut_at: int | None) -> str:
     title = _SEPARATORS.sub(" ", title)
     title = _NOISE.sub(" ", title)
     title = re.sub(r"[\[\](){}]", " ", title)
-    title = re.sub(r"[-–—]+\s*$", "", title.strip())
+    # Les tirets cadratins sont voulus : les releases francaises et les fansubs
+    # les utilisent comme separateurs. noqa car ruff les signale comme ambigus.
+    title = re.sub(r"[-–—]+\s*$", "", title.strip())  # noqa: RUF001
     title = _MULTISPACE.sub(" ", title).strip(" -_")
     return title
 
@@ -138,7 +172,11 @@ def parse(path: Path) -> ParsedName:
     cut_at: int | None = None
     kind = MediaKind.MOVIE
 
-    for pattern, name in ((_SEASON_EPISODE, "SxxExx"), (_VERBOSE, "verbeux"), (_SEASON_X_EPISODE, "NxNN")):
+    for pattern, name in (
+        (_SEASON_EPISODE, "SxxExx"),
+        (_VERBOSE, "verbeux"),
+        (_SEASON_X_EPISODE, "NxNN"),
+    ):
         if m := pattern.search(stem):
             season = int(m.group("season"))
             episode = int(m.group("episode"))
@@ -156,13 +194,12 @@ def parse(path: Path) -> ParsedName:
             kind = MediaKind.ANIME
             signals.append("numerotation absolue + groupe de fansub")
 
-    year = None
-    if m := _YEAR.search(context):
-        year = int(m.group("year"))
+    year, year_text = _find_year(context)
+    if year is not None:
         signals.append("annee trouvee")
         if kind is MediaKind.MOVIE:
             # Pour un film, le titre s'arrete a l'annee.
-            pos = stem.find(m.group("year"))
+            pos = stem.rfind(year_text)
             if pos > 0:
                 cut_at = pos
 
