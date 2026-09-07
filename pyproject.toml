@@ -50,6 +50,10 @@ select = ["E", "F", "I", "UP", "B", "S", "RUF"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Les tests d'integration du pipeline sont asynchrones : sans ce mode, ils
+# seraient collectes puis silencieusement ignores — le pire des echecs,
+# celui qui se presente comme un succes.
+asyncio_mode = "auto"
 
 # --- Versionnage automatique depuis les commits conventionnels ---------------
 # feat: -> mineure · fix: -> patch · BREAKING CHANGE -> majeure

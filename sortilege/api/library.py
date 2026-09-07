@@ -73,6 +73,16 @@ def run_scan(deep: bool = True, limit: int | None = 500) -> ScanOut:
         _lock.release()
 
 
+def last_scan() -> ScanResult | None:
+    """Dernier scan, pour les autres routeurs.
+
+    Un accesseur plutot qu'un import de la variable : ``from .library import
+    _last_scan`` capturerait la valeur au moment de l'import, donc None pour
+    toujours.
+    """
+    return _last_scan
+
+
 @router.get("", response_model=ScanOut)
 def get_library() -> ScanOut:
     """Dernier scan connu. Vide tant qu'aucun scan n'a ete lance."""
