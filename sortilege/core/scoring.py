@@ -54,6 +54,27 @@ class Signals:
     ambiguous_candidates: int
     """Nombre de candidats proches ex aequo. >1 = homonymie non tranchee."""
 
+    # --- Signaux issus du fichier lui-meme (voir core/probe.py) -------------
+    # Leur interet n'est pas d'etre nombreux mais d'etre DECORRELES du nom :
+    # un nom de release et une duree ne se trompent pas de la meme facon, donc
+    # leur accord vaut confirmation, pas redondance.
+
+    external_id_match: bool | None = None
+    """Un identifiant TMDB/IMDb/TVDB declare dans un .nfo ou les tags du
+    conteneur designe ce candidat. True = identite declaree, pas ressemblance :
+    c'est le signal le plus fort du systeme. False = l'identifiant declare
+    designe quelqu'un d'AUTRE, ce qui doit disqualifier. None = aucun
+    identifiant disponible."""
+
+    runtime_plausible: bool | None = None
+    """La duree reelle du fichier est compatible avec le type retenu. Un
+    « film » de 22 minutes est un episode mal classe. None = duree inconnue
+    (ffprobe absent ou fichier illisible)."""
+
+    container_title_similarity: float | None = None
+    """Similarite entre le titre ecrit dans les tags du conteneur et celui du
+    candidat. None = le conteneur ne porte pas de titre exploitable."""
+
 
 @dataclass(slots=True)
 class Policy:
@@ -64,6 +85,13 @@ class Policy:
     trust_ai: bool = True
     """Si False, une identification venue de l'IA ne peut jamais passer en
     AUTO — elle plafonne a REVIEW quelle que soit sa confiance."""
+
+    trust_external_ids: bool = True
+    """Si True, un identifiant declare concordant suffit a appliquer sans
+    revue. Un tmdbid dans un .nfo n'est pas une ressemblance a evaluer, c'est
+    une reponse : le faire passer par le calcul de score reviendrait a douter
+    d'une certitude. Mettre a False pour un import prudent depuis une source
+    dont on ne fait pas confiance aux .nfo."""
 
 
 def compute_score(signals: Signals) -> float:
@@ -104,8 +132,25 @@ def decide(score: float, signals: Signals, policy: Policy) -> Decision:
     deux choses distinctes. On peut durcir les seuils sans retoucher au calcul,
     et rejouer d'anciens scores sous une nouvelle politique.
     """
+    # Un identifiant declare qui pointe AILLEURS disqualifie, quel que soit le
+    # score : la ressemblance des titres ne peut pas l'emporter sur une
+    # identite explicitement contredite.
+    if signals.external_id_match is False and policy.trust_external_ids:
+        return Decision.REJECT
+
+    # A l'inverse, un identifiant concordant est une reponse, pas un indice.
+    # Court-circuiter le score ici evite qu'un titre exotique ou une duree
+    # atypique fasse douter d'une certitude.
+    if signals.external_id_match is True and policy.trust_external_ids:
+        return Decision.AUTO
+
     if signals.ai_confidence is not None and not policy.trust_ai:
         return Decision.REVIEW if score >= policy.reject_threshold else Decision.REJECT
+
+    # Un « film » de 22 minutes est un episode mal classe : la duree contredit
+    # frontalement le type retenu, on ne l'applique pas sans regard humain.
+    if signals.runtime_plausible is False and score >= policy.auto_apply_threshold:
+        return Decision.REVIEW
 
     if score >= policy.auto_apply_threshold:
         return Decision.AUTO
@@ -141,6 +186,17 @@ def explain(signals: Signals, score: float, decision: Decision) -> list[str]:
 
     if signals.ambiguous_candidates > 1:
         lines.append(f"{signals.ambiguous_candidates} candidats a egalite (homonymie)")
+
+    if signals.external_id_match is True:
+        lines.append("identifiant declare (.nfo ou tags) concordant — certitude")
+    elif signals.external_id_match is False:
+        lines.append("identifiant declare pointant vers une AUTRE oeuvre")
+
+    if signals.runtime_plausible is False:
+        lines.append("duree du fichier incompatible avec le type retenu")
+
+    if signals.container_title_similarity is not None:
+        lines.append(f"titre du conteneur : {signals.container_title_similarity:.2f}")
 
     if signals.ai_confidence is not None:
         lines.append(f"identification assistee par IA (confiance {signals.ai_confidence:.2f})")

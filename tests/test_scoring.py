@@ -65,6 +65,45 @@ def test_sans_ia_la_politique_trust_ai_est_sans_effet() -> None:
     assert decide(0.99, signals(ai_confidence=None), politique) is Decision.AUTO
 
 
+# --- Signaux issus du fichier (probe.py) -------------------------------------
+
+
+def test_identifiant_declare_concordant_court_circuite_le_score() -> None:
+    """Un tmdbid de .nfo est une reponse, pas une ressemblance a evaluer."""
+    assert decide(0.10, signals(external_id_match=True), POLICY) is Decision.AUTO
+
+
+def test_identifiant_declare_divergent_disqualifie() -> None:
+    """Un identifiant qui designe une AUTRE oeuvre l'emporte sur tout score."""
+    assert decide(0.99, signals(external_id_match=False), POLICY) is Decision.REJECT
+
+
+def test_identifiants_ignores_si_la_politique_le_demande() -> None:
+    prudente = Policy(auto_apply_threshold=0.92, reject_threshold=0.40, trust_external_ids=False)
+    assert decide(0.10, signals(external_id_match=True), prudente) is Decision.REJECT
+    assert decide(0.99, signals(external_id_match=False), prudente) is Decision.AUTO
+
+
+def test_duree_incompatible_bloque_l_application_automatique() -> None:
+    """Un « film » de 22 minutes merite un regard, meme bien score."""
+    assert decide(0.99, signals(runtime_plausible=False), POLICY) is Decision.REVIEW
+
+
+def test_duree_incompatible_ne_sauve_pas_un_mauvais_score() -> None:
+    assert decide(0.10, signals(runtime_plausible=False), POLICY) is Decision.REJECT
+
+
+def test_duree_inconnue_sans_effet() -> None:
+    assert decide(0.99, signals(runtime_plausible=None), POLICY) is Decision.AUTO
+
+
+def test_identifiant_prime_sur_la_duree() -> None:
+    """Une identite declaree l'emporte sur une duree atypique (director's cut,
+    episode double, film de 20 minutes qui existe vraiment)."""
+    decision = decide(0.99, signals(external_id_match=True, runtime_plausible=False), POLICY)
+    assert decision is Decision.AUTO
+
+
 # --- Explication ------------------------------------------------------------
 
 
@@ -86,6 +125,16 @@ def test_explication_signale_l_annee_divergente() -> None:
 def test_explication_mentionne_l_assistance_ia() -> None:
     lignes = explain(signals(ai_confidence=0.8), 0.80, Decision.REVIEW)
     assert any("IA" in ligne for ligne in lignes)
+
+
+def test_explication_signale_l_identifiant_declare() -> None:
+    lignes = explain(signals(external_id_match=True), 0.99, Decision.AUTO)
+    assert any("certitude" in ligne for ligne in lignes)
+
+
+def test_explication_signale_la_duree_incompatible() -> None:
+    lignes = explain(signals(runtime_plausible=False), 0.80, Decision.REVIEW)
+    assert any("duree" in ligne for ligne in lignes)
 
 
 def test_explication_commence_par_le_verdict() -> None:

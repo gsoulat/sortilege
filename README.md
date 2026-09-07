@@ -44,6 +44,28 @@ avant un `Apply`, et chaque `Apply` écrit un journal qui permet un `Undo`.
 | `Plan` | Calcule la destination via le gabarit, vérifie le confinement |
 | `Apply` | Déplace, écrit le journal d'annulation |
 
+## Reconnaissance par le fichier lui-même
+
+C'est ce qui sépare Plex d'un outil qui ne lit que les noms. Trois sources
+s'ajoutent au parseur, et surtout elles sont **décorrélées** de lui — un nom de
+release et une durée ne se trompent pas de la même façon, donc leur accord vaut
+confirmation, pas redondance.
+
+| Source | Apport |
+|---|---|
+| Fichier `.nfo` | Un `tmdbid` ou `imdbid` déclaré n'est pas une ressemblance, c'est une réponse. Radarr et Sonarr en écrivent partout. |
+| Tags du conteneur | Titre réel, série, numéro d'épisode, souvent écrits par l'encodeur |
+| Durée | Un épisode fait 20 à 60 min, un film 80 à 240. Sépare film et épisode sans lire le nom. |
+| Résolution réelle | Un fichier étiqueté 1080p qui fait 1280×720 est fréquent — on range d'après la mesure, pas d'après l'étiquette |
+
+Conséquences dans [`scoring.py`](sortilege/core/scoring.py) : un identifiant
+concordant court-circuite le score et applique ; un identifiant qui désigne une
+**autre** œuvre rejette, quel que soit le score ; une durée incompatible bloque
+l'application automatique et renvoie en revue.
+
+Lecture via `ffprobe` (inclus dans l'image). Sans lui, le pipeline tourne avec
+un signal de moins.
+
 ## Résolveur IA
 
 Optionnel, désactivé par défaut. Il n'intervient **que** sur les fichiers dont le

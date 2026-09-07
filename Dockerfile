@@ -20,6 +20,14 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
+# ffprobe lit la duree, la resolution reelle et les tags des conteneurs. C'est
+# ce qui permet de contredire un nom de release menteur — meme approche que
+# Plex. On installe ffmpeg pour ffprobe seul ; le code degrade proprement si le
+# binaire est absent, mais on ne veut pas de cette degradation par defaut.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg \
+ && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd -g "${GID}" sortilege \
  && useradd -u "${UID}" -g "${GID}" -m -s /usr/sbin/nologin sortilege
 
