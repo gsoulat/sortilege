@@ -1,6 +1,65 @@
 # CHANGELOG
 
 
+## v0.4.0 (2026-09-07)
+
+### Features
+
+- Sous-dossiers, regroupement par saga, destinations par type
+  ([`f44edde`](https://github.com/gsoulat/sortilege/commit/f44edde61b4690991dd1d8ef530c44b3545c3ec8))
+
+Sous-dossiers ------------- Le parseur ne lisait que le dossier parent immediat. Sur « Dune
+  (2024)/CD1/film.mkv » il lisait « CD1 », sur « Severance/Season 02/ep07.mkv » il lisait « Season
+  02 » : dans les deux cas le titre et l'annee sont un cran plus haut. Il recoit desormais toute la
+  chaine de dossiers entre la racine et le fichier.
+
+Trois consequences : - les dossiers sans valeur de titre sont ecartes du contexte (CD1, VIDEO_TS,
+  Season 02, Films, Subs...) — les inclure ferait deriver le titre et pourrait fournir une fausse
+  annee ; - un nom de fichier vide de sens (film.mkv, VTS_01_1.mkv, 00001.m2ts) fait remonter au
+  dossier le plus proche qui en porte un ; - « Season 02 » fournit la saison, ce qui rend
+  exploitable un numero d'episode nu (« 07.mkv »). Hors dossier de saison ce motif reste ignore,
+  sinon « 2012.mkv » deviendrait l'episode 2012.
+
+Un titre repris d'un dossier est ampute de son annee : « Severance (2022) » donne « Severance », pas
+  « Severance 2022 », sinon la similarite chute face au libelle du fournisseur.
+
+Regroupement ------------ Jeton {collection}. Pour les films il vient de belongs_to_collection chez
+  TMDB (« Hunger Games - Saga ») ; un appel de detail est necessaire, la recherche ne le renvoie
+  pas, d'ou le cache.
+
+Pour les series, TMDB n'expose AUCUN champ de franchise — « Star Trek: Discovery » et « Star Trek:
+  Picard » y sont deux series sans lien. On deduit donc la franchise du prefixe avant le sous-titre.
+  franchise_for() peut corroborer la deduction avec le reste de la bibliotheque et n'accepte le
+  regroupement que si une autre serie le partage, ce qui evite le dossier a un seul element.
+
+Aucun conditionnel n'est necessaire dans les gabarits : un jeton vide produit un segment vide, et un
+  segment vide disparait du chemin. Le meme gabarit sert donc au film isole comme au film de saga.
+
+Destinations et sources choisies -------------------------------- Nouveau module preferences : ce
+  qui releve de l'USAGE (quelles sources scanner, ou ranger chaque type, avec quel gabarit) devient
+  modifiable depuis l'interface, tandis que config.py garde ce qui releve du DEPLOIEMENT (montages,
+  cles, secrets) — ces valeurs doivent correspondre aux volumes du conteneur, les changer a chaud
+  produirait une configuration qui ne survit pas a un redemarrage.
+
+Garde-fou : une destination est resolue sous la racine de bibliotheque. Et comme resolve_within
+  NEUTRALISE une remontee au lieu de la refuser — bon comportement pour un titre venu d'une API,
+  mauvais pour une saisie humaine — les « .. » sont refuses explicitement en amont. L'utilisateur
+  lit un refus au lieu de decouvrir plus tard que ses fichiers sont partis dans « media/etc ».
+
+Interface --------- Bibliotheque : series et animes regroupes par titre puis par saison, sections
+  repliables. Une liste plate de 300 episodes est illisible, et c'est justement l'arborescence qui
+  sera produite sur le disque. Les animes en numerotation absolue vont sous une cle distincte plutot
+  que de se voir inventer une saison.
+
+Reglages : selection des sources et destination par type, editables.
+
+core/matching.py : le chainon entre le scan et le scoring. Il ne decide rien, il mesure — similarite
+  de titre sur TOUS les libelles connus (« Very Bad Trip » doit matcher « The Hangover »),
+  concordance d'annee a un an pres, accord entre fournisseurs, homonymie, identifiant declare.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.3.0 (2026-09-07)
 
 ### Features
