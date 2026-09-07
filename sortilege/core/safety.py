@@ -21,7 +21,10 @@ _ILLEGAL = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 # Noms reserves Windows — inoffensifs sous Linux mais la bibliotheque est
 # souvent exposee en SMB, autant ne pas creer de dossier impossible a lire.
 _RESERVED = {
-    "CON", "PRN", "AUX", "NUL",
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
     *(f"COM{i}" for i in range(1, 10)),
     *(f"LPT{i}" for i in range(1, 10)),
 }
@@ -42,7 +45,7 @@ def sanitize_segment(value: str) -> str:
     value = unicodedata.normalize("NFC", value)
     value = _ILLEGAL.sub("", value)
     value = value.replace("‮", "")  # override droite-a-gauche
-    value = value.strip(" .")            # un segment finissant par . ou espace casse SMB
+    value = value.strip(" .")  # un segment finissant par . ou espace casse SMB
 
     if value.upper().split(".")[0] in _RESERVED:
         value = f"_{value}"
@@ -72,9 +75,7 @@ def resolve_within(root: Path, relative: str) -> Path:
     # strict=False : la destination n'existe pas encore, c'est normal.
     resolved = candidate.resolve(strict=False)
     if resolved != root and root not in resolved.parents:
-        raise PathConfinementError(
-            f"destination hors racine : {resolved} n'est pas sous {root}"
-        )
+        raise PathConfinementError(f"destination hors racine : {resolved} n'est pas sous {root}")
 
     return resolved
 

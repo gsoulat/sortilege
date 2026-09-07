@@ -8,9 +8,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -22,7 +23,10 @@ class Settings(BaseSettings):
     )
 
     # --- Chemins ---
-    source_roots: list[Path] = Field(default_factory=list)
+    # NoDecode est indispensable : sans lui, pydantic-settings tente de decoder
+    # tout champ de type complexe (ici une liste) comme du JSON AVANT d'appeler
+    # le validateur, et « /a:/b » fait exploser json.loads.
+    source_roots: Annotated[list[Path], NoDecode] = Field(default_factory=list)
     library_root: Path = Path("/storage/media")
 
     # --- Fournisseurs (hors prefixe SORTILEGE_) ---

@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+# Deux releases simultanees produiraient deux tags concurrents.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Version semantique et publication de l'image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # creer le tag et la release
+      packages: write   # publier sur ghcr.io
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # semantic-release lit tout l'historique
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Determiner la version depuis les commits
+        id: release
+        uses: python-semantic-release/python-semantic-release@v9
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publier la release GitHub
+        if: steps.release.outputs.released == 'true'
+        uses: python-semantic-release/publish-action@v9
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ steps.release.outputs.tag }}
+
+      # --- Image Docker, uniquement si une version a ete produite ---
+
+      - uses: docker/setup-qemu-action@v3
+        if: steps.release.outputs.released == 'true'
+
+      - uses: docker/setup-buildx-action@v3
+        if: steps.release.outputs.released == 'true'
+
+      - name: Connexion a GHCR
+        if: steps.release.outputs.released == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Metadonnees de l'image
+        if: steps.release.outputs.released == 'true'
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ steps.release.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.release.outputs.version }}
+            type=raw,value=latest
+
+      - name: Construire et publier
+        if: steps.release.outputs.released == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # arm64 inclus : les NAS Asustor et Synology recents sont en ARM.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

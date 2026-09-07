@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Une PR mise a jour annule le run precedent : inutile de payer deux fois.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+
+      - name: Installer les dependances
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[ai,dev]"
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Format (ruff)
+        run: ruff format --check .
+
+      - name: Tests
+        run: pytest -q
+
+  ui:
+    name: Interface
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Installer
+        working-directory: ui
+        run: npm ci
+
+      - name: Compiler
+        working-directory: ui
+        run: npm run build
+
+  docker:
+    name: Image Docker
+    runs-on: ubuntu-latest
+    # Construit sans publier : valide le Dockerfile a chaque PR, la publication
+    # n'a lieu que sur une release (voir release.yml).
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Construire l'image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: sortilege:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verifier que le conteneur demarre et repond
+        run: |
+          docker run -d --name sortilege-ci -p 8117:8117 \
+            -e SORTILEGE_SOURCE_ROOTS=/tmp/dl \
+            -e SORTILEGE_LIBRARY_ROOT=/tmp/media \
+            -e SORTILEGE_SECRET_KEY=$(head -c 48 /dev/urandom | base64) \
+            -e SORTILEGE_ADMIN_PASSWORD=ci-test \
+            sortilege:ci
+
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8117/api/health > /dev/null; then
+              echo "L'application repond."
+              curl -s http://localhost:8117/api/health
+              # L'interface doit etre servie par le meme port que l'API.
+              curl -sf http://localhost:8117/ | grep -q "Sortilège" \
+                && echo "Interface servie sur le meme port." && exit 0
+              echo "L'interface n'est pas servie."; exit 1
+            fi
+            sleep 2
+          done
+
+          echo "Le conteneur n'a jamais repondu :"
+          docker logs sortilege-ci
+          exit 1

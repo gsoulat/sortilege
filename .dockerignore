@@ -1,0 +1,32 @@
+# Secrets
+.env
+*.key
+*.pem
+
+# L'UI est recompilee dans l'image : ne jamais embarquer un build local, il
+# masquerait silencieusement les sources reelles.
+sortilege/web/static/
+ui/dist/
+ui/node_modules/
+node_modules/
+
+# Python local
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Donnees et historique
+data/
+*.db
+*.sqlite3
+.git/
+.github/
+tests/
+*.log
+
+.DS_Store

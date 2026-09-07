@@ -11,13 +11,13 @@ ou rejeter.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 
-class Decision(str, Enum):
-    AUTO = "auto"          # applique sans intervention
-    REVIEW = "review"      # part dans la file de revue
-    REJECT = "reject"      # trop douteux pour meme etre propose
+class Decision(StrEnum):
+    AUTO = "auto"  # applique sans intervention
+    REVIEW = "review"  # part dans la file de revue
+    REJECT = "reject"  # trop douteux pour meme etre propose
 
 
 @dataclass(slots=True)
