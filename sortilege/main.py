@@ -12,12 +12,13 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import library, review, settings, templates
+from .api import auth, library, review, settings, templates
 from .config import get_settings
+from .core.auth import SESSION_COOKIE, verify_session
 from .core.probe import ffprobe_available
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -57,10 +58,34 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.include_router(auth.router)
 app.include_router(templates.router)
 app.include_router(library.router)
 app.include_router(review.router)
 app.include_router(settings.router)
+
+# Routes accessibles sans session. Liste blanche et non liste noire : oublier
+# d'ajouter une exception rend une page inaccessible, ce qui se voit
+# immediatement ; oublier de proteger une route ne se voit jamais.
+PUBLIC_PATHS = frozenset({"/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/me"})
+
+
+@app.middleware("http")
+async def require_session(request: Request, call_next):
+    """Protege toute l'API derriere le mot de passe.
+
+    L'interface elle-meme reste servie sans session : c'est elle qui affiche
+    l'ecran de connexion. Seules les donnees et les actions sont fermees.
+    """
+    path = request.url.path
+    if path.startswith("/api/") and path not in PUBLIC_PATHS:
+        conf = get_settings()
+        if not verify_session(request.cookies.get(SESSION_COOKIE), conf.secret_key):
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Authentification requise."},
+            )
+    return await call_next(request)
 
 
 @app.get("/api/health")

@@ -13,7 +13,15 @@ from sortilege.main import app
 
 @pytest.fixture
 def client() -> TestClient:
+    """Client deja authentifie.
+
+    Depuis l'ajout du mot de passe, toute l'API est fermee par defaut. Ces
+    tests portent sur le comportement des endpoints, pas sur leur protection —
+    celle-ci est verifiee exhaustivement dans test_auth.py.
+    """
     with TestClient(app) as c:
+        response = c.post("/api/auth/login", json={"password": "mot-de-passe-de-test"})
+        assert response.status_code == 200, "la connexion de test a echoue"
         yield c
 
 
