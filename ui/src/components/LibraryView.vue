@@ -193,6 +193,7 @@ onMounted(load)
               <li v-for="f in s.files" :key="f.relative_path">
                 <span class="ep">{{ episodeLabel(f.parsed) ?? '—' }}</span>
                 <span class="path">{{ f.relative_path }}</span>
+                <span v-if="f.in_library" class="badge lib">rangé</span>
                 <span v-if="f.probe.declared_id" class="badge id">{{ f.probe.declared_id }}</span>
                 <span class="quality" :class="{ low: f.parsed.quality < 0.6 }">
                   {{ (f.parsed.quality * 100).toFixed(0) }}%
@@ -210,6 +211,9 @@ onMounted(load)
             <span class="kind" :class="f.parsed.kind">{{ KIND_LABELS[f.parsed.kind] }}</span>
             <span class="title">{{ f.parsed.title || '(titre non lu)' }}</span>
             <span v-if="f.parsed.year" class="year">{{ f.parsed.year }}</span>
+            <span v-if="f.in_library" class="badge lib" title="Déjà dans la bibliothèque — un scan sert ici à normaliser, pas à importer">
+              rangé
+            </span>
             <span v-if="f.probe.declared_id" class="badge id">{{ f.probe.declared_id }}</span>
             <span class="quality" :class="{ low: f.parsed.quality < 0.6 }">
               {{ (f.parsed.quality * 100).toFixed(0) }}%
@@ -313,6 +317,10 @@ button.primary {
 .badge.id {
   font-size: 10px; font-family: var(--mono); padding: 2px 6px; border-radius: 4px;
   color: var(--ok); border: 1px solid color-mix(in srgb, var(--ok) 30%, transparent); flex: none;
+}
+.badge.lib {
+  font-size: 9.5px; padding: 2px 6px; border-radius: 4px; letter-spacing: .04em;
+  color: var(--text-faint); border: 1px solid var(--border); flex: none;
 }
 .quality { margin-left: auto; font-size: 11px; font-family: var(--mono); color: var(--ok); flex: none; }
 .quality.low { color: var(--warn); }

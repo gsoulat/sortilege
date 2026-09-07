@@ -75,9 +75,97 @@ def test_type_de_media_inconnu_refuse(store: PreferenceStore) -> None:
 
 
 def test_source_non_declaree_refusee(store: PreferenceStore) -> None:
-    """On ne peut pas scanner une racine absente de l'environnement."""
-    with pytest.raises(PreferenceError, match="racine source"):
+    """On ne peut pas activer une source qui n'existe dans aucune liste."""
+    with pytest.raises(PreferenceError, match="ni une racine montee"):
         store.save(Preferences(enabled_sources=["/ailleurs"]))
+
+
+# --- Sources ajoutees depuis l'interface ------------------------------------
+
+
+def test_source_ajoutee_sous_une_racine(store: PreferenceStore) -> None:
+    sub = store._source_roots[0] / "films"
+    sub.mkdir()
+    store.save(Preferences(custom_sources=[str(sub)]))
+    assert str(sub) in {str(p) for p in store.all_sources()}
+
+
+@pytest.mark.parametrize("hostile", ["/etc", "/", "relatif/pas/absolu"])
+def test_source_hors_racines_refusee(store: PreferenceStore, hostile: str) -> None:
+    """Sans cette regle, l'interface permettrait de parcourir tout le NAS."""
+    with pytest.raises(PreferenceError):
+        store.save(Preferences(custom_sources=[hostile]))
+
+
+def test_remontee_dans_une_source_refusee(store: PreferenceStore) -> None:
+    evasion = f"{store._source_roots[0]}/../../etc"
+    with pytest.raises(PreferenceError, match=r"interdits"):
+        store.save(Preferences(custom_sources=[evasion]))
+
+
+def test_source_ajoutee_puis_activee(store: PreferenceStore) -> None:
+    sub = store._source_roots[0] / "animes"
+    sub.mkdir()
+    store.save(Preferences(custom_sources=[str(sub)], enabled_sources=[str(sub)]))
+    resolved = store.resolved_sources()
+    assert [str(p) for p in resolved] == [str(sub)]
+
+
+def test_racine_montee_toujours_disponible(store: PreferenceStore) -> None:
+    """Une racine du compose ne disparait pas parce qu'on ajoute des sources."""
+    sub = store._source_roots[0] / "x"
+    sub.mkdir()
+    store.save(Preferences(custom_sources=[str(sub)]))
+    paths = {str(p) for p in store.all_sources()}
+    assert str(store._source_roots[0]) in paths
+    assert str(store._source_roots[1]) in paths
+
+
+# --- Explorateur ------------------------------------------------------------
+
+
+def test_browse_sans_argument_liste_les_zones(store: PreferenceStore) -> None:
+    """Deux racines sources plus la bibliotheque."""
+    node = store.browse(None)
+    assert node["path"] is None
+    assert len(node["entries"]) == 3
+    assert all(e["is_root"] for e in node["entries"])
+
+
+def test_la_bibliotheque_est_parcourable(store: PreferenceStore) -> None:
+    """Scanner sa bibliotheque existante pour la normaliser est un usage a part
+    entiere — le cas « rattrapage » pour lequel on sort FileBot d'habitude."""
+    node = store.browse(None)
+    library = [e for e in node["entries"] if e["is_library"]]
+    assert len(library) == 1
+    assert library[0]["path"] == str(store._library_root)
+
+
+def test_dossier_de_bibliotheque_ajoutable_en_source(store: PreferenceStore) -> None:
+    films = store._library_root / "Films"
+    films.mkdir()
+    store.save(Preferences(custom_sources=[str(films)]))
+    assert str(films) in {str(p) for p in store.all_sources()}
+
+
+def test_browse_descend(store: PreferenceStore) -> None:
+    root = store._source_roots[0]
+    (root / "Films").mkdir()
+    (root / ".cache").mkdir()
+    node = store.browse(str(root))
+    names = [e["name"] for e in node["entries"]]
+    assert "Films" in names
+    assert ".cache" not in names  # les dossiers caches sont ecartes
+
+
+def test_browse_ne_remonte_pas_au_dessus_des_racines(store: PreferenceStore) -> None:
+    node = store.browse(str(store._source_roots[0]))
+    assert node["parent"] is None
+
+
+def test_browse_hors_perimetre_refuse(store: PreferenceStore) -> None:
+    with pytest.raises(PreferenceError):
+        store.browse("/etc")
 
 
 def test_selection_vide_signifie_toutes(store: PreferenceStore) -> None:

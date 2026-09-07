@@ -28,7 +28,8 @@ router = APIRouter(prefix="/api/settings", tags=["reglages"])
 
 
 class PreferencesIn(BaseModel):
-    enabled_sources: list[str] = Field(default_factory=list)
+    custom_sources: list[str] | None = None
+    enabled_sources: list[str] | None = None
     destinations: dict[str, str] = Field(default_factory=dict)
     templates: dict[str, str] = Field(default_factory=dict)
 
@@ -40,11 +41,23 @@ def read_preferences() -> dict[str, object]:
     store = get_store()
     prefs = store.load()
 
+    mounted = {str(p) for p in conf.source_roots}
+
     return {
+        "custom_sources": prefs.custom_sources,
         "enabled_sources": prefs.enabled_sources,
         "destinations": prefs.destinations,
         "templates": {k: prefs.template_for(k) for k in KINDS},
-        "available_sources": [{"path": str(p), "exists": p.is_dir()} for p in conf.source_roots],
+        "available_sources": [
+            {
+                "path": str(p),
+                "exists": p.is_dir(),
+                # Une racine montee ne peut pas etre retiree depuis l'interface :
+                # elle vient du docker-compose, pas des preferences.
+                "mounted": str(p) in mounted,
+            }
+            for p in store.all_sources(prefs)
+        ],
         "library_root": str(conf.library_root),
         "resolved_destinations": {k: str(store.destination_root(k)) for k in KINDS},
     }
@@ -55,8 +68,15 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
     store = get_store()
     current = store.load()
 
+    # None = « ne touche pas a ce champ ». Une liste vide reste une valeur
+    # significative (aucune source ajoutee, ou toutes les sources activees).
     merged = Preferences(
-        enabled_sources=body.enabled_sources,
+        custom_sources=(
+            current.custom_sources if body.custom_sources is None else body.custom_sources
+        ),
+        enabled_sources=(
+            current.enabled_sources if body.enabled_sources is None else body.enabled_sources
+        ),
         destinations={**current.destinations, **body.destinations},
         templates={**current.templates, **body.templates},
     )
@@ -68,6 +88,18 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return read_preferences()
+
+
+@router.get("/browse")
+def browse(path: str | None = None) -> dict[str, object]:
+    """Sous-dossiers d'un chemin, pour choisir une source sans la saisir.
+
+    Confine aux racines montees : impossible de remonter au-dessus.
+    """
+    try:
+        return get_store().browse(path)
+    except PreferenceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("")

@@ -45,6 +45,7 @@ class ScannedFileOut(BaseModel):
     parsed: ParsedOut
     probe: ProbeOut
     skipped_reason: str | None = None
+    in_library: bool = False
 
 
 class ScanOut(BaseModel):
@@ -74,6 +75,7 @@ def to_out(file: ScannedFile) -> ScannedFileOut:
         filename=file.path.name,
         size_bytes=file.size_bytes,
         skipped_reason=file.skipped_reason,
+        in_library=file.in_library,
         parsed=ParsedOut(
             title=p.title,
             kind=str(p.kind),

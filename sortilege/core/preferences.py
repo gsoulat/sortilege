@@ -45,10 +45,17 @@ class PreferenceError(ValueError):
 class Preferences:
     """Ce que l'utilisateur choisit, par opposition a ce que l'admin deploie."""
 
-    enabled_sources: list[str] = field(default_factory=list)
-    """Sous-ensemble des racines sources a scanner. Vide = toutes.
+    custom_sources: list[str] = field(default_factory=list)
+    """Sources ajoutees depuis l'interface, en plus des racines montees.
 
-    Utile quand une racine est un montage reseau lent qu'on ne veut pas
+    Chacune doit se trouver SOUS une racine declaree dans l'environnement : le
+    conteneur ne voit que ses volumes, et laisser saisir un chemin libre
+    permettrait de parcourir tout ce qui est monte."""
+
+    enabled_sources: list[str] = field(default_factory=list)
+    """Sous-ensemble des sources a scanner. Vide = toutes.
+
+    Utile quand une source est un montage reseau lent qu'on ne veut pas
     reparcourir a chaque fois."""
 
     destinations: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_DESTINATIONS))
@@ -100,6 +107,7 @@ class PreferenceStore:
                 return self._cache
 
             self._cache = Preferences(
+                custom_sources=list(raw.get("custom_sources") or []),
                 enabled_sources=list(raw.get("enabled_sources") or []),
                 destinations={**DEFAULT_DESTINATIONS, **(raw.get("destinations") or {})},
                 templates=dict(raw.get("templates") or {}),
@@ -116,14 +124,68 @@ class PreferenceStore:
             self._cache = prefs
         return prefs
 
+    def all_sources(self, prefs: Preferences | None = None) -> list[Path]:
+        """Racines montees + sources ajoutees, dedoublonnees et ordonnees."""
+        prefs = prefs or self.load()
+        seen: dict[str, Path] = {str(p): p for p in self._source_roots}
+        for raw in prefs.custom_sources:
+            path = Path(raw)
+            seen.setdefault(str(path), path)
+        return list(seen.values())
+
+    @property
+    def allowed_areas(self) -> list[Path]:
+        """Zones que l'interface peut parcourir et proposer comme source.
+
+        Les racines sources ET la racine de bibliotheque. Cette derniere n'est
+        pas un oubli : scanner une bibliotheque deja rangee est un usage a part
+        entiere — la normaliser, corriger d'anciens noms, rattraper ce qui a ete
+        classe a la main. C'est le cas « rattrapage » pour lequel on utilise
+        FileBot d'habitude.
+        """
+        areas: dict[str, Path] = {str(p): p for p in self._source_roots}
+        areas.setdefault(str(self._library_root), self._library_root)
+        return list(areas.values())
+
+    def _assert_under_a_root(self, raw: str) -> Path:
+        """Une source doit vivre sous une zone autorisee.
+
+        Le conteneur ne voit que ses volumes ; accepter un chemin libre
+        reviendrait a offrir un parcours de tout ce qui est monte, y compris
+        ce qui n'a rien a voir avec des medias.
+        """
+        if not raw.strip():
+            raise PreferenceError("chemin de source vide")
+        if any(part in ("..", ".") for part in raw.replace("\\", "/").split("/")):
+            raise PreferenceError(f"« {raw} » : « .. » et « . » sont interdits.")
+
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            raise PreferenceError(f"« {raw} » doit etre un chemin absolu.")
+
+        resolved = candidate.resolve(strict=False)
+        for root in self.allowed_areas:
+            root = root.resolve()
+            if resolved == root or root in resolved.parents:
+                return resolved
+
+        allowed = ", ".join(str(p) for p in self.allowed_areas) or "(aucune)"
+        raise PreferenceError(
+            f"« {raw} » est hors des zones montees. Zones autorisees : {allowed}. "
+            "Pour en ouvrir une autre, ajoute un volume au conteneur et declare-la "
+            "dans SORTILEGE_SOURCE_ROOTS."
+        )
+
     def validate(self, prefs: Preferences) -> None:
         """Refuse une preference dangereuse ou inapplicable."""
-        known = {str(p) for p in self._source_roots}
+        for raw in prefs.custom_sources:
+            self._assert_under_a_root(raw)
+
+        known = {str(p) for p in self.all_sources(prefs)}
         for source in prefs.enabled_sources:
             if source not in known:
                 raise PreferenceError(
-                    f"« {source} » n'est pas une racine source declaree. "
-                    "Les racines viennent de SORTILEGE_SOURCE_ROOTS."
+                    f"« {source} » n'est ni une racine montee ni une source ajoutee."
                 )
 
         for kind, sub in prefs.destinations.items():
@@ -163,12 +225,68 @@ class PreferenceStore:
                 raise PreferenceError(f"gabarit invalide pour « {kind} » : {exc}") from exc
 
     def resolved_sources(self) -> list[Path]:
-        """Racines effectivement a scanner."""
+        """Sources effectivement a scanner."""
         prefs = self.load()
+        available = self.all_sources(prefs)
         if not prefs.enabled_sources:
-            return list(self._source_roots)
+            return available
         selected = set(prefs.enabled_sources)
-        return [p for p in self._source_roots if str(p) in selected]
+        return [p for p in available if str(p) in selected]
+
+    def browse(self, raw: str | None) -> dict[str, object]:
+        """Sous-dossiers d'un chemin, pour l'explorateur de l'interface.
+
+        Sans argument, renvoie les racines montees. Toujours confine : on ne
+        peut descendre que sous une racine declaree, et jamais remonter
+        au-dessus.
+        """
+        if not raw:
+            return {
+                "path": None,
+                "parent": None,
+                "entries": [
+                    {
+                        "path": str(p),
+                        "name": p.name or str(p),
+                        "exists": p.is_dir(),
+                        "is_root": True,
+                        # Signale une zone qui est aussi une destination : y
+                        # scanner sert a normaliser l'existant, pas a importer.
+                        "is_library": p == self._library_root,
+                    }
+                    for p in self.allowed_areas
+                ],
+            }
+
+        current = self._assert_under_a_root(raw)
+        if not current.is_dir():
+            raise PreferenceError(f"« {raw} » n'est pas un dossier accessible.")
+
+        entries = []
+        try:
+            for child in sorted(current.iterdir()):
+                if not child.is_dir() or child.name.startswith("."):
+                    continue
+                entries.append(
+                    {
+                        "path": str(child),
+                        "name": child.name,
+                        "exists": True,
+                        "is_root": False,
+                        "is_library": False,
+                    }
+                )
+        except OSError as exc:
+            raise PreferenceError(f"lecture impossible : {exc}") from exc
+
+        # Le parent n'est propose que s'il reste dans le perimetre autorise.
+        parent: str | None = None
+        try:
+            parent = str(self._assert_under_a_root(str(current.parent)))
+        except PreferenceError:
+            parent = None
+
+        return {"path": str(current), "parent": parent, "entries": entries}
 
     def destination_root(self, kind: str) -> Path:
         """Chemin absolu ou ranger ce type de media."""

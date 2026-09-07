@@ -59,7 +59,7 @@ def run_scan(deep: bool = True, limit: int | None = 500) -> ScanOut:
         raise HTTPException(status_code=409, detail="Un scan est deja en cours.")
 
     try:
-        result = scan(roots, deep=deep, limit=limit)
+        result = scan(roots, deep=deep, limit=limit, library_root=settings.library_root)
         _last_scan = result
         _last_deep = deep
         logger.info(

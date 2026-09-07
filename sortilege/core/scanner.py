@@ -52,6 +52,14 @@ class ScannedFile:
     # conteneur ne parle a personne.
     relative_path: str = ""
 
+    in_library: bool = False
+    """Le fichier est deja dans la bibliotheque.
+
+    Scanner sa bibliotheque existante est un usage legitime — la normaliser,
+    corriger d'anciens noms. Mais il faut distinguer ce cas d'un import :
+    proposer de deplacer un fichier deja bien range est du bruit, et l'appliquer
+    serait une operation nulle qui salit le journal d'annulation."""
+
     @property
     def skipped_reason(self) -> str | None:
         if self.size_bytes < MIN_SIZE_BYTES:
@@ -79,11 +87,23 @@ def _should_skip_file(path: Path) -> bool:
     return any(hint in lowered for hint in SKIP_NAME_HINTS)
 
 
+def _under(path: Path, root: Path | None) -> bool:
+    if root is None:
+        return False
+    try:
+        resolved = path.resolve(strict=False)
+        root = root.resolve()
+    except OSError:
+        return False
+    return resolved == root or root in resolved.parents
+
+
 def scan(
     roots: list[Path],
     *,
     deep: bool = True,
     limit: int | None = None,
+    library_root: Path | None = None,
 ) -> ScanResult:
     """Parcourt les racines et analyse chaque fichier video.
 
@@ -135,6 +155,7 @@ def scan(
                     parsed=parsed,
                     probe=probe,
                     relative_path=str(path.relative_to(root)),
+                    in_library=_under(path, library_root),
                 )
             )
 

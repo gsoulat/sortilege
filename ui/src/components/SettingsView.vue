@@ -1,5 +1,6 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
+import SourcePicker from './SourcePicker.vue'
 
 const KIND_LABELS = { movie: 'Films', episode: 'Séries TV', anime: 'Animes' }
 
@@ -8,31 +9,16 @@ const prefs = ref(null)
 const saving = ref(false)
 const saveError = ref(null)
 const saved = ref(false)
-
 const dirty = ref(false)
 
-const selectedSources = computed({
-  get: () => prefs.value?.enabled_sources ?? [],
-  set: (v) => {
-    prefs.value.enabled_sources = v
-    dirty.value = true
-  },
-})
-
-function toggleSource(path) {
-  const current = new Set(prefs.value.enabled_sources)
-  // Liste vide = toutes les sources. Décocher la dernière n'aurait aucun sens,
-  // on matérialise donc « tout » par la liste complète avant de retirer.
-  if (current.size === 0) {
-    for (const a of s.value.paths.source_roots) current.add(a)
-  }
-  current.has(path) ? current.delete(path) : current.add(path)
-  selectedSources.value = [...current]
-}
-
-function isSelected(path) {
-  const list = prefs.value?.enabled_sources ?? []
-  return list.length === 0 || list.includes(path)
+/**
+ * Ajouter ou retirer une source est enregistré immédiatement : c'est une action
+ * discrète, pas une saisie qu'on affine. Les destinations, elles, se tapent
+ * caractère par caractère et attendent un clic explicite.
+ */
+function onSourceChange(patch) {
+  Object.assign(prefs.value, patch)
+  save()
 }
 
 function setDestination(kind, value) {
@@ -50,14 +36,20 @@ async function save() {
   saveError.value = null
   saved.value = false
   try {
+    // On envoie TOUJOURS l'etat complet, jamais un patch partiel : deux
+    // enregistrements rapproches (ajout d'une source puis bascule d'une case)
+    // pourraient sinon s'entrecroiser et faire perdre un champ. C'est
+    // idempotent, donc rejouable sans consequence.
+    const payload = {
+      custom_sources: prefs.value.custom_sources,
+      enabled_sources: prefs.value.enabled_sources,
+      destinations: prefs.value.destinations,
+      templates: {},
+    }
     const res = await fetch('/api/settings/preferences', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        enabled_sources: prefs.value.enabled_sources,
-        destinations: prefs.value.destinations,
-        templates: {},
-      }),
+      body: JSON.stringify(payload),
     })
     const body = await res.json()
     if (!res.ok) {
@@ -83,19 +75,12 @@ onMounted(load)
     <section>
       <h3>Sources à scanner</h3>
       <p class="note top">
-        Les racines viennent de <code>SORTILEGE_SOURCE_ROOTS</code> et doivent correspondre
-        aux volumes montés. Tu choisis ici lesquelles parcourir — utile pour exclure
-        un montage réseau lent.
+        Ajoute autant de sources que tu veux, à condition qu'elles soient
+        <strong>sous une racine montée</strong> — le conteneur ne voit que ses volumes.
+        Pour ouvrir une zone supplémentaire, ajoute un volume au
+        <code>docker compose</code> et déclare-la dans <code>SORTILEGE_SOURCE_ROOTS</code>.
       </p>
-      <ul class="sources">
-        <li v-for="src in prefs.available_sources" :key="src.path">
-          <label>
-            <input type="checkbox" :checked="isSelected(src.path)" @change="toggleSource(src.path)" />
-            <code>{{ src.path }}</code>
-          </label>
-          <span v-if="!src.exists" class="warn">introuvable</span>
-        </li>
-      </ul>
+      <SourcePicker :prefs="prefs" @change="onSourceChange" />
     </section>
 
     <section>
