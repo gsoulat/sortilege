@@ -1,6 +1,54 @@
 # CHANGELOG
 
 
+## v0.7.0 (2026-09-07)
+
+### Features
+
+- Cabler le pipeline de bout en bout et la file de revue
+  ([`488680d`](https://github.com/gsoulat/sortilege/commit/488680d9a22045f3eeb61504f81fee731e4f6d2f))
+
+Le coeur existait piece par piece ; il tourne maintenant en entier : scan -> fournisseurs ->
+  correspondance -> score -> plan -> deplacement -> annulation.
+
+pipeline -------- Chef d'orchestre, sans logique metier — sa brievete est le signe que la separation
+  tient. Deux contraintes gouvernent sa forme :
+
+- **Concurrence bornee** (semaphore a 6). Une bibliotheque de 2 000 fichiers lancerait autant de
+  requetes simultanees, epuiserait le quota TMDB et ferait bannir l'adresse. Un scan lent n'est
+  jamais un probleme, un bannissement si. - **Un fichier qui echoue n'arrete pas le lot.** Chaque
+  fichier produit un plan, fut-il un rejet motive ; une exception qui remonterait ferait perdre le
+  travail deja fait sur les precedents.
+
+L'enrichissement (saga du film, titre de l'episode) n'est demande que pour le candidat GAGNANT : le
+  faire sur tous multiplierait le cout par dix pour une information dont on ne se sert que sur un
+  seul. L'absence de reponse sur un episode devient le signal episode_match=False — la saison
+  n'existe pas chez ce candidat, donc l'identification est douteuse.
+
+API et interface ---------------- POST /api/review/plan calcule, /apply applique, /undo annule,
+  /journal liste ce qui a bouge. La file separe trois groupes : assez sur pour etre applique seul,
+  en attente d'arbitrage (avec cases a cocher et les raisons du score), et ecarte. Appliquer les
+  plans en attente demande un clic explicite sur une selection : c'est precisement ce que l'outil
+  s'interdit de faire seul.
+
+Tests d'integration ------------------- Fournisseurs simules — pas pour eviter le reseau, mais parce
+  qu'un test dependant de TMDB echouerait un jour pour une raison etrangere au code. Le parcours
+  complet est verifie : un film est identifie, range dans son dossier de saga, puis ramene a sa
+  place d'origine par l'annulation.
+
+Un de ces tests a d'abord echoue pour une bonne raison : le faux TMDB ne renvoyait que le titre
+  francais, et « Dune Part Two » ne ressemble pas assez a « Dune, deuxieme partie » pour passer en
+  automatique. C'etait la simulation qui etait fausse — le vrai TMDB renvoie aussi original_title.
+  Le cas a ete conserve comme test a part entiere : sans titre original, l'outil doit demander un
+  regard humain plutot que de bluffer.
+
+asyncio_mode = "auto" est explicite dans pyproject : sans lui les tests asynchrones seraient
+  collectes puis silencieusement ignores, soit le pire des echecs — celui qui se presente comme un
+  succes.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.6.0 (2026-09-07)
 
 ### Features
