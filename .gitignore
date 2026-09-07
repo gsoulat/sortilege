@@ -1,0 +1,36 @@
+# Secrets — jamais dans un depot public
+.env
+*.env
+!.env.example
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node / build UI
+node_modules/
+ui/dist/
+.vite/
+
+# L'UI compilee est copiee ici au build Docker, jamais commitee
+sortilege/web/static/
+
+# Donnees applicatives
+data/
+*.db
+*.sqlite3
+logs/
+*.log
+
+# OS / editeurs
+.DS_Store
+.idea/
+.vscode/

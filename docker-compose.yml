@@ -1,0 +1,36 @@
+# Une seule application, un seul service, un seul port.
+#
+# Le montage des medias : monte un PARENT COMMUN aux telechargements et a la
+# bibliotheque, pas deux bind mounts separes. Deux points de montage distincts
+# sont deux systemes de fichiers du point de vue du conteneur, et un rename()
+# de l'un vers l'autre echoue en EXDEV -> chaque fichier serait recopie
+# integralement au lieu d'etre deplace instantanement.
+
+services:
+  sortilege:
+    build:
+      context: .
+      args:
+        # Aligne sur le proprietaire des fichiers a deplacer.
+        UID: ${PUID:-1000}
+        GID: ${PGID:-1000}
+    image: sortilege:latest
+    container_name: sortilege
+    env_file: .env
+    environment:
+      - TZ=${TZ:-Europe/Paris}
+    volumes:
+      # Base SQLite, journal d'annulation, gabarits.
+      - ./data:/app/data
+      # Parent commun : adapte a ton arborescence.
+      - ${MEDIA_ROOT:-/volume1}:/storage
+    ports:
+      - "${SORTILEGE_PORT:-8117}:8117"
+    restart: unless-stopped
+    # Durcissement : l'application n'a besoin d'ecrire que dans /app/data et
+    # /storage. Le reste du systeme de fichiers peut rester en lecture seule.
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
