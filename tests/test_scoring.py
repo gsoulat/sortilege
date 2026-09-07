@@ -1,11 +1,10 @@
-"""Tests de la politique de decision.
+"""Tests de la POLITIQUE de decision.
 
-``compute_score`` n'est pas encore implemente : ces tests couvrent ``decide``
-et ``explain``, qui sont deja le contrat sur lequel repose le comportement de
-l'application. Ils passeront tels quels quand le calcul arrivera.
+Separes de ceux du calcul (test_scoring_compute.py) comme le code l'est :
+``decide`` traduit un score en action, ``compute_score`` produit ce score. On
+peut durcir les seuils sans toucher au calcul, et rejouer d'anciennes mesures
+sous une nouvelle politique — ces tests-la ne bougeront pas.
 """
-
-import pytest
 
 from sortilege.core.scoring import Decision, Policy, Signals, compute_score, decide, explain
 
@@ -145,9 +144,8 @@ def test_explication_commence_par_le_verdict() -> None:
 # --- Contrat de compute_score -----------------------------------------------
 
 
-@pytest.mark.xfail(raises=NotImplementedError, reason="compute_score reste a implementer")
 def test_compute_score_respecte_ses_bornes() -> None:
-    """Passera automatiquement des que la fonction sera ecrite."""
+    """Le contrat minimal, quel que soit le reglage des poids."""
     for s in (
         signals(),
         signals(title_similarity=0.0, parse_quality=0.0, year_match=False, provider_agreement=0),
@@ -156,7 +154,6 @@ def test_compute_score_respecte_ses_bornes() -> None:
         assert 0.0 <= score <= 1.0
 
 
-@pytest.mark.xfail(raises=NotImplementedError, reason="compute_score reste a implementer")
 def test_un_meilleur_candidat_score_plus_haut() -> None:
     fort = compute_score(signals(title_similarity=0.98, year_match=True, provider_agreement=3))
     faible = compute_score(signals(title_similarity=0.35, year_match=False, provider_agreement=0))

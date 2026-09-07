@@ -94,35 +94,113 @@ class Policy:
     dont on ne fait pas confiance aux .nfo."""
 
 
+# --- Poids du calcul de confiance -------------------------------------------
+#
+# Isoles pour etre regles apres observation du comportement reel : ce sont des
+# valeurs de depart raisonnables, pas des constantes physiques. La bonne facon
+# de les ajuster est de lancer un scan, regarder ce qui atterrit en revue, et
+# deplacer le curseur du signal qui a mal juge.
+
+BASE_CREDIT = 0.12
+"""Credit de depart accorde des lors qu'un candidat plausible existe.
+
+Sans lui, un fichier au titre correct mais sans annee ni second fournisseur
+tombait sous le seuil de rejet — donc ecarte en silence alors qu'il est
+seulement ambigu. Or ``matching`` a deja elimine les candidats sous 0.35 de
+similarite : tout ce qui arrive ici est deja une piste serieuse, et merite au
+minimum un regard humain plutot qu'une poubelle."""
+
+W_TITLE = 0.50
+"""Le signal le plus riche, donc le plus lourd. Mais seul il ne distingue pas
+« Dune (1984) » de « Dune (2021) » — d'ou tout le reste."""
+
+W_PARSE_QUALITY = 0.10
+"""Confiance du parseur dans sa propre lecture. Faible : elle mesure la
+lisibilite du nom, pas la justesse de l'identification."""
+
+BONUS_YEAR = 0.20
+MALUS_YEAR = -0.35
+"""Asymetrique a dessein. Une annee qui concorde confirme ; une annee qui
+diverge CONTREDIT, et une contradiction pese plus lourd qu'une confirmation.
+Une annee absente ne fait rien : « je ne sais pas » n'est pas « c'est faux »."""
+
+BONUS_EPISODE = 0.05
+MALUS_EPISODE = -0.30
+"""Meme logique. Qu'un episode existe est banal ; qu'il n'existe PAS chez le
+candidat retenu est un signal fort d'erreur d'identification."""
+
+AGREEMENT_BONUS = {0: -0.10, 1: 0.0, 2: 0.12, 3: 0.18}
+"""Progression non lineaire, et c'est le point important : deux sources
+INDEPENDANTES qui convergent valent bien plus que le double d'une seule. Passer
+de 2 a 3 apporte moins que passer de 1 a 2, parce que l'essentiel de
+l'information est dans le fait meme qu'une seconde source confirme."""
+
+W_POPULARITY = 0.05
+"""Departage les homonymes — entre deux films du meme titre, le connu est plus
+probable. Poids volontairement minuscule : c'est un argument de dernier
+recours, pas une preuve."""
+
+W_CONTAINER = 0.08
+"""Titre lu dans les tags du conteneur. Modeste mais precieux car DECORRELE du
+nom de fichier : quand les deux concordent, ce n'est pas une redondance."""
+
+AMBIGUITY_CEILING = 0.75
+"""Plafond en cas d'homonymie non tranchee. Un plafond et non un malus : deux
+candidats a egalite constituent une incertitude structurelle qu'aucun autre
+signal ne compense. Accumuler des bonus ailleurs ne doit pas permettre de
+franchir le seuil d'application automatique."""
+
+
 def compute_score(signals: Signals) -> float:
     """Combine les signaux en une confiance unique, entre 0.0 et 1.0.
 
-    TODO(guillaume) — a implementer. C'est la piece qui definit le caractere
-    de l'outil, elle t'appartient.
+    Trois etages, dans cet ordre :
 
-    Les arbitrages a trancher :
+    1. **Une base** de preuves positives ponderees (titre, lisibilite du nom,
+       notoriete, tags du conteneur).
+    2. **Des modificateurs** signes, qui confirment ou contredisent. Les
+       contradictions pesent plus lourd que les confirmations : trouver
+       l'annee juste est ordinaire, trouver une annee fausse est alarmant.
+    3. **Des plafonds**, pour les incertitudes qu'aucune accumulation de bonus
+       ne doit pouvoir effacer.
 
-    * **Poids relatifs.** `title_similarity` est le signal le plus riche, mais
-      seul il ne distingue pas « Dune (1984) » de « Dune (2021) ». `year_match`
-      est binaire et tres discriminant quand il est disponible — mais il est
-      souvent None.
-    * **Signaux absents.** Un `year_match` a None doit-il penaliser, ou juste
-      ne rien apporter ? Penaliser rend l'outil prudent sur les fichiers mal
-      nommes (donc plus de revue manuelle) ; neutraliser le rend fluide mais
-      plus exposé aux homonymes.
-    * **Accord entre providers.** Deux sources independantes qui concordent
-      valent bien plus que le double d'une seule. Une progression non lineaire
-      (par ex. 0 / +0.10 / +0.25) traduit mieux cette realite qu'un multiple.
-    * **Homonymie.** `ambiguous_candidates > 1` devrait probablement plafonner
-      le score plutot que le reduire : deux candidats a egalite, c'est une
-      incertitude structurelle qu'aucun autre signal ne compense.
-    * **La confiance de l'IA n'est pas commensurable** avec les autres. Elle
-      dit « je crois reconnaitre cette oeuvre », pas « les donnees concordent ».
-      La traiter comme un signal parmi d'autres, ou comme un plafond ?
-
-    Contrat : retourner une valeur dans [0.0, 1.0].
+    Version de depart a ajuster. Les poids sont nommes juste au-dessus.
     """
-    raise NotImplementedError("compute_score : a implementer")
+    score = (
+        BASE_CREDIT
+        + W_TITLE * signals.title_similarity
+        + W_PARSE_QUALITY * signals.parse_quality
+        + W_POPULARITY * signals.provider_popularity
+    )
+
+    if signals.container_title_similarity is not None:
+        score += W_CONTAINER * signals.container_title_similarity
+
+    if signals.year_match is True:
+        score += BONUS_YEAR
+    elif signals.year_match is False:
+        score += MALUS_YEAR
+
+    if signals.episode_match is True:
+        score += BONUS_EPISODE
+    elif signals.episode_match is False:
+        score += MALUS_EPISODE
+
+    score += AGREEMENT_BONUS.get(min(signals.provider_agreement, 3), 0.0)
+
+    # --- Plafonds ---
+
+    if signals.ambiguous_candidates > 1:
+        score = min(score, AMBIGUITY_CEILING)
+
+    if signals.ai_confidence is not None:
+        # Plafond et non addition : la confiance de l'IA n'est pas
+        # commensurable avec les autres signaux. Elle dit « je crois
+        # reconnaitre cette oeuvre », pas « les donnees concordent ». Un modele
+        # hesitant doit donc borner le resultat, pas s'y ajouter.
+        score = min(score, signals.ai_confidence)
+
+    return max(0.0, min(1.0, score))
 
 
 def decide(score: float, signals: Signals, policy: Policy) -> Decision:
