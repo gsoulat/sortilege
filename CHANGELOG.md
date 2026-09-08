@@ -1,6 +1,336 @@
 # CHANGELOG
 
 
+## v0.24.0 (2026-09-08)
+
+### Bug Fixes
+
+- **revue**: Rendre un lot executable quand rien n atteint le seuil auto
+  ([`93d82fa`](https://github.com/gsoulat/sortilege/commit/93d82fa6355610ee5681ba11c745b69b762fe87c))
+
+Un lot dont aucun fichier ne depasse le seuil automatique etait impossible a traiter : la section
+  d'arbitrage s'ouvrait repliee, aucune case n'etait donc atteignable, aucune selection ne pouvait
+  se former, et les boutons « Simuler » / « Executer » — conditionnes a une selection non vide — ne
+  s'affichaient jamais. Le lot restait a l'ecran, complet et inerte.
+
+Le repli avait un sens — ne pas noyer deux clics surs sous trois cents lignes a arbitrer — mais il
+  etait fige a l'initialisation alors que sa raison d'etre depend de la file. Il se reevalue
+  maintenant a chaque chargement : replie tant qu'il reste des plans surs, ouvert quand il n'y a
+  plus qu'a arbitrer.
+
+Deux autres corrections dans la meme zone :
+
+Le bouton d'application automatique envoyait « tout ce qui est automatique » plutot que la liste
+  affichee. Sous filtre « < 80 % » il annoncait douze plans et le serveur en aurait deplace
+  quarante. Il envoie desormais les identifiants exacts de ce qu'il montre — un bouton qui ment sur
+  ce qu'il deplace est plus dangereux qu'un bouton absent.
+
+Et « Tout cocher » sur l'arbitrage visible : cent lignes a cocher une par une n'est pas une
+  interface, c'est un obstacle.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+### Continuous Integration
+
+- **release**: Ne plus perdre l image quand GitHub refuse la poussee
+  ([`a1f1ff8`](https://github.com/gsoulat/sortilege/commit/a1f1ff835b724769d044fb6546b27928ef12ad85))
+
+Trois releases de suite ont echoue sur « remote: fatal error in commit_refs » au moment ou le runner
+  poussait le commit de version et son tag. L'erreur est cote serveur — les memes poussees depuis un
+  poste passent sans probleme — mais elle emportait tout ce qui suivait, y compris la construction
+  de l'image. Or c'est l'image qu'on deploie ; le tag n'est qu'une trace.
+
+L'ordre est donc inverse. semantic-release calcule la version, modifie les fichiers, commit et tag
+  EN LOCAL sans rien pousser. L'image se construit ensuite depuis cet arbre de travail, deja bumpe,
+  et part sur GHCR. La poussee des refs vient en dernier, avec trois tentatives espacees et un
+  rebase entre chaque au cas ou un commit serait arrive entre-temps.
+
+Si la poussee finit par echouer malgre tout, le job termine en erreur — avec la commande exacte a
+  rejouer depuis un poste. Un vert sur un depot sans tag serait pire que l'echec : la meme version
+  se recalculerait au commit suivant sans qu'on comprenne pourquoi elle n'a pas bouge.
+
+Ce que ca change concretement : un alea GitHub coute desormais une commande de rattrapage, la ou il
+  coutait un build multi-architecture complet et une release a moitie faite.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+### Features
+
+- **episodes**: Numerotation absolue des animes et fichiers multi-episodes
+  ([`95274a7`](https://github.com/gsoulat/sortilege/commit/95274a7028761b4925099d322650ef1bd31ab102))
+
+Deux facons pour un episode d'etre mal range, toutes deux silencieuses.
+
+La numerotation absolue d'abord. Les releases de fansub comptent en continu — « One Piece - 1088 » —
+  la ou Jellyfin attend S21E13. Sans conversion, l'anime se range hors saison et le lecteur ne sait
+  plus le relier a rien. TMDB donne les effectifs par saison en une requete : il suffit de cumuler.
+  Au-dela du total connu, rien n'est affirme — une serie en cours a toujours plus d'episodes
+  diffuses que le catalogue n'en connait, et un dossier fantome se rattrape moins bien qu'un fichier
+  laisse en revue.
+
+Les fichiers doubles ensuite. « S01E01E02 » etait lu comme « S01E01 » : le motif simple gagnait, et
+  le second episode disparaissait sans un mot. Trois consequences a la fois — E02 porte manquant
+  alors qu'il est sur le disque, meme nom de destination que le fichier simple donc ecrasement
+  possible, et les deux declares doublons l'un de l'autre. Le motif de plage passe donc avant le
+  motif simple, et la plage se propage jusqu'au nom rendu.
+
+Le conditionnel de gabarit accepte desormais le meme zero-padding que le jeton simple
+  ({?episode_end:02:-E$}) : « E01-E2 » a cote de « E01 » aurait ete incoherent, et c'est le nom de
+  fichier qui compte pour le lecteur.
+
+29 tests, dont les cas limites qui font tout le travail : saison 0 exclue de la numerotation, saison
+  vide traversee, plage inversee ignoree, et le cout verifie a une seule requete pour trente
+  episodes.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+- **notifications**: Compte rendu Discord des cycles automatiques
+  ([`ba9ab8e`](https://github.com/gsoulat/sortilege/commit/ba9ab8efef0ce31a9df87567e728f3955734f691))
+
+Le rangement automatique tourne sans personne devant l'ecran, et le seul moment ou l'on ouvre
+  l'interface c'est quand on soupconne deja un probleme — donc trop tard. Un webhook Discord inverse
+  ce rapport.
+
+Trois choix de conception, tous discutables et tous assumes :
+
+**Le silence par defaut.** Un cycle qui n'a rien trouve n'envoie rien. Un message toutes les quinze
+  minutes disant « 0 fichier range » apprend a ignorer le canal, et le jour ou un echec arrive il
+  passe inapercu. On ne signale que ce qui s'est passe : des fichiers detectes, ranges, ou mis en
+  attente d'arbitrage.
+
+**Une notification ne casse jamais un cycle.** Discord injoignable, webhook revoque, reseau coupe :
+  tout est journalise et avale. Le rangement compte plus que son compte rendu. Le seul endroit qui
+  rapporte un echec est le bouton d'essai, ou l'utilisateur attend justement une reponse.
+
+**L'URL est contrainte aux domaines Discord.** Elle est saisie depuis le navigateur et c'est le
+  SERVEUR qui va la chercher : sans restriction d'hote, ce champ ferait du conteneur un relais
+  capable d'emettre vers n'importe quelle adresse du reseau domestique — le NAS, le routeur, une
+  interface d'administration. La verification a lieu avant la requete, pas apres. Comme toute saisie
+  humaine, une URL refusee est refusee avec son motif et l'hote recu, jamais corrigee en silence.
+
+L'URL n'est pas renvoyee au navigateur : elle vaut un droit d'ecriture sur le salon, et la reponse
+  finit dans le cache. Meme traitement que les cles d'API — champ en ecriture seule, booleen «
+  configure » en lecture.
+
+25 tests, dont la liste des adresses qu'on refuse d'appeler.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+### Refactoring
+
+- **reglages**: Retirer TheTVDB, qui ne servait a rien
+  ([`ed00616`](https://github.com/gsoulat/sortilege/commit/ed00616432468b26d7ad65b836bbcbc2937e5c98))
+
+L'interface annoncait TheTVDB comme source secondaire, avec une case « configure » qui s'allumait
+  des qu'une cle etait posee dans TVDB_API_KEY. Aucune ligne de code n'a jamais interroge ce
+  fournisseur : la cle etait lue, affichee, et ignoree.
+
+Un reglage qui ment coute plus qu'une fonction absente. Il fait chercher une cle, la souscrire —
+  TVDB v4 est payant — et surtout il fait croire qu'un mauvais appariement de serie vient d'un
+  fournisseur mal configure alors qu'il vient d'ailleurs.
+
+TMDB couvre les series et sait desormais traduire la numerotation absolue des animes, ce pour quoi
+  TheTVDB avait ete envisage. La case est donc retiree plutot que remplie.
+
+Ce qui reste : la lecture d'un `tvdbid` dans un .nfo. C'est un signal d'identite reel, produit par
+  un autre outil, et il continue de compter dans le score.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
+## v0.23.0 (2026-09-09)
+
+### Features
+
+- **memoire**: Retenir les identifications tranchees a la main
+  ([`10e9a83`](https://github.com/gsoulat/sortilege/commit/10e9a83f5e4c590b1a4d2ddd26e6d95f30eb7972))
+
+Points 1 et 2 de la liste. Une base SQLite dans le volume monte remplace la memoire volatile pour ce
+  qui compte vraiment.
+
+Quand tu tranches entre deux « Dark Matter », le choix est RETENU. Au scan suivant, le pipeline le
+  retrouve avant meme d interroger les fournisseurs : ni recherche, ni score, ni arbitrage. C est ce
+  qui fait converger une file de revue vers le vide au lieu de la voir se remplir a l identique a
+  chaque fois.
+
+La cle de rappel est le titre LU par le parseur, insensible a la casse et aux accents — pas le titre
+  officiel. C est celui-la qu on reverra au prochain scan, et c est sur lui qu on doit reconnaitre
+  la situation deja tranchee. Une cle trop stricte ne retrouverait jamais rien et la memoire ne
+  servirait a rien.
+
+Un nouveau choix REMPLACE l ancien : une erreur de clic doit pouvoir se corriger, sinon elle
+  resterait gravee sans recours. Un bouton « Oublier » remet aussi la question en jeu.
+
+SQLite par le module standard, sans ORM : deux tables et des requetes triviales — une couche d
+  abstraction couterait une dependance et des migrations pour ne rien simplifier.
+
+Une panne d ecriture est journalisee et avalee : perdre la reprise apres redemarrage est genant,
+  interrompre un scan en cours pour cette raison le serait bien plus.
+
+20 tests, portant surtout sur la cle de rappel et sur la survie a une reouverture de la base.
+
+chore(release): v0.23.0 [skip ci]
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
+## v0.22.0 (2026-09-09)
+
+### Testing
+
+- Couvrir les chemins risques laisses de cote
+  ([`5dbe8f2`](https://github.com/gsoulat/sortilege/commit/5dbe8f29b85507ff9070f4fab2489a49cb7a732e))
+
+La mesure de couverture a montre un motif net : le coeur metier etait a 84-98 % et les chemins les
+  plus DANGEREUX a 0-42 %. J avais teste ce qui etait facile a tester — des fonctions pures — et
+  laisse ce qui demandait un montage. C est l inverse de l ordre du risque : une fonction pure qui
+  casse donne un mauvais resultat, run_cycle qui casse deplace mille fichiers au mauvais endroit.
+
+Clients IA (0 % -> 86 %) ----------------------- Le code qui parle a sept services n avait jamais
+  ete execute par un test : mes tests de la seconde passe utilisaient un faux resolveur, donc ils
+  verifiaient la place donnee au modele, pas le client qui l appelle. Transport simule au niveau
+  HTTP — forme de la requete, en-tetes selon le fournisseur, reprise sans response_format,
+  absorption des pannes.
+
+Un vrai bug trouve : l extracteur JSON ne cherchait que « { … } », donc le repli sur une liste nue
+  que je documentais n a jamais fonctionne — il attrapait le premier element au lieu de la liste.
+  Corrige.
+
+Garde-fou de chemin (non teste -> 12 cas) -----------------------------------------
+  _resolve_in_library decide si un chemin venu du NAVIGATEUR peut designer un fichier a mettre en
+  corbeille. C etait le seul controle de securite du projet sans test, et le plus expose. Remontees,
+  chemins absolus, separateurs Windows, chemin vide : tous refuses.
+
+Cycle automatique (41 % -> 72 %) -------------------------------- Le seul chemin ou des fichiers
+  bougent sans personne devant. Ce qui est verifie est surtout ce qu il REFUSE : ne rien traiter au
+  premier passage, ne rien deplacer quand apply_auto est desactive, et ne jamais toucher a ce qui
+  attend un arbitrage.
+
+chore(release): v0.22.0 [skip ci]
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
+## v0.21.0 (2026-09-09)
+
+### Features
+
+- **ui**: Afficher le numero de version dans l entete
+  ([`2bf8559`](https://github.com/gsoulat/sortilege/commit/2bf85597b5883ccaa08d763102fae343413a4930))
+
+Utile des qu on deploie souvent : savoir d un coup d oeil quelle version tourne reellement, plutot
+  que de croire que le « Re-pull image » a fait son travail.
+
+Corrige au passage une version codee en dur dans main.py, restee a 0.1.0 depuis le premier commit.
+  Elle vient desormais de __init__.py, seule source de verite, et alimente a la fois FastAPI et
+  /api/health.
+
+Un test verifie que pyproject.toml et __init__.py concordent. Les deux etant mis a jour a la main
+  depuis que la release automatique est hors service, ils divergeraient un jour en silence.
+
+/api/health est volontairement accessible sans session : l entete affiche la version avant meme la
+  connexion.
+
+chore(release): v0.21.0 [skip ci]
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
+## v0.20.0 (2026-09-09)
+
+### Features
+
+- **revue**: Traiter d abord ce qui est reconnu automatiquement
+  ([`e073ad8`](https://github.com/gsoulat/sortilege/commit/e073ad81c2ce24473b82c80dfcde5b50c429c510))
+
+Toutes les listes sont triees par score DECROISSANT — l ordre du scan n a aucune valeur pour l
+  arbitrage, alors que la confiance en a une : ce dont l outil est le plus sur se traite en premier,
+  et souvent en un seul clic.
+
+Le groupe « en attente d arbitrage » est desormais REPLIE par defaut. Sur un lot de cent fichiers,
+  quelques dizaines de lignes a arbitrer noyaient les deux boutons qui traitaient l essentiel. Ce
+  qui demande du travail ne doit pas masquer ce qui n en demande pas.
+
+Les series du groupe d arbitrage sont classees par leur meilleur score, et les episodes a l
+  interieur de chaque serie aussi.
+
+Corrige au passage un v-if pose sur le meme element qu un v-for : cela fonctionnait parce que la
+  condition n utilisait pas la variable de boucle, mais se serait casse silencieusement au premier
+  changement.
+
+chore(release): v0.20.0 [skip ci]
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
+## v0.19.0 (2026-09-09)
+
+### Features
+
+- **revue**: Planification par lots de 100, en tache de fond, avec filtres de score
+  ([`8e98217`](https://github.com/gsoulat/sortilege/commit/8e982178a449fea74586002bd899cb8609c46b03))
+
+Le calcul a echoue sur 1051 fichiers. Trois defauts distincts, dont deux que le lot seul n aurait
+  pas regles.
+
+Par lots successifs ------------------- Cent fichiers sont planifies, puis un bouton demande les
+  cent suivants. Tout calculer d un coup produisait une file que personne ne relira, et faisait
+  attendre de longues minutes avant le premier resultat exploitable.
+
+Les lots precedents restent dans la file : le nouveau lot s AJOUTE au lieu de remplacer, sinon le
+  travail d arbitrage deja fait serait perdu a chaque clic.
+
+Le suivi se fait par CHEMIN et non par position : appliquer des plans retire des fichiers du scan,
+  et un compteur designerait ensuite les mauvais.
+
+En tache de fond ---------------- Le POST rendait la main seulement une fois tout calcule. Meme un
+  lot peut depasser le delai d attente d un navigateur ou d un proxy : le serveur terminait son
+  travail et plus personne n etait la pour le recevoir. Meme defaut que le scan avant sa correction,
+  laisse ici par inadvertance.
+
+La reference a la tache de fond est conservee : asyncio ne garde qu une reference FAIBLE vers les
+  taches en cours, et le ramasse-miettes pouvait donc supprimer le calcul en plein vol, sans erreur
+  ni trace. Signale par ruff.
+
+Filtres de score ---------------- « Tout », « au moins 80 % », « moins de 80 % ». C est un seuil de
+  LECTURE et non de decision : il ne change rien au traitement, il choisit ce qu on regarde. 80 %
+  correspond au seuil de sollicitation de l IA, donc a la frontiere entre « l outil a su » et « il a
+  hesite ».
+
+La planification interne reste decoupee en lots de 100 : le semaphore ne laisse tourner que six
+  taches, en creer mille immobilise de la memoire pour rien.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
+## v0.18.0 (2026-09-09)
+
+### Bug Fixes
+
+- **ci**: Rendre la release rattrapable quand la poussee du tag echoue
+  ([`14f35e3`](https://github.com/gsoulat/sortilege/commit/14f35e36e4880e717f03de05d9e9433706ade826))
+
+GitHub a rejete « git push tag v0.17.0 » avec « remote: fatal error in commit_refs » — une erreur
+  serveur, sans rapport avec le contenu. Le probleme n est pas l echec lui-meme mais l ETAT qu il
+  laisse : le commit de version etait deja parti, le tag non. La release etait a moitie faite.
+
+Relancer le workflow ne pouvait pas s en sortir : il repartait du commit d origine, recreait un
+  commit de version, et se heurtait a un « main » distant deja en avance. Un echec transitoire
+  devenait donc definitif.
+
+Ajout d un declencheur manuel qui reconstruit et publie l image du dernier tag sans retoucher aux
+  versions. Une variable unique decide de la suite, que l on vienne d un push ou d un rattrapage —
+  sans elle, chaque etape aurait a connaitre les deux cas.
+
+L etape de publication de la release GitHub reste liee au declenchement REEL : lors d un rattrapage
+  la release existe deja, et son tag n est pas dans les sorties d une etape qui n a pas tourne.
+
+Le tag v0.17.0 manquant a ete pose a la main sur son commit de version — la meme poussee a
+  fonctionne du premier coup, confirmant le caractere transitoire.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.17.0 (2026-09-08)
 
 ### Features
