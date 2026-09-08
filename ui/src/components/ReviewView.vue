@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
+import CandidatePicker from './CandidatePicker.vue'
 
 const data = ref(null)
 const planning = ref(false)
@@ -118,6 +119,32 @@ const reviewGroups = computed(() => {
   }
 })
 
+// Quel plan a son sélecteur de candidats ouvert.
+const picking = ref(null)
+const choosing = ref(false)
+
+/**
+ * Impose un candidat choisi à l'œil. Entre deux « Dark Matter » — 2015 et 2024 —
+ * aucun signal automatique ne tranche : même titre, même type, deux œuvres
+ * réelles. L'affiche, elle, tranche en une seconde.
+ */
+async function choose(planId, candidate) {
+  choosing.value = true
+  try {
+    const out = await call(`/api/review/${planId}/choose`, {
+      provider: candidate.provider,
+      external_id: candidate.external_id,
+    })
+    if (out) {
+      data.value = out.queue
+      picking.value = null
+      message.value = `Identifié comme « ${candidate.title} »${candidate.year ? ` (${candidate.year})` : ''}.`
+    }
+  } finally {
+    choosing.value = false
+  }
+}
+
 function groupState(plans) {
   const picked = plans.filter((p) => selected.value.has(p.id)).length
   if (picked === 0) return 'none'
@@ -227,7 +254,21 @@ onMounted(load)
             <span class="show-title">{{ show.title }}</span>
             <span v-if="show.year" class="year">({{ show.year }})</span>
             <span class="count">{{ show.plans.length }} épisode{{ show.plans.length > 1 ? 's' : '' }}</span>
+            <button
+              v-if="show.plans[0].alternatives.length"
+              class="fix"
+              title="Ce n'est pas la bonne œuvre"
+              @click.prevent="picking = picking === show.plans[0].id ? null : show.plans[0].id"
+            >Ce n'est pas ça</button>
           </label>
+
+          <CandidatePicker
+            v-if="picking === show.plans[0].id"
+            :candidates="show.plans[0].alternatives"
+            :busy="choosing"
+            @choose="choose(show.plans[0].id, $event)"
+            @close="picking = null"
+          />
 
           <ul class="plans nested">
             <li v-for="p in show.plans" :key="p.id" :class="{ picked: selected.has(p.id) }">
@@ -256,10 +297,22 @@ onMounted(load)
               <code class="from">{{ shortPath(p.source) }}</code>
               <span class="arrow">→</span>
               <code class="to">{{ shortPath(p.destination) }}</code>
+              <button
+                v-if="p.alternatives.length"
+                class="fix"
+                @click="picking = picking === p.id ? null : p.id"
+              >Ce n'est pas ça</button>
             </div>
             <ul class="reasons">
               <li v-for="(r, i) in p.reasons" :key="i">{{ r }}</li>
             </ul>
+            <CandidatePicker
+              v-if="picking === p.id"
+              :candidates="p.alternatives"
+              :busy="choosing"
+              @choose="choose(p.id, $event)"
+              @close="picking = null"
+            />
           </li>
         </ul>
       </section>
@@ -386,6 +439,13 @@ code {
 .dot.ko { background: var(--err); }
 .msg { font-size: 12.5px; }
 .results li.failed .msg { color: var(--err); }
+
+.fix {
+  font-size: 10.5px; padding: 2px 8px; margin-left: 8px;
+  color: var(--warn); border-color: color-mix(in srgb, var(--warn) 30%, transparent);
+  background: none;
+}
+.fix:hover { background: color-mix(in srgb, var(--warn) 10%, transparent); }
 
 .blockers { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .blockers li {

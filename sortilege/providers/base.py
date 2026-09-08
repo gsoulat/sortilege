@@ -45,6 +45,16 @@ class Candidate:
     year: int | None = None
     popularity: float = 0.0
     kind: str = "movie"
+    poster_url: str = ""
+    """Jaquette, pour l'arbitrage humain.
+
+    Entre deux oeuvres homonymes — « Dark Matter » 2015 et 2024 — une affiche
+    tranche en une seconde la ou une date demande de reflechir. C'est le seul
+    endroit ou une image a une valeur fonctionnelle et pas decorative."""
+
+    overview: str = ""
+    """Resume court. Departage ce que l'affiche ne suffit pas a distinguer."""
+
     extra: dict[str, Any] = field(default_factory=dict)
 
     def all_titles(self) -> list[str]:

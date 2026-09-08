@@ -26,6 +26,8 @@ query ($search: String) {
       popularity
       format
       title { romaji english native }
+      coverImage { medium }
+      description(asHtml: false)
       synonyms
     }
   }
@@ -95,6 +97,7 @@ class AniListProvider(BaseHTTPProvider):
             popularity = float(item.get("popularity") or 0)
             start = item.get("startDate") or {}
 
+            cover = (item.get("coverImage") or {}).get("medium") or ""
             candidates.append(
                 Candidate(
                     provider=self.name,
@@ -105,6 +108,8 @@ class AniListProvider(BaseHTTPProvider):
                     year=start.get("year"),
                     popularity=min(popularity / _POPULARITY_CAP, 1.0),
                     kind="movie" if item.get("format") == "MOVIE" else "anime",
+                    poster_url=cover,
+                    overview=(item.get("description") or "")[:220],
                     extra={"episode_count": item.get("episodes")},
                 )
             )

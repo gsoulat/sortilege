@@ -92,6 +92,19 @@ def _plan_out(plan: Plan) -> dict[str, object]:
         "external_id": plan.external_id,
         "error": plan.error,
         "is_noop": plan.is_noop,
+        "manual": plan.manual,
+        "alternatives": [
+            {
+                "provider": c.provider,
+                "external_id": c.external_id,
+                "title": c.title,
+                "original_title": c.original_title,
+                "year": c.year,
+                "poster_url": c.poster_url,
+                "overview": c.overview,
+            }
+            for c in plan.alternatives
+        ],
     }
 
 
@@ -249,6 +262,74 @@ def apply(body: ApplyRequest) -> dict[str, object]:
             for r in results
         ],
     }
+
+
+class ChooseRequest(BaseModel):
+    provider: str
+    external_id: str
+
+
+@router.post("/{plan_id}/choose")
+async def choose(plan_id: str, body: ChooseRequest) -> dict[str, object]:
+    """Impose un candidat choisi par l'utilisateur et recalcule la destination.
+
+    Aucun signal automatique ne separe « Dark Matter » 2015 de celui de 2024 :
+    meme titre, meme type, deux oeuvres reelles. Le score ne peut pas trancher
+    — seul un humain le peut, et c'est le role de cet endpoint.
+
+    Le plan resultant est marque `manual` et passe en AUTO : un choix explicite
+    vaut mieux que n'importe quel score, le repasser au calcul reviendrait a
+    douter de la personne qui vient de decider.
+    """
+    conf = get_settings()
+
+    with _lock:
+        plan = _plans.get(plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Plan inconnu ou deja applique.")
+
+    chosen = next(
+        (
+            c
+            for c in plan.alternatives
+            if c.provider == body.provider and c.external_id == body.external_id
+        ),
+        None,
+    )
+    if chosen is None:
+        raise HTTPException(status_code=400, detail="Ce candidat n'est pas propose pour ce plan.")
+
+    scan = last_scan()
+    scanned = next((f for f in (scan.files if scan else []) if f.path == plan.source), None)
+    if scanned is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Le fichier n'est plus dans le dernier scan. Relance un scan.",
+        )
+
+    store = get_store()
+    prefs = store.load()
+    pipeline = Pipeline(
+        tmdb=TMDBProvider(conf.tmdb_api_key) if conf.tmdb_api_key else None,
+        anilist=AniListProvider(),
+        library_root=conf.library_root,
+        templates={k: prefs.template_for(k) for k in ("movie", "episode", "anime")},
+        policy=Policy(
+            auto_apply_threshold=conf.auto_apply_threshold,
+            reject_threshold=conf.reject_threshold,
+        ),
+    )
+
+    try:
+        rebuilt = await pipeline.replan_with(scanned, chosen, plan)
+    finally:
+        await pipeline.aclose()
+
+    with _lock:
+        _plans.pop(plan_id, None)
+        _plans[rebuilt.id] = rebuilt
+
+    return {"plan": _plan_out(rebuilt), "queue": _queue()}
 
 
 @router.post("/undo")

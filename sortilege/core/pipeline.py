@@ -25,7 +25,7 @@ from ..providers.anilist import AniListProvider
 from ..providers.base import Candidate
 from ..providers.tmdb import TMDBProvider
 from .ai_resolver import AIProposal, AmbiguousItem
-from .matching import best_match
+from .matching import MatchResult, best_match, build_signals
 from .parser import MediaKind, ParsedName
 from .planner import Plan, build_plan
 from .scanner import ScannedFile
@@ -167,6 +167,7 @@ class Pipeline:
                     template=template,
                     library_root=self._library_root,
                     policy=self._policy,
+                    all_candidates=candidates,
                 )
             except Exception as exc:
                 # Filet de securite : un fichier pathologique ne doit pas faire
@@ -182,6 +183,70 @@ class Pipeline:
                     reasons=[f"erreur interne : {type(exc).__name__}"],
                     error=str(exc),
                 )
+
+    async def replan_with(self, scanned: ScannedFile, chosen: Candidate, previous: Plan) -> Plan:
+        """Reconstruit un plan autour d'un candidat impose par l'utilisateur.
+
+        Le score n'est pas recalcule : un choix humain explicite n'est pas une
+        hypothese a evaluer. Le repasser au calcul reviendrait a douter de la
+        personne qui vient de trancher — et sur un cas d'homonymie, le calcul
+        avait deja montre qu'il ne savait pas.
+
+        L'ancien candidat rejoint les alternatives : changer d'avis doit rester
+        possible sans relancer un scan.
+        """
+        episode_match = await self._enrich(scanned, chosen)
+        signals = build_signals(
+            scanned.parsed, scanned.probe, chosen, [chosen], episode_match=episode_match
+        )
+        match = MatchResult(candidate=chosen, signals=signals, similarity=1.0)
+
+        others = [
+            c
+            for c in previous.alternatives
+            if (c.provider, c.external_id) != (chosen.provider, chosen.external_id)
+        ]
+        if previous.provider and previous.external_id:
+            evince = next(
+                (
+                    c
+                    for c in previous.alternatives
+                    if (c.provider, c.external_id) == (previous.provider, previous.external_id)
+                ),
+                None,
+            )
+            if evince is None:
+                # L'ancien gagnant n'etait pas dans les alternatives (il en
+                # etait exclu) : on l'y remet pour pouvoir revenir en arriere.
+                others = [
+                    Candidate(
+                        provider=previous.provider,
+                        external_id=previous.external_id,
+                        title=previous.title,
+                        year=previous.year,
+                    ),
+                    *others,
+                ]
+
+        plan = build_plan(
+            scanned,
+            match,
+            template=self._templates.get(_kind_key(scanned.parsed.kind), ""),
+            library_root=self._library_root,
+            policy=self._policy,
+        )
+        plan.alternatives = others[:8]
+        plan.manual = True
+
+        if plan.destination is not None:
+            plan.decision = Decision.AUTO
+            plan.score = 1.0
+            plan.reasons = [
+                f"choisi manuellement : {chosen.title}"
+                + (f" ({chosen.year})" if chosen.year else ""),
+                "le score automatique ne s'applique pas a un choix humain",
+            ]
+        return plan
 
     async def plan_all(self, files: list[ScannedFile]) -> list[Plan]:
         """Planifie un lot. Les fichiers deja ranges sont ignores.

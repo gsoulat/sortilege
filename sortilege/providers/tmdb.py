@@ -21,6 +21,10 @@ API = "https://api.themoviedb.org/3"
 # difference entre 5 000 et 40 000 votes n'apporte plus rien au departage.
 _POPULARITY_CAP = 2000.0
 
+# w185 : assez grand pour reconnaitre une affiche, assez petit pour en
+# charger vingt sans ralentir la page.
+IMAGE_BASE = "https://image.tmdb.org/t/p/w185"
+
 
 class TMDBProvider(BaseHTTPProvider):
     name = "tmdb"
@@ -213,6 +217,7 @@ class TMDBProvider(BaseHTTPProvider):
                 continue
 
             votes = float(item.get("vote_count") or 0)
+            poster = item.get("poster_path")
             candidates.append(
                 Candidate(
                     provider=self.name,
@@ -222,7 +227,8 @@ class TMDBProvider(BaseHTTPProvider):
                     year=self._year_from(date),
                     popularity=min(votes / _POPULARITY_CAP, 1.0),
                     kind=kind,
-                    extra={"overview": item.get("overview", "")[:200]},
+                    poster_url=f"{IMAGE_BASE}{poster}" if poster else "",
+                    overview=(item.get("overview") or "")[:220],
                 )
             )
         return candidates

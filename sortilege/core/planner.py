@@ -58,6 +58,18 @@ class Plan:
     """Dechets de release evacuables vers la corbeille une fois la video
     partie. Jamais supprimes."""
 
+    alternatives: list = field(default_factory=list)
+    """Les autres candidats plausibles, gardes pour l'arbitrage humain.
+
+    Ils etaient calcules puis jetes. Or c'est precisement quand le score est
+    bas que l'utilisateur a besoin de VOIR les autres possibilites : entre
+    « Dark Matter » 2015 et 2024, aucun signal automatique ne tranche, mais une
+    affiche le fait instantanement."""
+
+    manual: bool = False
+    """Le candidat a ete choisi par un humain. Un choix explicite vaut mieux
+    que n'importe quel score : on ne le repasse pas au calcul."""
+
     @property
     def is_noop(self) -> bool:
         """Le fichier est deja exactement la ou il devrait etre.
@@ -103,6 +115,19 @@ def build_values(scanned: ScannedFile, match: MatchResult | None) -> dict[str, A
     return values
 
 
+def _alternatives(match: MatchResult | None, candidates: list) -> list:
+    """Les autres candidats, sans celui retenu, tries par notoriete.
+
+    Limite a huit : au-dela, une grille de jaquettes cesse d'aider a decider et
+    redevient une liste a lire.
+    """
+    if not candidates:
+        return []
+    chosen = (match.candidate.provider, match.candidate.external_id) if match else (None, None)
+    others = [c for c in candidates if (c.provider, c.external_id) != chosen]
+    return sorted(others, key=lambda c: c.popularity, reverse=True)[:8]
+
+
 def build_plan(
     scanned: ScannedFile,
     match: MatchResult | None,
@@ -112,6 +137,7 @@ def build_plan(
     policy: Policy,
     with_artwork: bool = True,
     with_cleanup: bool = True,
+    all_candidates: list | None = None,
 ) -> Plan:
     """Calcule destination et verdict pour un fichier.
 
@@ -121,6 +147,7 @@ def build_plan(
     """
     plan_id = uuid.uuid4().hex[:12]
     kind = KIND_KEYS.get(scanned.parsed.kind, "movie")
+    all_candidates = all_candidates or []
 
     if match is None:
         return Plan(
@@ -134,6 +161,7 @@ def build_plan(
             title=scanned.parsed.title,
             year=scanned.parsed.year,
             error="non identifie",
+            alternatives=_alternatives(None, all_candidates),
         )
 
     score = compute_score(match.signals)
@@ -183,4 +211,5 @@ def build_plan(
         external_id=match.candidate.external_id,
         companions=[(c.path, c.destination_for(destination)) for c in companions],
         leftovers=leftovers,
+        alternatives=_alternatives(match, all_candidates),
     )
