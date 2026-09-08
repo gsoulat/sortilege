@@ -23,10 +23,12 @@ from pydantic import BaseModel, Field
 
 from ..config import get_settings
 from ..core.ai import PROVIDERS
+from ..core.notify import Notification, send
 from ..core.preferences import (
     KINDS,
     AISettings,
     AutomationSettings,
+    NotificationSettings,
     OversizeSettings,
     PreferenceError,
     Preferences,
@@ -58,6 +60,16 @@ class AutomationIn(BaseModel):
     apply_auto: bool | None = None
 
 
+class NotificationsIn(BaseModel):
+    enabled: bool | None = None
+    on_failure: bool | None = None
+
+    webhook_url: str | None = None
+    """Ecriture seule, comme la cle d'IA. Absent ou vide = on conserve l'URL
+    existante — activer ou couper les notifications ne doit pas obliger a la
+    ressaisir. Une chaine « - » vide explicitement le champ."""
+
+
 class OversizeIn(BaseModel):
     enabled: bool | None = None
     threshold_gb: float | None = None
@@ -72,6 +84,7 @@ class PreferencesIn(BaseModel):
     ai: AIIn | None = None
     automation: AutomationIn | None = None
     oversize: OversizeIn | None = None
+    notifications: NotificationsIn | None = None
 
 
 @router.get("/preferences")
@@ -112,6 +125,13 @@ def read_preferences() -> dict[str, object]:
             "api_key_set": bool(prefs.ai.api_key),
         },
         "automation": asdict(prefs.automation),
+        "notifications": {
+            "enabled": prefs.notifications.enabled,
+            "on_failure": prefs.notifications.on_failure,
+            # L'URL ne sort jamais : elle vaut un droit d'ecriture sur le
+            # canal, et cette reponse finit dans le cache du navigateur.
+            "webhook_set": bool(prefs.notifications.webhook_url),
+        },
         "oversize": {
             **asdict(prefs.oversize),
             "resolved": {
@@ -168,6 +188,16 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
             **{**asdict(current.oversize), **patch, "destinations": destinations}
         )
 
+    notif = current.notifications
+    if body.notifications is not None:
+        patch = body.notifications.model_dump(exclude_none=True)
+        url = patch.pop("webhook_url", "").strip()
+        if url == "-":
+            patch["webhook_url"] = ""
+        elif url:
+            patch["webhook_url"] = url
+        notif = NotificationSettings(**{**asdict(current.notifications), **patch})
+
     merged = Preferences(
         custom_sources=(
             current.custom_sources if body.custom_sources is None else body.custom_sources
@@ -180,6 +210,7 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
         ai=ai,
         automation=auto,
         oversize=over,
+        notifications=notif,
     )
 
     try:
@@ -189,6 +220,33 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return read_preferences()
+
+
+@router.post("/notifications/test")
+async def test_notification() -> dict[str, object]:
+    """Envoie un message d'essai dans le canal configure.
+
+    Un webhook peut etre valide de forme et revoque cote Discord ; seul un
+    envoi reel le dit. On rapporte l'echec au lieu de l'avaler, contrairement
+    aux notifications de cycle : ici l'utilisateur attend une reponse.
+    """
+    prefs = get_store().load().notifications
+    if not prefs.webhook_url:
+        raise HTTPException(status_code=400, detail="Aucun webhook enregistre.")
+
+    ok = await send(
+        prefs.webhook_url,
+        Notification(
+            title="Sortilège est bien relié",
+            body="Ce canal recevra le compte rendu des cycles automatiques.",
+        ),
+    )
+    if not ok:
+        raise HTTPException(
+            status_code=502,
+            detail="Discord n'a pas accepte le message. Verifie que le webhook existe toujours.",
+        )
+    return {"sent": True}
 
 
 @router.get("/decisions")

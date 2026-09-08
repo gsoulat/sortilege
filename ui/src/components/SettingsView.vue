@@ -4,6 +4,7 @@ import SourcePicker from './SourcePicker.vue'
 import FolderBrowser from './FolderBrowser.vue'
 import AiSettings from './AiSettings.vue'
 import AutomationSettings from './AutomationSettings.vue'
+import NotificationSettings from './NotificationSettings.vue'
 import DecisionsSettings from './DecisionsSettings.vue'
 
 const KIND_LABELS = { movie: 'Films', episode: 'Séries TV', anime: 'Animes' }
@@ -36,6 +37,11 @@ function onAiChange(patch) {
 function onAutomationChange(patch) {
   Object.assign(prefs.value.automation, patch)
   save({ automation: patch })
+}
+
+function onNotificationsChange(patch) {
+  Object.assign(prefs.value.notifications, patch)
+  save({ notifications: patch })
 }
 
 function onOversizeChange(patch) {
@@ -237,6 +243,8 @@ onMounted(load)
     <DecisionsSettings />
 
     <AutomationSettings :automation="prefs.automation" @change="onAutomationChange" />
+
+    <NotificationSettings :notifications="prefs.notifications" @change="onNotificationsChange" />
 
     <AiSettings :ai="prefs.ai" :providers="prefs.ai_providers" @change="onAiChange" />
 

@@ -23,6 +23,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from threading import Lock
 
+from .notify import WebhookError, validate_webhook
 from .safety import PathConfinementError, resolve_within
 from .template import PRESETS, TemplateError, validate
 
@@ -107,6 +108,23 @@ class AutomationSettings:
 
 
 @dataclass
+class NotificationSettings:
+    """Notification Discord de ce que le cycle automatique a fait.
+
+    L'URL vit ici et non dans l'environnement : ajouter un canal ne doit pas
+    imposer de modifier la stack et de redemarrer. Elle n'est JAMAIS renvoyee
+    au navigateur — l'API n'expose qu'un booleen « configuree ».
+    """
+
+    enabled: bool = False
+    webhook_url: str = ""
+    on_failure: bool = True
+    """Prevenir quand un cycle echoue. Active par defaut : c'est precisement ce
+    qu'on ne verra pas autrement, puisque personne ne regarde l'interface tant
+    que tout va bien."""
+
+
+@dataclass
 class Preferences:
     """Ce que l'utilisateur choisit, par opposition a ce que l'admin deploie."""
 
@@ -134,6 +152,7 @@ class Preferences:
     ai: AISettings = field(default_factory=AISettings)
     automation: AutomationSettings = field(default_factory=AutomationSettings)
     oversize: OversizeSettings = field(default_factory=OversizeSettings)
+    notifications: NotificationSettings = field(default_factory=NotificationSettings)
 
     def template_for(self, kind: str) -> str:
         return self.templates.get(kind) or PRESETS["jellyfin"].get(kind, "")
@@ -193,6 +212,9 @@ class PreferenceStore:
                 ),
                 oversize=OversizeSettings(
                     **{**asdict(OversizeSettings()), **(raw.get("oversize") or {})}
+                ),
+                notifications=NotificationSettings(
+                    **{**asdict(NotificationSettings()), **(raw.get("notifications") or {})}
                 ),
             )
             return self._cache
@@ -312,6 +334,16 @@ class PreferenceStore:
             raise PreferenceError(f"fournisseur IA inconnu : {prefs.ai.provider}")
         if prefs.automation.interval_minutes < 1:
             raise PreferenceError("l'intervalle doit valoir au moins une minute")
+        if prefs.notifications.enabled:
+            try:
+                validate_webhook(prefs.notifications.webhook_url)
+            except WebhookError as exc:
+                raise PreferenceError(str(exc)) from exc
+            if not prefs.notifications.webhook_url.strip():
+                raise PreferenceError(
+                    "Renseigne l'URL du webhook Discord avant d'activer les notifications."
+                )
+
         if prefs.automation.quiet_seconds < 0:
             raise PreferenceError("le delai de stabilite ne peut pas etre negatif")
 

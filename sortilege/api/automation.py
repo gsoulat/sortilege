@@ -28,6 +28,7 @@ from fastapi import APIRouter
 from ..config import get_settings
 from ..core.companions import TRASH_DIRNAME
 from ..core.journal import apply_plan
+from ..core.notify import cycle_notification, failure_notification, send
 from ..core.pipeline import Pipeline
 from ..core.scanner import scan
 from ..core.scoring import Decision, Policy
@@ -161,6 +162,25 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
     return report
 
 
+async def _notify(notification) -> None:
+    """Envoie une notification si le canal est configure. Ne leve jamais.
+
+    Le garde-fou est ici plutot que chez l'appelant : une notification est un
+    a-cote, et aucun point d'appel ne doit avoir a s'en proteger.
+    """
+    if notification is None:
+        return
+    prefs = get_store().load().notifications
+    if not prefs.enabled or not prefs.webhook_url:
+        return
+    if notification.level == "error" and not prefs.on_failure:
+        return
+    try:
+        await send(prefs.webhook_url, notification)
+    except Exception:
+        logger.exception("envoi de la notification impossible")
+
+
 async def _loop() -> None:
     """Boucle de fond. Relit les preferences a chaque tour.
 
@@ -190,9 +210,11 @@ async def _loop() -> None:
                 _state.error = None
                 _state.history = [report, *_state.history][:20]
                 logger.info("cycle automatique : %s", report.message)
+                await _notify(cycle_notification(report))
             except Exception as exc:
                 _state.error = f"{type(exc).__name__}: {exc}"
                 logger.exception("le cycle automatique a echoue")
+                await _notify(failure_notification(_state.error))
             finally:
                 _state.running = False
                 _state.last_run = time.time()
