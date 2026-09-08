@@ -35,6 +35,13 @@ class MediaKind(StrEnum):
 
 # --- Motifs episodiques, du plus fiable au plus douteux ---------------------
 
+# Fichier couvrant PLUSIEURS episodes : « S01E01E02 », « S01E01-E02 ».
+# Teste avant le motif simple — sinon « S01E01E02 » est lu comme « S01E01 » et
+# le second episode disparait sans que rien ne le signale.
+_MULTI_EPISODE = re.compile(
+    r"[Ss](?P<season>\d{1,2})[\s._-]*[Ee](?P<episode>\d{1,3})[\s._-]*-?[Ee](?P<episode_end>\d{1,3})"
+)
+
 _SEASON_EPISODE = re.compile(r"[Ss](?P<season>\d{1,2})[\s._-]*[Ee](?P<episode>\d{1,3})")
 _SEASON_X_EPISODE = re.compile(r"(?<!\d)(?P<season>\d{1,2})[xX](?P<episode>\d{2,3})(?!\d)")
 _VERBOSE = re.compile(
@@ -158,6 +165,13 @@ class ParsedName:
     year: int | None = None
     season: int | None = None
     episode: int | None = None
+    episode_end: int | None = None
+    """Dernier episode quand le fichier en couvre plusieurs.
+
+    Un fichier double range sous le seul numero du premier fait croire que le
+    second manque — il apparaitrait dans la liste des episodes absents alors
+    qu'il est bien la."""
+
     absolute_episode: int | None = None
     resolution: str | None = None
     source: str | None = None
@@ -270,7 +284,9 @@ def parse(path: Path, ancestors: list[str] | None = None) -> ParsedName:
     cut_at: int | None = None
     kind = MediaKind.MOVIE
 
+    episode_end = None
     for pattern, name in (
+        (_MULTI_EPISODE, "multi-episodes"),
         (_SEASON_EPISODE, "SxxExx"),
         (_VERBOSE, "verbeux"),
         (_SEASON_X_EPISODE, "NxNN"),
@@ -278,6 +294,11 @@ def parse(path: Path, ancestors: list[str] | None = None) -> ParsedName:
         if m := pattern.search(stem):
             season = int(m.group("season"))
             episode = int(m.group("episode"))
+            if "episode_end" in m.groupdict():
+                end = int(m.group("episode_end"))
+                # Un « second episode » anterieur au premier n'en est pas un :
+                # c'est un faux positif sur un nom bizarre.
+                episode_end = end if end > episode else None
             cut_at = m.start()
             kind = MediaKind.EPISODE
             signals.append(f"motif episodique {name}")
@@ -346,6 +367,7 @@ def parse(path: Path, ancestors: list[str] | None = None) -> ParsedName:
         year=year,
         season=season,
         episode=episode,
+        episode_end=episode_end,
         absolute_episode=absolute,
         resolution=resolution,
         source=source,

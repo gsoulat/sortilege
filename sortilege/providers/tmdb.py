@@ -61,6 +61,8 @@ class TMDBProvider(BaseHTTPProvider):
         self._season_lock = asyncio.Lock()
         self._collections: dict[str, str | None] = {}
         self._collection_lock = asyncio.Lock()
+        self._series: dict[str, list[tuple[int, int]] | None] = {}
+        self._series_lock = asyncio.Lock()
 
     @property
     def available(self) -> bool:
@@ -210,6 +212,67 @@ class TMDBProvider(BaseHTTPProvider):
             return titles
 
         return await self._flight.do(f"season:{series_id}:{season}", fetch)
+
+    async def get_series_seasons(self, series_id: str) -> list[tuple[int, int]] | None:
+        """Saisons de la serie, en (numero, nombre d'episodes).
+
+        Une seule requete sur le detail de la serie. La saison 0 est ecartee :
+        elle contient les hors-serie et ne participe pas a la numerotation
+        continue.
+        """
+        async with self._series_lock:
+            if series_id in self._series:
+                return self._series[series_id]
+
+        async def fetch():
+            data = await self._get_json(
+                f"{API}/tv/{series_id}", params=self._params(), headers=self._headers()
+            )
+            seasons: list[tuple[int, int]] | None = None
+            if data and isinstance(data.get("seasons"), list):
+                seasons = sorted(
+                    (
+                        (int(s["season_number"]), int(s.get("episode_count") or 0))
+                        for s in data["seasons"]
+                        if s.get("season_number") not in (None, 0)
+                    ),
+                    key=lambda pair: pair[0],
+                )
+            async with self._series_lock:
+                self._series[series_id] = seasons
+            return seasons
+
+        return await self._flight.do(f"series:{series_id}", fetch)
+
+    async def resolve_absolute(self, series_id: str, absolute: int) -> tuple[int, int] | None:
+        """Traduit un numero absolu en (saison, episode).
+
+        Les releases de fansub numerotent en continu — « One Piece 1088 » — la
+        ou Jellyfin attend S21E13. Sans cette conversion, un anime range garde
+        une numerotation que le lecteur ne sait pas relier a une saison.
+
+        On cumule les episodes saison par saison : c'est exactement la
+        definition de la numerotation absolue.
+        """
+        if absolute < 1:
+            return None
+
+        seasons = await self.get_series_seasons(series_id)
+        if not seasons:
+            return None
+
+        remaining = absolute
+        for number, count in seasons:
+            if count <= 0:
+                continue
+            if remaining <= count:
+                return number, remaining
+            remaining -= count
+
+        # Au-dela du total connu : la serie est en cours et TMDB n'a pas encore
+        # la suite. Mieux vaut ne rien affirmer que de deborder sur une saison
+        # inexistante.
+        return None
 
     async def get_episode_title(self, series_id: str, season: int, episode: int) -> str | None:
         """Titre d'un episode precis, servi depuis la saison mise en cache.

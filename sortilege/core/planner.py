@@ -102,8 +102,20 @@ def build_values(scanned: ScannedFile, match: MatchResult | None) -> dict[str, A
         "original_title": (candidate.original_title if candidate else "") or parsed.title,
         "year": (candidate.year if candidate else None) or parsed.year or probe.nfo_year,
         "collection": (candidate.extra.get("collection") if candidate else None) or "",
-        "season": parsed.season if parsed.season is not None else probe.container_season,
-        "episode": parsed.episode if parsed.episode is not None else probe.container_episode,
+        # La conversion depuis la numerotation absolue prime : elle vient du
+        # fournisseur et vaut mieux que l'absence de saison lue dans le nom.
+        "season": (
+            (candidate.extra.get("resolved_season") if candidate else None)
+            or (parsed.season if parsed.season is not None else probe.container_season)
+        ),
+        "episode": (
+            (candidate.extra.get("resolved_episode") if candidate else None)
+            or (parsed.episode if parsed.episode is not None else probe.container_episode)
+        ),
+        # Uniquement pour un fichier couvrant plusieurs episodes. Sans lui,
+        # « S01E01E02 » et « S01E01 » viseraient le meme nom de destination et
+        # le second ecraserait le premier.
+        "episode_end": parsed.episode_end,
         "absolute_episode": parsed.absolute_episode,
         "episode_title": (candidate.extra.get("episode_title") if candidate else None) or "",
         # La resolution MESUREE prime sur celle annoncee dans le nom : les

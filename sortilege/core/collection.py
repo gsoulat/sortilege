@@ -132,7 +132,12 @@ def _slot_label(scanned: ScannedFile) -> str:
     if parsed.kind is MediaKind.MOVIE:
         return "film"
     if parsed.season is not None and parsed.episode is not None:
-        return f"S{parsed.season:02d}E{parsed.episode:02d}"
+        label = f"S{parsed.season:02d}E{parsed.episode:02d}"
+        if parsed.episode_end is not None:
+            # Un fichier double n'occupe pas la meme place qu'un fichier
+            # simple : les confondre les declarerait doublons a tort.
+            label += f"-E{parsed.episode_end:02d}"
+        return label
     if parsed.absolute_episode is not None:
         return f"ep {parsed.absolute_episode}"
     # Sans numero, impossible de savoir si deux fichiers occupent la meme
@@ -185,7 +190,11 @@ def group(files: list[ScannedFile]) -> list[Work]:
         season = work.seasons.setdefault(season_number, SeasonHolding(number=season_number))
         episode = parsed.episode if parsed.episode is not None else parsed.absolute_episode
         if episode is not None:
-            season.owned.add(episode)
+            # Un fichier double couvre toute la plage : ne compter que le
+            # premier numero ferait apparaitre le second comme manquant alors
+            # qu'il est bien la.
+            end = parsed.episode_end if parsed.episode_end is not None else episode
+            season.owned.update(range(episode, end + 1))
 
     for work in works.values():
         work.duplicates = [

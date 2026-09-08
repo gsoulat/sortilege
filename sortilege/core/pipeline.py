@@ -145,6 +145,19 @@ class Pipeline:
 
         season = parsed.season if parsed.season is not None else scanned.probe.container_season
         episode = parsed.episode if parsed.episode is not None else scanned.probe.container_episode
+
+        # Numerotation absolue : « One Piece 1088 » doit devenir S21E13, sinon
+        # le fichier est range sous un numero que Jellyfin ne sait relier a
+        # aucune saison. La conversion cumule les episodes saison par saison.
+        if season is None and episode is None and parsed.absolute_episode is not None:
+            resolved = await self._tmdb.resolve_absolute(
+                candidate.external_id, parsed.absolute_episode
+            )
+            if resolved is not None:
+                season, episode = resolved
+                candidate.extra["resolved_season"] = season
+                candidate.extra["resolved_episode"] = episode
+
         if season is None or episode is None:
             return None
 

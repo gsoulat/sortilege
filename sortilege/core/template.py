@@ -30,14 +30,14 @@ from typing import Any
 
 from .safety import sanitize_segment
 
-# {jeton}, {jeton:02}, {?jeton:texte}
+# {jeton}, {jeton:02}, {?jeton:texte}, {?jeton:02:texte}
 # Les espaces autour du nom de jeton sont tolerES : ecrire « {? year: ($)} »
 # est bien plus lisible que « {?year: ($)} » dans le constructeur visuel.
 # Le corps d'un conditionnel ne peut pas contenir d'accolade — pas de jeton
 # imbrique, ce qui garde le motif non recursif et donc analysable en une passe.
 _TOKEN = re.compile(
     r"\{(?:"
-    r"\?\s*(?P<cond_name>[a-z_]+)\s*:(?P<cond_body>[^{}]*)"
+    r"\?\s*(?P<cond_name>[a-z_]+)\s*(?::(?P<cond_pad>0\d))?:(?P<cond_body>[^{}]*)"
     r"|"
     r"\s*(?P<name>[a-z_]+)\s*(?::(?P<pad>0\d))?"
     r")\}"
@@ -71,6 +71,9 @@ TOKENS: tuple[Token, ...] = (
     Token("collection", "Saga / Franchise", "Star Trek", "identite"),
     Token("season", "Saison", "2", "episode"),
     Token("episode", "Épisode", "7", "episode"),
+    # Renseigne uniquement quand un fichier couvre plusieurs episodes
+    # (« S01E01E02 »). Vide sinon, donc le conditionnel le fait disparaitre.
+    Token("episode_end", "Dernier épisode (fichier double)", "2", "episode"),
     Token("episode_title", "Titre de l'épisode", "Le Silence", "episode"),
     Token("absolute_episode", "Épisode absolu", "147", "episode"),
     Token("resolution", "Résolution", "1080p", "technique"),
@@ -104,7 +107,8 @@ PRESETS: dict[str, dict[str, str]] = {
         # serie n'appartient a aucune franchise.
         "episode": (
             "{collection}/{title}{? year: ($)}/Season {season:02}/"
-            "{title} - S{season:02}E{episode:02}{? episode_title: - $}"
+            "{title} - S{season:02}E{episode:02}{? episode_end:02:-E$}"
+            "{? episode_title: - $}"
         ),
         # Numerotation absolue : c'est ce que portent les releases de fansub, et
         # {episode} est souvent absent tant que la correspondance saison/episode
@@ -115,7 +119,10 @@ PRESETS: dict[str, dict[str, str]] = {
         # Plex accepte un identifiant entre accolades dans le nom, mais les
         # accolades sont la syntaxe des jetons : on ne l'expose pas ici.
         "movie": "{collection}/{title}{? year: ($)}/{title}{? year: ($)}",
-        "episode": ("{title}{? year: ($)}/Season {season:02}/{title} - s{season:02}e{episode:02}"),
+        "episode": (
+            "{title}{? year: ($)}/Season {season:02}/"
+            "{title} - s{season:02}e{episode:02}{? episode_end:02:-e$}"
+        ),
         "anime": "{title}/{title} - {absolute_episode:03}",
     },
 }
@@ -168,7 +175,10 @@ def render(template: str, values: dict[str, Any]) -> str:
             if value is None or value == "":
                 return ""
             body = match.group("cond_body")
-            return body.replace("$", sanitize_segment(str(value)))
+            # Le conditionnel accepte le meme zero-padding que le jeton simple :
+            # « -E2 » a cote de « E01 » serait incoherent dans un nom de fichier.
+            padded = _format_value(value, match.group("cond_pad"))
+            return body.replace("$", sanitize_segment(padded))
 
         name = match.group("name")
         rendered = _format_value(values.get(name), match.group("pad"))
