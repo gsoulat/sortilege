@@ -1,6 +1,43 @@
 # CHANGELOG
 
 
+## v0.9.1 (2026-09-08)
+
+### Bug Fixes
+
+- **scan**: Passer le scan en tache de fond avec progression
+  ([`ddd0cbd`](https://github.com/gsoulat/sortilege/commit/ddd0cbd33cc15f1048a77eeb02c3ed699f0589d9))
+
+Le scan etait synchrone : la requete HTTP ne repondait qu'une fois toute la bibliotheque analysee.
+  Sur un NAS reel avec ffprobe actif, cela represente plusieurs minutes pendant lesquelles
+  l'utilisateur ne voyait qu'un bouton fige, sans savoir si l'outil travaillait ou etait bloque.
+  Pire : un delai d'attente du navigateur ou d'un proxy faisait perdre le resultat d'un scan qui
+  avait pourtant abouti.
+
+Le POST demarre desormais un thread et rend la main immediatement (12 ms mesurees au lieu de la
+  duree complete). GET /api/library/scan/status expose phase, avance, fichier en cours, temps ecoule
+  et estimation du restant.
+
+Le recensement est separe de l'analyse : une premiere passe rapide parcourt l'arborescence sans
+  ffprobe pour connaitre le TOTAL. Sans elle, une barre de progression n'aurait pas de denominateur
+  et on ne pourrait afficher qu'un compteur qui monte sans fin visible.
+
+L'estimation du restant est une extrapolation lineaire, donc imprecise — les fichiers ne coutent pas
+  tous pareil a ffprobe. Elle repond neanmoins a la seule question qui compte pendant l'attente :
+  des secondes ou des minutes.
+
+Un second clic sur « Lancer un scan » renvoie l'etat du scan en cours au lieu d'une erreur « un scan
+  est deja en cours ». Voir la progression est utile ; lire un refus ne l'est pas.
+
+L'interface reprend le suivi d'un scan deja lance si on recharge la page ou qu'on revient depuis un
+  autre onglet, plutot que de laisser croire qu'il ne se passe rien.
+
+Une exception dans le thread est capturee et exposee dans le statut : sans cela le thread mourrait
+  en silence et l'interface attendrait indefiniment un scan qui n'existe plus.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.9.0 (2026-09-08)
 
 ### Features
