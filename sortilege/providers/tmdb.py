@@ -39,13 +39,35 @@ class TMDBProvider(BaseHTTPProvider):
     def available(self) -> bool:
         return bool(self._api_key)
 
+    @property
+    def _is_bearer(self) -> bool:
+        """Le secret fourni est-il un jeton v4 plutot qu'une cle v3 ?
+
+        TMDB propose deux identifiants cote a cote dans les parametres du
+        compte : une « Cle d'API » (32 caracteres hexadecimaux, authentification
+        v3, en parametre d'URL) et un « Jeton d'acces en lecture » (JWT v4, en
+        en-tete Authorization). Ils ne sont pas interchangeables, et se tromper
+        donne un 401 sans la moindre explication.
+
+        On accepte donc les deux, en reconnaissant le JWT a sa forme.
+        """
+        return self._api_key.startswith("eyJ")
+
+    def _headers(self) -> dict[str, str]:
+        if self._is_bearer:
+            return {"Authorization": f"Bearer {self._api_key}"}
+        return {}
+
     def _params(self, **extra) -> dict[str, str]:
-        return {
-            "api_key": self._api_key,
+        base = {
             "language": "fr-FR",
             "include_adult": "false",
             **{k: str(v) for k, v in extra.items() if v is not None},
         }
+        # La cle v3 voyage en parametre ; le jeton v4 est deja dans l'en-tete.
+        if not self._is_bearer:
+            base["api_key"] = self._api_key
+        return base
 
     async def search_movie(self, title: str, year: int | None) -> list[Candidate]:
         if not self.available or not title:
@@ -53,14 +75,20 @@ class TMDBProvider(BaseHTTPProvider):
 
         async def fetch():
             data = await self._get_json(
-                f"{API}/search/movie", params=self._params(query=title, year=year)
+                f"{API}/search/movie",
+                params=self._params(query=title, year=year),
+                headers=self._headers(),
             )
             results = self._to_candidates(data, kind="movie")
 
             # Un filtre sur l'annee peut vider la reponse alors que l'oeuvre
             # existe (ressortie, erreur de release). On retente sans.
             if not results and year is not None:
-                data = await self._get_json(f"{API}/search/movie", params=self._params(query=title))
+                data = await self._get_json(
+                    f"{API}/search/movie",
+                    params=self._params(query=title),
+                    headers=self._headers(),
+                )
                 results = self._to_candidates(data, kind="movie")
             return results
 
@@ -72,12 +100,16 @@ class TMDBProvider(BaseHTTPProvider):
 
         async def fetch():
             data = await self._get_json(
-                f"{API}/search/tv", params=self._params(query=title, first_air_date_year=year)
+                f"{API}/search/tv",
+                params=self._params(query=title, first_air_date_year=year),
+                headers=self._headers(),
             )
             results = self._to_candidates(data, kind="episode")
 
             if not results and year is not None:
-                data = await self._get_json(f"{API}/search/tv", params=self._params(query=title))
+                data = await self._get_json(
+                    f"{API}/search/tv", params=self._params(query=title), headers=self._headers()
+                )
                 results = self._to_candidates(data, kind="episode")
             return results
 
@@ -98,7 +130,9 @@ class TMDBProvider(BaseHTTPProvider):
                 return self._collections[movie_id]
 
         async def fetch():
-            data = await self._get_json(f"{API}/movie/{movie_id}", params=self._params())
+            data = await self._get_json(
+                f"{API}/movie/{movie_id}", params=self._params(), headers=self._headers()
+            )
             name: str | None = None
             if data:
                 collection = data.get("belongs_to_collection")
@@ -128,7 +162,9 @@ class TMDBProvider(BaseHTTPProvider):
 
         async def fetch():
             data = await self._get_json(
-                f"{API}/tv/{series_id}/season/{season}", params=self._params()
+                f"{API}/tv/{series_id}/season/{season}",
+                params=self._params(),
+                headers=self._headers(),
             )
             titles: dict[int, str] | None = None
             if data and isinstance(data.get("episodes"), list):
