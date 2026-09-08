@@ -39,7 +39,7 @@ avant un `Apply`, et chaque `Apply` écrit un journal qui permet un `Undo`.
 | `Scan` | Parcourt les racines sources, ne retient que les fichiers vidéo |
 | `Parse` | Extrait titre / année / saison / épisode / résolution / langue du nom de release |
 | `Classify` | Film, série ou anime |
-| `Match` | Interroge TMDB / TVDB / AniList selon la classe |
+| `Match` | Interroge TMDB / AniList selon la classe |
 | `Score` | Combine les signaux en une confiance 0→1 |
 | `Plan` | Calcule la destination via le gabarit, vérifie le confinement |
 | `Apply` | Déplace, écrit le journal d'annulation |

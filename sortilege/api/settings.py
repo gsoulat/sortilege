@@ -261,13 +261,6 @@ def read_settings() -> dict[str, object]:
                 "required": False,
                 "hint": "Aucune clé requise",
             },
-            {
-                "name": "TheTVDB",
-                "role": "Séries (source secondaire)",
-                "configured": bool(s.tvdb_api_key),
-                "required": False,
-                "hint": "TVDB_API_KEY",
-            },
         ],
         "ai": {
             "enabled": s.ai_enabled,

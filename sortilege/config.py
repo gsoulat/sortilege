@@ -41,7 +41,6 @@ class Settings(BaseSettings):
 
     # --- Fournisseurs (hors prefixe SORTILEGE_) ---
     tmdb_api_key: str = Field(default="", alias="TMDB_API_KEY")
-    tvdb_api_key: str = Field(default="", alias="TVDB_API_KEY")
 
     # --- Resolveur IA ---
     ai_enabled: bool = False
