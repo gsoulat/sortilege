@@ -118,7 +118,11 @@ def user_message(items: list[AmbiguousItem]) -> str:
     )
 
 
-_JSON_BLOCK = re.compile(r"\{.*\}", re.S)
+# Objet OU tableau : certains modeles renvoient la liste de propositions nue
+# plutot que l'objet demande. Ne chercher que « { … } » attrapait alors le
+# premier element de la liste au lieu de la liste entiere — le repli documente
+# ne fonctionnait donc jamais.
+_JSON_BLOCK = re.compile(r"[\[{].*[\]}]", re.S)
 
 
 def parse_response(raw: str, valid_indexes: set[int]) -> dict[int, AIProposal]:
