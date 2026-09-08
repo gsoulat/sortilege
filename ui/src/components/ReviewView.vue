@@ -32,8 +32,17 @@ const scoreCounts = computed(() => {
   }
 })
 
-const autoPlans = computed(() => (data.value?.auto ?? []).filter(passesScore))
-const rejectedPlans = computed(() => (data.value?.rejected ?? []).filter(passesScore))
+// Score decroissant partout : ce dont l'outil est le plus sur se traite en
+// premier, et l'ordre du scan n'a aucune valeur pour l'arbitrage.
+const byScore = (list) => [...list].sort((a, b) => b.score - a.score)
+
+const autoPlans = computed(() => byScore((data.value?.auto ?? []).filter(passesScore)))
+const rejectedPlans = computed(() => byScore((data.value?.rejected ?? []).filter(passesScore)))
+
+// Ce qui demande un arbitrage est REPLIE tant qu'il reste des plans surs a
+// appliquer : sans cela, une file de plusieurs centaines de lignes noie les
+// quelques clics qui traitent l'essentiel.
+const reviewCollapsed = ref(true)
 
 const percent = computed(() => {
   const p = progress.value
@@ -182,15 +191,17 @@ const reviewGroups = computed(() => {
   }
 
   return {
-    movies,
+    movies: byScore(movies),
     shows: [...shows.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([title, plans]) => ({
         title,
-        plans,
+        plans: byScore(plans),
         year: plans[0].year,
         poster: plans[0].poster_url,
-      })),
+        score: Math.max(...plans.map((p) => p.score)),
+      }))
+      .sort((a, b) => b.score - a.score),
   }
 })
 
@@ -350,7 +361,10 @@ onMounted(load)
       <!-- Arbitrage humain -->
       <section v-if="data.items.length" class="group review-group">
         <div class="group-head">
-          <h3>En attente de ton arbitrage</h3>
+          <button class="collapse" @click="reviewCollapsed = !reviewCollapsed">
+            <span class="chev" :class="{ closed: reviewCollapsed }">▾</span>
+            <h3>En attente de ton arbitrage</h3>
+          </button>
           <span class="count">{{ data.items.length }}</span>
           <template v-if="selected.size">
             <button :disabled="applying" @click="apply([...selected], { dryRun: true })">
@@ -362,6 +376,7 @@ onMounted(load)
           </template>
         </div>
         <!-- Séries : une case coche toute la série -->
+        <template v-if="!reviewCollapsed">
         <div v-for="show in reviewGroups.shows" :key="show.title" class="show">
           <label class="show-head">
             <input
@@ -438,6 +453,7 @@ onMounted(load)
             />
           </li>
         </ul>
+        </template>
       </section>
 
       <!-- Écartés -->
@@ -482,6 +498,11 @@ button.primary {
   background: color-mix(in srgb, var(--accent) 20%, transparent);
   border-color: var(--accent-dim); color: var(--accent);
 }
+.collapse { border: none; background: none; padding: 0; display: flex; align-items: center; gap: 7px; }
+.collapse:hover h3 { color: var(--text); }
+.chev { color: var(--text-faint); font-size: 10px; transition: transform .15s; }
+.chev.closed { transform: rotate(-90deg); }
+
 .score-filters { display: flex; gap: 4px; flex-wrap: wrap; }
 .score-filters button { font-size: 12px; padding: 4px 10px; }
 .score-filters button.ok { color: var(--ok); }
