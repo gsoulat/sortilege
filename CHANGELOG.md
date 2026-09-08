@@ -1,6 +1,43 @@
 # CHANGELOG
 
 
+## v0.14.0 (2026-09-08)
+
+### Features
+
+- **ia**: Choix du fournisseur, et progression du calcul des plans
+  ([`9096198`](https://github.com/gsoulat/sortilege/commit/90961983ad2b21a211cd4bb16abb133f181ba082))
+
+Fournisseurs ------------ ChatGPT, Mistral, OpenRouter, Ollama, Groq, LM Studio et Gemini exposent
+  tous une API compatible OpenAI. Une seule implementation avec une URL de base configurable les
+  couvre donc tous ; seul Claude a un protocole different et garde son SDK. Deux implementations
+  pour sept services — et une entree « Autre » qui accueillera ceux que je n ai pas prevus.
+
+Aucun SDK supplementaire : httpx est deja une dependance, et chaque paquet proprietaire en
+  ajouterait un pour une seule requete POST.
+
+Le prompt, le schema de reponse et les garde-fous sont partages : il n y a aucune raison que la
+  qualite d identification depende de qui heberge le modele. Seul le transport change.
+
+La lecture de reponse est tolerante sur la forme et stricte sur le fond — beaucoup de modeles
+  entourent leur JSON de texte, ce qui est sans importance, mais une proposition dont l index n
+  existe pas dans le lot est ecartee.
+
+Seuil dedie (80 % par defaut) plutot que « tout ce qui n est pas automatique » : entre ce seuil et
+  celui d application, le score est deja bon et une revue humaine suffit. C est ce qui borne la
+  depense.
+
+La cle vit dans les preferences et non dans l environnement — changer de fournisseur ne doit pas
+  imposer de modifier la stack. Elle n est JAMAIS renvoyee au navigateur : l API n expose qu un
+  booleen « configuree », et un champ vide signifie « ne change pas » plutot que « efface ».
+
+Progression du calcul --------------------- Meme defaut que le scan avant sa correction : sur 426
+  fichiers le calcul dure des minutes et le bouton restait fige. Barre d avancement, compteur, temps
+  restant estime, et annonce de la seconde passe IA qui n a pas d avancement fin.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.13.1 (2026-09-08)
 
 ### Bug Fixes
