@@ -37,11 +37,21 @@ const scoreCounts = computed(() => {
 const byScore = (list) => [...list].sort((a, b) => b.score - a.score)
 
 const autoPlans = computed(() => byScore((data.value?.auto ?? []).filter(passesScore)))
+// Les identifiants explicites, et non « tout ce qui est automatique » : sous
+// filtre, le bouton annoncait douze plans et le serveur en aurait applique
+// quarante. Un bouton qui ment sur ce qu'il deplace est pire qu'un bouton
+// absent.
+const autoIds = computed(() => autoPlans.value.map((p) => p.id))
 const rejectedPlans = computed(() => byScore((data.value?.rejected ?? []).filter(passesScore)))
 
 // Ce qui demande un arbitrage est REPLIE tant qu'il reste des plans surs a
 // appliquer : sans cela, une file de plusieurs centaines de lignes noie les
 // quelques clics qui traitent l'essentiel.
+//
+// Mais seulement TANT QU'IL Y EN A. Un lot ou rien n'atteint le seuil
+// automatique restait replie : aucune case atteignable, donc aucune selection,
+// donc pas de bouton « Executer » — le lot etait inexploitable. C'est `load()`
+// qui reevalue, a chaque fois que la file change.
 const reviewCollapsed = ref(true)
 
 const percent = computed(() => {
@@ -61,6 +71,7 @@ const hasPlans = computed(() => (data.value?.counts?.auto ?? 0) + (data.value?.c
 
 async function load() {
   data.value = await (await fetch('/api/review')).json()
+  reviewCollapsed.value = (data.value?.auto ?? []).length > 0
 }
 
 async function call(url, body = null) {
@@ -234,6 +245,12 @@ async function choose(planId, candidate) {
   }
 }
 
+// Toutes les lignes d'arbitrage actuellement visibles, filtre compris.
+const visibleReview = computed(() => [
+  ...reviewGroups.value.shows.flatMap((s) => s.plans),
+  ...reviewGroups.value.movies,
+])
+
 function groupState(plans) {
   const picked = plans.filter((p) => selected.value.has(p.id)).length
   if (picked === 0) return 'none'
@@ -334,10 +351,10 @@ onMounted(load)
         <div class="group-head">
           <h3>Assez sûr pour être appliqué seul</h3>
           <span class="count">{{ autoPlans.length }}</span>
-          <button :disabled="applying" @click="apply(null, { dryRun: true })">
+          <button :disabled="applying" @click="apply(autoIds, { dryRun: true })">
             Simuler
           </button>
-          <button class="primary" :disabled="applying" @click="apply(null, { dryRun: false })">
+          <button class="primary" :disabled="applying" @click="apply(autoIds, { dryRun: false })">
             Exécuter ces {{ autoPlans.length }}
           </button>
         </div>
@@ -366,6 +383,13 @@ onMounted(load)
             <h3>En attente de ton arbitrage</h3>
           </button>
           <span class="count">{{ data.items.length }}</span>
+          <button
+            v-if="visibleReview.length"
+            class="select-all"
+            @click="toggleGroup(visibleReview)"
+          >
+            {{ groupState(visibleReview) === 'all' ? 'Tout décocher' : `Tout cocher (${visibleReview.length})` }}
+          </button>
           <template v-if="selected.size">
             <button :disabled="applying" @click="apply([...selected], { dryRun: true })">
               Simuler ({{ selected.size }})
@@ -547,6 +571,7 @@ button.primary {
 .group-head { display: flex; align-items: center; gap: 11px; margin-bottom: 12px; }
 h3 { margin: 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); }
 .count { font-size: 11px; color: var(--text-faint); }
+.select-all { font-size: 11.5px; padding: 3px 10px; color: var(--text-dim); }
 .group-head button { font-size: 12px; }
 .group-head button:nth-of-type(1) { margin-left: auto; }
 .group-head template + button { margin-left: 0; }
