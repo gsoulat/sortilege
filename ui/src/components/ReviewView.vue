@@ -11,6 +11,30 @@ const results = ref(null)
 const selected = ref(new Set())
 const progress = ref(null)
 
+// Seuil de lecture, pas de decision : il ne change rien au traitement, il
+// choisit seulement ce qu'on regarde. 80 % correspond au seuil de sollicitation
+// de l'IA, donc a la frontiere entre « l'outil a su » et « il a hesite ».
+const SCORE_CUT = 0.8
+const scoreFilter = ref('all')
+
+function passesScore(p) {
+  if (scoreFilter.value === 'high') return p.score >= SCORE_CUT
+  if (scoreFilter.value === 'low') return p.score < SCORE_CUT
+  return true
+}
+
+const scoreCounts = computed(() => {
+  const all = [...(data.value?.auto ?? []), ...(data.value?.items ?? []), ...(data.value?.rejected ?? [])]
+  return {
+    all: all.length,
+    high: all.filter((p) => p.score >= SCORE_CUT).length,
+    low: all.filter((p) => p.score < SCORE_CUT).length,
+  }
+})
+
+const autoPlans = computed(() => (data.value?.auto ?? []).filter(passesScore))
+const rejectedPlans = computed(() => (data.value?.rejected ?? []).filter(passesScore))
+
 const percent = computed(() => {
   const p = progress.value
   if (!p || !p.total) return 0
@@ -52,30 +76,44 @@ async function call(url, body = null) {
  */
 let poller = null
 
-async function plan() {
+async function plan({ reset = false } = {}) {
   planning.value = true
   results.value = null
   progress.value = null
+
+  // Le calcul tourne cote serveur ; le POST rend la main tout de suite. On
+  // suit son etat, comme pour le scan — une requete ouverte plusieurs minutes
+  // finirait par expirer et le resultat serait perdu.
+  const started = await call(`/api/review/plan?limit=100&reset=${reset}`)
+  if (!started) {
+    clearInterval(poller)
+    poller = null
+    planning.value = false
+    return
+  }
 
   poller = setInterval(async () => {
     try {
       const status = await (await fetch('/api/review/plan/status')).json()
       progress.value = status
-      if (!status.running && status.total) clearInterval(poller)
+
+      if (status.error) {
+        error.value = status.error
+      }
+      if (!status.running) {
+        clearInterval(poller)
+        poller = null
+        planning.value = false
+        progress.value = null
+        await load()
+      }
     } catch {
       clearInterval(poller)
+      poller = null
+      planning.value = false
+      error.value = 'Contact perdu avec le serveur pendant le calcul.'
     }
   }, 700)
-
-  try {
-    const out = await call('/api/review/plan')
-    if (out) data.value = out
-  } finally {
-    clearInterval(poller)
-    poller = null
-    planning.value = false
-    progress.value = null
-  }
 }
 
 /**
@@ -133,7 +171,7 @@ const reviewGroups = computed(() => {
   const movies = []
   const shows = new Map()
 
-  for (const p of data.value?.items ?? []) {
+  for (const p of (data.value?.items ?? []).filter(passesScore)) {
     if (p.kind === 'movie') {
       movies.push(p)
       continue
@@ -210,9 +248,26 @@ onMounted(load)
 <template>
   <div v-if="data" class="review">
     <div class="toolbar">
-      <button class="primary" :disabled="planning" @click="plan">
-        {{ planning ? 'Identification en cours…' : 'Calculer les plans' }}
+      <button class="primary" :disabled="planning" @click="plan()">
+        {{
+          planning
+            ? 'Identification en cours…'
+            : data?.planned
+              ? `Traiter les ${Math.min(100, data.remaining)} suivants`
+              : 'Calculer les plans'
+        }}
       </button>
+      <span v-if="data?.remaining" class="remaining">
+        {{ data.remaining }} fichier{{ data.remaining > 1 ? 's' : '' }} en attente
+      </span>
+      <span v-else-if="data?.planned" class="remaining done">Tout est planifié</span>
+      <button
+        v-if="data?.planned"
+        class="reset"
+        :disabled="planning"
+        title="Vide la file et repart du premier fichier"
+        @click="plan({ reset: true })"
+      >Recommencer</button>
       <button
         v-if="data.journal_size"
         class="undo"
@@ -231,6 +286,18 @@ onMounted(load)
         <span class="elapsed">{{ humanDuration(progress.elapsed) }} écoulées</span>
       </div>
       <div v-if="progress.current" class="current">{{ progress.current }}</div>
+    </div>
+
+    <div v-if="hasPlans" class="score-filters">
+      <button :class="{ active: scoreFilter === 'all' }" @click="scoreFilter = 'all'">
+        Tout ({{ scoreCounts.all }})
+      </button>
+      <button class="ok" :class="{ active: scoreFilter === 'high' }" @click="scoreFilter = 'high'">
+        ≥ 80 % ({{ scoreCounts.high }})
+      </button>
+      <button class="warn" :class="{ active: scoreFilter === 'low' }" @click="scoreFilter = 'low'">
+        &lt; 80 % ({{ scoreCounts.low }})
+      </button>
     </div>
 
     <p v-if="error" class="err-msg">{{ error }}</p>
@@ -252,19 +319,19 @@ onMounted(load)
 
     <template v-else>
       <!-- Application automatique -->
-      <section v-if="data.auto.length" class="group auto">
+      <section v-if="autoPlans.length" class="group auto">
         <div class="group-head">
           <h3>Assez sûr pour être appliqué seul</h3>
-          <span class="count">{{ data.auto.length }}</span>
+          <span class="count">{{ autoPlans.length }}</span>
           <button :disabled="applying" @click="apply(null, { dryRun: true })">
             Simuler
           </button>
           <button class="primary" :disabled="applying" @click="apply(null, { dryRun: false })">
-            Exécuter ces {{ data.auto.length }}
+            Exécuter ces {{ autoPlans.length }}
           </button>
         </div>
         <ul class="plans">
-          <li v-for="p in data.auto" :key="p.id">
+          <li v-for="p in autoPlans" :key="p.id">
             <div class="line">
               <img v-if="p.poster_url" class="thumb" :src="p.poster_url" :alt="p.title" loading="lazy" />
               <span v-else class="thumb empty"></span>
@@ -374,10 +441,10 @@ onMounted(load)
       </section>
 
       <!-- Écartés -->
-      <details v-if="data.rejected.length" class="group rejected">
-        <summary>{{ data.rejected.length }} fichier(s) écarté(s)</summary>
+      <details v-if="rejectedPlans.length" class="group rejected">
+        <summary>{{ rejectedPlans.length }} fichier(s) écarté(s)</summary>
         <ul class="plans">
-          <li v-for="p in data.rejected" :key="p.id">
+          <li v-for="p in rejectedPlans" :key="p.id">
             <div class="line">
               <span class="score low">{{ (p.score * 100).toFixed(0) }}</span>
               <span class="title">{{ p.title || p.filename }}</span>
@@ -415,6 +482,16 @@ button.primary {
   background: color-mix(in srgb, var(--accent) 20%, transparent);
   border-color: var(--accent-dim); color: var(--accent);
 }
+.score-filters { display: flex; gap: 4px; flex-wrap: wrap; }
+.score-filters button { font-size: 12px; padding: 4px 10px; }
+.score-filters button.ok { color: var(--ok); }
+.score-filters button.warn { color: var(--warn); }
+.score-filters button.active { background: var(--surface-2); border-color: var(--accent-dim); }
+
+.remaining { font-size: 12.5px; color: var(--text-dim); }
+.remaining.done { color: var(--ok); }
+.reset { font-size: 11.5px; padding: 3px 9px; color: var(--text-faint); }
+
 .undo { margin-left: auto; font-size: 12px; color: var(--warn); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
 
 .badge {

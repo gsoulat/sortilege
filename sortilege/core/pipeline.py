@@ -34,6 +34,11 @@ from .scoring import Decision, Policy
 
 logger = logging.getLogger(__name__)
 
+BATCH_SIZE = 100
+"""Fichiers planifies par lot. Aucun effet sur la vitesse — le semaphore borne
+deja la concurrence — mais evite de tenir mille taches en memoire pour n'en
+executer que six."""
+
 MAX_CONCURRENCY = 6
 """Requetes simultanees vers les fournisseurs. TMDB tolere environ 50 requetes
 par seconde ; on reste tres en dessous, la lenteur d'un scan n'etant jamais un
@@ -287,7 +292,14 @@ class Pipeline:
         if on_progress:
             on_progress(0, total, "")
 
-        plans = list(await asyncio.gather(*(one(f) for f in todo)))
+        # Traitement par lots plutot qu'un gather geant : sur une bibliotheque
+        # de plus de mille fichiers, creer autant de taches d'un coup immobilise
+        # de la memoire pour rien — le semaphore n'en laisse tourner que six a
+        # la fois de toute facon. Le lot borne la pression sans rien ralentir.
+        plans: list[Plan] = []
+        for start in range(0, total, BATCH_SIZE):
+            chunk = todo[start : start + BATCH_SIZE]
+            plans.extend(await asyncio.gather(*(one(f) for f in chunk)))
 
         if self._ai is not None:
             # La seconde passe n'a pas d'avancement fin : c'est un ou deux

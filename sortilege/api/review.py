@@ -7,9 +7,10 @@ durable — ce qui a REELLEMENT ete deplace — vit dans le journal sur disque.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from threading import Lock
 
 from fastapi import APIRouter, HTTPException
@@ -18,7 +19,7 @@ from pydantic import BaseModel
 from ..config import get_settings
 from ..core.companions import TRASH_DIRNAME
 from ..core.journal import apply_plan, undo_last
-from ..core.pipeline import Pipeline
+from ..core.pipeline import BATCH_SIZE, Pipeline
 from ..core.planner import Plan
 from ..core.scoring import Decision, Policy
 from ..providers.anilist import AniListProvider
@@ -32,6 +33,11 @@ router = APIRouter(prefix="/api/review", tags=["revue"])
 
 _plans: dict[str, Plan] = {}
 _lock = Lock()
+
+# Reference conservee sur la tache de fond : asyncio ne garde qu'une reference
+# FAIBLE vers les taches en cours. Sans cette variable, le ramasse-miettes
+# peut supprimer le calcul en plein vol, sans erreur ni trace.
+_plan_task: asyncio.Task | None = None
 
 
 class ApplyRequest(BaseModel):
@@ -134,6 +140,12 @@ class PlanJob:
     finished_at: float = 0.0
     error: str | None = None
 
+    done_paths: set[str] = field(default_factory=set)
+    """Fichiers deja planifies, pour ne pas les repasser aux fournisseurs.
+
+    Par chemin et non par position : appliquer des plans retire des fichiers du
+    scan, et un simple compteur designerait ensuite les mauvais."""
+
     @property
     def elapsed(self) -> float:
         if not self.started_at:
@@ -159,6 +171,7 @@ def _plan_status() -> dict[str, object]:
         "elapsed": round(_job.elapsed, 1),
         "eta": round(_job.eta_seconds, 1) if _job.eta_seconds is not None else None,
         "error": _job.error,
+        "batch_size": BATCH_SIZE,
     }
 
 
@@ -168,8 +181,18 @@ def plan_status() -> dict[str, object]:
 
 
 @router.post("/plan")
-async def build_plans() -> dict[str, object]:
-    """Confronte le dernier scan aux fournisseurs et calcule les plans."""
+async def build_plans(limit: int = 100, reset: bool = False) -> dict[str, object]:
+    """Demarre le calcul des plans et rend la main immediatement.
+
+    Par LOT : sur un millier de fichiers, tout planifier d'un coup produit une
+    file que personne ne relira, et fait attendre de longues minutes avant le
+    premier resultat exploitable. Un lot de cent se traite, puis on demande le
+    suivant.
+
+    Le calcul tourne en tache de fond : meme un lot peut depasser le delai
+    d'attente d'un navigateur, et le resultat serait perdu alors que le serveur
+    a fini son travail.
+    """
     conf = get_settings()
     scan = last_scan()
 
@@ -202,6 +225,28 @@ async def build_plans() -> dict[str, object]:
         ai_threshold=prefs.ai.threshold,
     )
 
+    if _job.running:
+        # Ni erreur ni second calcul : on renvoie l'etat en cours. Cliquer deux
+        # fois doit montrer la progression, pas afficher un refus.
+        return {**_queue(), "started": False}
+
+    # Seuls les fichiers eligibles comptent : ceux deja ranges et les
+    # echantillons ecartes ne seront jamais planifies, les inclure dans le
+    # « reste a traiter » annoncerait un travail qui n'arrivera pas.
+    eligible = [f for f in scan.files if not f.in_library and f.skipped_reason is None]
+    pending = [f for f in eligible if str(f.path) not in _job.done_paths]
+
+    if reset:
+        _job.done_paths.clear()
+        with _lock:
+            _plans.clear()
+        pending = eligible
+
+    if not pending:
+        return {**_queue(), "started": False, "detail": "Tous les fichiers ont ete planifies."}
+
+    batch = pending[: max(1, limit)]
+
     def progress(processed: int, total: int, name: str) -> None:
         _job.processed = processed
         _job.total = total
@@ -215,24 +260,31 @@ async def build_plans() -> dict[str, object]:
     _job.started_at = time.monotonic()
     _job.finished_at = 0.0
 
-    try:
-        plans = await pipeline.plan_all(scan.files, on_progress=progress)
-    except Exception as exc:
-        _job.error = f"{type(exc).__name__}: {exc}"
-        logger.exception("le calcul des plans a echoue")
-        raise HTTPException(status_code=500, detail=_job.error) from exc
-    finally:
-        await pipeline.aclose()
-        _job.running = False
-        _job.finished_at = time.monotonic()
-        _job.current = ""
+    async def work() -> None:
+        try:
+            plans = await pipeline.plan_all(batch, on_progress=progress)
+        except Exception as exc:
+            # Une tache de fond qui leve mourrait en silence : sans cette
+            # capture, l'interface attendrait indefiniment un calcul disparu.
+            _job.error = f"{type(exc).__name__}: {exc}"
+            logger.exception("le calcul des plans a echoue")
+            return
+        finally:
+            await pipeline.aclose()
+            _job.running = False
+            _job.finished_at = time.monotonic()
+            _job.current = ""
 
-    with _lock:
-        _plans.clear()
-        _plans.update({p.id: p for p in plans})
+        with _lock:
+            # On AJOUTE : les lots precedents restent a arbitrer, les effacer
+            # perdrait le travail deja fait.
+            _plans.update({p.id: p for p in plans})
+        _job.done_paths.update(str(f.path) for f in batch)
+        logger.info("lot planifie : %s plans", len(plans))
 
-    logger.info("plans calcules : %s", len(plans))
-    return _queue()
+    global _plan_task
+    _plan_task = asyncio.create_task(work(), name="sortilege-plan")
+    return {**_queue(), "started": True}
 
 
 @router.get("")
@@ -258,7 +310,21 @@ def _queue() -> dict[str, object]:
             "reject_threshold": conf.reject_threshold,
         },
         "journal_size": len(get_journal().read_all()),
+        "remaining": _remaining(),
+        "planned": len(_job.done_paths),
     }
+
+
+def _remaining() -> int:
+    """Fichiers eligibles pas encore planifies."""
+    scan = last_scan()
+    if scan is None:
+        return 0
+    return sum(
+        1
+        for f in scan.files
+        if not f.in_library and f.skipped_reason is None and str(f.path) not in _job.done_paths
+    )
 
 
 def _blockers() -> list[dict[str, str]]:
@@ -445,6 +511,8 @@ def undo(body: UndoRequest) -> dict[str, object]:
             for r in results
         ],
         "journal_size": len(get_journal().read_all()),
+        "remaining": _remaining(),
+        "planned": len(_job.done_paths),
     }
 
 
