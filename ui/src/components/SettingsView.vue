@@ -37,6 +37,16 @@ function onAutomationChange(patch) {
   save({ automation: patch })
 }
 
+function onOversizeChange(patch) {
+  Object.assign(prefs.value.oversize, patch)
+  save({ oversize: patch })
+}
+
+function setOversizeDestination(kind, value) {
+  const destinations = { ...prefs.value.oversize.destinations, [kind]: value }
+  onOversizeChange({ destinations })
+}
+
 function setDestination(kind, value) {
   prefs.value.destinations[kind] = value
   dirty.value = true
@@ -170,6 +180,48 @@ onMounted(load)
         </div>
       </div>
 
+      <label class="switch oversize-toggle">
+        <input
+          type="checkbox"
+          :checked="prefs.oversize.enabled"
+          @change="onOversizeChange({ enabled: $event.target.checked })"
+        />
+        Dossier séparé pour les fichiers volumineux
+      </label>
+
+      <div v-if="prefs.oversize.enabled" class="oversize">
+        <p class="note">
+          Un remux 4K de 60 Go et un épisode de 800 Mo n'ont pas les mêmes contraintes.
+          Au-delà du seuil, le fichier part dans la destination indiquée ici — souvent
+          sur un autre volume, ou simplement isolé pour être repéré.
+        </p>
+
+        <div class="dest-row">
+          <label for="over-threshold">Seuil</label>
+          <div class="inline">
+            <input
+              id="over-threshold"
+              type="number"
+              min="1"
+              step="1"
+              :value="prefs.oversize.threshold_gb"
+              @change="onOversizeChange({ threshold_gb: Number($event.target.value) })"
+            />
+            <span class="unit">Go et plus</span>
+          </div>
+        </div>
+
+        <div v-for="(label, kind) in KIND_LABELS" :key="`o-${kind}`" class="dest-row">
+          <label :for="`o-${kind}`">{{ label }}</label>
+          <input
+            :id="`o-${kind}`"
+            :value="prefs.oversize.destinations[kind]"
+            spellcheck="false"
+            @change="setOversizeDestination(kind, $event.target.value)"
+          />
+        </div>
+      </div>
+
       <div class="actions">
         <button class="primary" :disabled="!dirty || saving" @click="save">
           {{ saving ? 'Enregistrement…' : 'Enregistrer' }}
@@ -277,6 +329,15 @@ code {
 .dest-block { display: flex; flex-direction: column; gap: 5px; }
 .dest-block + .dest-block { margin-top: 4px; }
 .browse { font-size: 11.5px; padding: 4px 10px; white-space: nowrap; }
+
+.oversize-toggle { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.oversize { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+.oversize .note { margin: 0 0 6px; font-size: 12px; color: var(--text-faint); line-height: 1.6; max-width: 620px; }
+.oversize .inline { display: flex; align-items: center; gap: 9px; }
+.oversize .inline input { width: 90px; }
+.oversize .unit { font-size: 12px; color: var(--text-faint); }
+.switch { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.switch input { width: auto; }
 
 .actions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
 button.primary {

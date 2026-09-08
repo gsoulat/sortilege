@@ -50,6 +50,7 @@ class Pipeline:
         anilist: AniListProvider | None,
         library_root: Path,
         templates: dict[str, str],
+        destination_for=None,
         policy: Policy,
         ai=None,
         ai_batch_size: int = 12,
@@ -59,6 +60,10 @@ class Pipeline:
         self._anilist = anilist
         self._library_root = library_root
         self._templates = templates
+        # Fonction (kind, taille) -> dossier de destination. Injectee plutot que
+        # codee ici : le pipeline n'a pas a connaitre les preferences, et cela
+        # rend le routage par taille testable sans configuration.
+        self._destination_for = destination_for or (lambda kind, size: library_root)
         self._policy = policy
         self._ai = ai
         self._ai_batch_size = max(1, ai_batch_size)
@@ -168,7 +173,9 @@ class Pipeline:
                     scanned,
                     match,
                     template=template,
-                    library_root=self._library_root,
+                    destination_root=self._destination_for(
+                        _kind_key(scanned.parsed.kind), scanned.size_bytes
+                    ),
                     policy=self._policy,
                     all_candidates=candidates,
                 )
@@ -235,7 +242,9 @@ class Pipeline:
             scanned,
             match,
             template=self._templates.get(_kind_key(scanned.parsed.kind), ""),
-            library_root=self._library_root,
+            destination_root=self._destination_for(
+                _kind_key(scanned.parsed.kind), scanned.size_bytes
+            ),
             policy=self._policy,
         )
         plan.alternatives = others[:8]
@@ -390,7 +399,7 @@ class Pipeline:
             rescanned,
             match,
             template=self._templates.get(_kind_key(corrected.kind), ""),
-            library_root=self._library_root,
+            destination_root=self._destination_for(_kind_key(corrected.kind), rescanned.size_bytes),
             policy=self._policy,
         )
 

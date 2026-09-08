@@ -27,6 +27,7 @@ from ..core.preferences import (
     KINDS,
     AISettings,
     AutomationSettings,
+    OversizeSettings,
     PreferenceError,
     Preferences,
 )
@@ -57,6 +58,12 @@ class AutomationIn(BaseModel):
     apply_auto: bool | None = None
 
 
+class OversizeIn(BaseModel):
+    enabled: bool | None = None
+    threshold_gb: float | None = None
+    destinations: dict[str, str] | None = None
+
+
 class PreferencesIn(BaseModel):
     custom_sources: list[str] | None = None
     enabled_sources: list[str] | None = None
@@ -64,6 +71,7 @@ class PreferencesIn(BaseModel):
     templates: dict[str, str] = Field(default_factory=dict)
     ai: AIIn | None = None
     automation: AutomationIn | None = None
+    oversize: OversizeIn | None = None
 
 
 @router.get("/preferences")
@@ -104,6 +112,17 @@ def read_preferences() -> dict[str, object]:
             "api_key_set": bool(prefs.ai.api_key),
         },
         "automation": asdict(prefs.automation),
+        "oversize": {
+            **asdict(prefs.oversize),
+            "resolved": {
+                k: str(
+                    store.destination_root(k, prefs.oversize.threshold_bytes())
+                    if prefs.oversize.enabled
+                    else store.destination_root(k)
+                )
+                for k in KINDS
+            },
+        },
         "ai_providers": [
             {
                 "key": p.key,
@@ -141,6 +160,14 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
             **{**asdict(current.automation), **body.automation.model_dump(exclude_none=True)}
         )
 
+    over = current.oversize
+    if body.oversize is not None:
+        patch = body.oversize.model_dump(exclude_none=True)
+        destinations = {**current.oversize.destinations, **(patch.pop("destinations", None) or {})}
+        over = OversizeSettings(
+            **{**asdict(current.oversize), **patch, "destinations": destinations}
+        )
+
     merged = Preferences(
         custom_sources=(
             current.custom_sources if body.custom_sources is None else body.custom_sources
@@ -152,6 +179,7 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
         templates={**current.templates, **body.templates},
         ai=ai,
         automation=auto,
+        oversize=over,
     )
 
     try:

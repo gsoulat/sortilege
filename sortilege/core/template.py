@@ -85,6 +85,11 @@ TOKENS: tuple[Token, ...] = (
 TOKEN_NAMES = frozenset(t.name for t in TOKENS)
 
 # Gabarits prets a l'emploi, proposes en un clic dans l'UI.
+#
+# Ils sont RELATIFS a la destination du type, reglee dans l'interface. Y
+# remettre un prefixe « Films/ » ferait doublon : la destination vaut deja
+# « Films », et changer ce reglage n'aurait plus aucun effet puisque le gabarit
+# imposerait le sien.
 PRESETS: dict[str, dict[str, str]] = {
     "jellyfin": {
         # L'annee passe par le conditionnel et non par « ({year}) » en dur :
@@ -94,28 +99,24 @@ PRESETS: dict[str, dict[str, str]] = {
         # dossier. Aucun conditionnel n'est necessaire — un jeton vide produit
         # un segment vide, et un segment vide disparait du chemin. Le meme
         # gabarit sert donc au film isole comme au film de saga.
-        "movie": (
-            "Films/{collection}/{title}{? year: ($)}/{title}{? year: ($)}{? resolution: [$]}"
-        ),
+        "movie": ("{collection}/{title}{? year: ($)}/{title}{? year: ($)}{? resolution: [$]}"),
         # Franchise / serie / saison. Le premier segment disparait quand la
         # serie n'appartient a aucune franchise.
         "episode": (
-            "Series/{collection}/{title}{? year: ($)}/Season {season:02}/"
+            "{collection}/{title}{? year: ($)}/Season {season:02}/"
             "{title} - S{season:02}E{episode:02}{? episode_title: - $}"
         ),
         # Numerotation absolue : c'est ce que portent les releases de fansub, et
         # {episode} est souvent absent tant que la correspondance saison/episode
         # n'a pas ete resolue chez le provider.
-        "anime": "Animes/{title}/{title} - {absolute_episode:03}{? episode_title: - $}",
+        "anime": "{title}/{title} - {absolute_episode:03}{? episode_title: - $}",
     },
     "plex": {
         # Plex accepte un identifiant entre accolades dans le nom, mais les
         # accolades sont la syntaxe des jetons : on ne l'expose pas ici.
-        "movie": "Movies/{collection}/{title}{? year: ($)}/{title}{? year: ($)}",
-        "episode": (
-            "TV Shows/{title}{? year: ($)}/Season {season:02}/{title} - s{season:02}e{episode:02}"
-        ),
-        "anime": "Anime/{title}/{title} - {absolute_episode:03}",
+        "movie": "{collection}/{title}{? year: ($)}/{title}{? year: ($)}",
+        "episode": ("{title}{? year: ($)}/Season {season:02}/{title} - s{season:02}e{episode:02}"),
+        "anime": "{title}/{title} - {absolute_episode:03}",
     },
 }
 
@@ -131,7 +132,7 @@ def validate(template: str) -> None:
     if len(template) > MAX_TEMPLATE_LEN:
         raise TemplateError(f"gabarit trop long (max {MAX_TEMPLATE_LEN})")
     if template.startswith("/"):
-        raise TemplateError("le gabarit doit etre relatif a la racine de bibliotheque")
+        raise TemplateError("le gabarit doit etre relatif a la destination du type")
 
     for match in _TOKEN.finditer(template):
         name = match.group("name") or match.group("cond_name")

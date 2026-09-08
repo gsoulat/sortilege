@@ -138,7 +138,7 @@ def build_plan(
     match: MatchResult | None,
     *,
     template: str,
-    library_root: Path,
+    destination_root: Path,
     policy: Policy,
     with_artwork: bool = True,
     with_cleanup: bool = True,
@@ -178,7 +178,7 @@ def build_plan(
     try:
         validate(template)
         relative = render(template, build_values(scanned, match))
-        destination = resolve_within(library_root, relative)
+        destination = resolve_within(destination_root, relative)
     except (TemplateError, PathConfinementError) as exc:
         return Plan(
             id=plan_id,

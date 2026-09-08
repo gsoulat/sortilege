@@ -11,6 +11,8 @@ s'effondre alors que l'identification est correcte.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
+from datetime import date
 
 from .base import BaseHTTPProvider, Candidate
 
@@ -26,6 +28,27 @@ _POPULARITY_CAP = 2000.0
 IMAGE_BASE = "https://image.tmdb.org/t/p/w185"
 
 
+@dataclass(frozen=True, slots=True)
+class EpisodeInfo:
+    """Un episode tel que le fournisseur le connait.
+
+    La date de diffusion n'est pas decorative : sans elle, un episode qui sort
+    la semaine prochaine serait compte comme manquant, et la liste des trous
+    deviendrait du bruit.
+    """
+
+    name: str
+    air_date: str = ""
+
+    @property
+    def aired(self) -> bool:
+        if not self.air_date:
+            # Pas de date connue : on suppose diffuse plutot que de masquer un
+            # vrai trou. Un faux positif se voit ; un oubli, non.
+            return True
+        return self.air_date <= date.today().isoformat()
+
+
 class TMDBProvider(BaseHTTPProvider):
     name = "tmdb"
 
@@ -34,7 +57,7 @@ class TMDBProvider(BaseHTTPProvider):
         self._api_key = api_key
         # Cache dedie : le cache generique stocke des listes de candidats, pas
         # des tables d'episodes.
-        self._seasons: dict[tuple[str, int], dict[int, str] | None] = {}
+        self._seasons: dict[tuple[str, int], dict[int, EpisodeInfo] | None] = {}
         self._season_lock = asyncio.Lock()
         self._collections: dict[str, str | None] = {}
         self._collection_lock = asyncio.Lock()
@@ -148,7 +171,7 @@ class TMDBProvider(BaseHTTPProvider):
 
         return await self._flight.do(f"collection:{movie_id}", fetch)
 
-    async def get_season(self, series_id: str, season: int) -> dict[int, str] | None:
+    async def get_season(self, series_id: str, season: int) -> dict[int, EpisodeInfo] | None:
         """Tous les titres d'episodes d'une saison, en UNE requete.
 
         C'est le point qui decide du volume total d'appels. Interroger chaque
@@ -170,10 +193,13 @@ class TMDBProvider(BaseHTTPProvider):
                 params=self._params(),
                 headers=self._headers(),
             )
-            titles: dict[int, str] | None = None
+            titles: dict[int, EpisodeInfo] | None = None
             if data and isinstance(data.get("episodes"), list):
                 titles = {
-                    int(ep["episode_number"]): ep.get("name") or ""
+                    int(ep["episode_number"]): EpisodeInfo(
+                        name=ep.get("name") or "",
+                        air_date=ep.get("air_date") or "",
+                    )
                     for ep in data["episodes"]
                     if ep.get("episode_number") is not None
                 }
@@ -196,7 +222,8 @@ class TMDBProvider(BaseHTTPProvider):
         titles = await self.get_season(series_id, season)
         if not titles:
             return None
-        return titles.get(episode) or None
+        info = titles.get(episode)
+        return (info.name if info else "") or None
 
     def _to_candidates(self, data: dict | None, kind: str) -> list[Candidate]:
         if not data or not isinstance(data.get("results"), list):

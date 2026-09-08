@@ -67,6 +67,30 @@ class AISettings:
 
 
 @dataclass
+class OversizeSettings:
+    """Destination separee pour les fichiers volumineux.
+
+    Un remux 4K de 60 Go et un episode de 800 Mo n'ont pas les memes
+    contraintes : on veut souvent les premiers sur un autre volume, ou
+    simplement isoles pour les reperer. Le seuil se regle, et la destination
+    reste soumise au meme confinement que les autres.
+    """
+
+    enabled: bool = False
+    threshold_gb: float = 20.0
+    destinations: dict[str, str] = field(
+        default_factory=lambda: {
+            "movie": "Films 4K",
+            "episode": "Series 4K",
+            "anime": "Animes 4K",
+        }
+    )
+
+    def threshold_bytes(self) -> int:
+        return int(self.threshold_gb * 1024**3)
+
+
+@dataclass
 class AutomationSettings:
     """Traitement automatique de bout en bout."""
 
@@ -109,6 +133,7 @@ class Preferences:
 
     ai: AISettings = field(default_factory=AISettings)
     automation: AutomationSettings = field(default_factory=AutomationSettings)
+    oversize: OversizeSettings = field(default_factory=OversizeSettings)
 
     def template_for(self, kind: str) -> str:
         return self.templates.get(kind) or PRESETS["jellyfin"].get(kind, "")
@@ -165,6 +190,9 @@ class PreferenceStore:
                 ai=AISettings(**{**asdict(AISettings()), **(raw.get("ai") or {})}),
                 automation=AutomationSettings(
                     **{**asdict(AutomationSettings()), **(raw.get("automation") or {})}
+                ),
+                oversize=OversizeSettings(
+                    **{**asdict(OversizeSettings()), **(raw.get("oversize") or {})}
                 ),
             )
             return self._cache
@@ -245,7 +273,14 @@ class PreferenceStore:
                     f"« {source} » n'est ni une racine montee ni une source ajoutee."
                 )
 
-        for kind, sub in prefs.destinations.items():
+        if prefs.oversize.threshold_gb <= 0:
+            raise PreferenceError("le seuil de taille doit etre strictement positif")
+
+        # Les deux tables sont parcourues SEPAREMENT : les fusionner par cle
+        # ferait ecraser une destination par son homologue « volumineux », et
+        # la premiere echapperait silencieusement a la validation.
+        pairs = [*prefs.destinations.items(), *prefs.oversize.destinations.items()]
+        for kind, sub in pairs:
             if kind not in KINDS:
                 raise PreferenceError(f"type de media inconnu : {kind}")
             if not sub.strip():
@@ -364,9 +399,21 @@ class PreferenceStore:
 
         return {"path": str(current), "parent": parent, "entries": entries}
 
-    def destination_root(self, kind: str) -> Path:
-        """Chemin absolu ou ranger ce type de media."""
+    def destination_root(self, kind: str, size_bytes: int | None = None) -> Path:
+        """Chemin absolu ou ranger ce type de media.
+
+        ``size_bytes`` bascule vers la destination des fichiers volumineux
+        quand elle est active et que le seuil est franchi.
+        """
         prefs = self.load()
+        over = prefs.oversize
+        if (
+            over.enabled
+            and size_bytes is not None
+            and size_bytes >= over.threshold_bytes()
+            and over.destinations.get(kind)
+        ):
+            return resolve_within(self._library_root, over.destinations[kind])
         return resolve_within(self._library_root, prefs.destination_for(kind))
 
     def invalidate(self) -> None:

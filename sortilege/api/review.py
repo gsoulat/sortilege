@@ -192,6 +192,7 @@ async def build_plans() -> dict[str, object]:
         anilist=AniListProvider(),
         library_root=conf.library_root,
         templates={k: prefs.template_for(k) for k in ("movie", "episode", "anime")},
+        destination_for=store.destination_root,
         policy=Policy(
             auto_apply_threshold=conf.auto_apply_threshold,
             reject_threshold=conf.reject_threshold,
@@ -406,6 +407,7 @@ async def choose(plan_id: str, body: ChooseRequest) -> dict[str, object]:
         anilist=AniListProvider(),
         library_root=conf.library_root,
         templates={k: prefs.template_for(k) for k in ("movie", "episode", "anime")},
+        destination_for=store.destination_root,
         policy=Policy(
             auto_apply_threshold=conf.auto_apply_threshold,
             reject_threshold=conf.reject_threshold,
