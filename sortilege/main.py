@@ -16,6 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from . import __version__
 from .api import auth, automation, collection, library, review, settings, templates
 from .config import get_settings
 from .core.auth import SESSION_COOKIE, verify_session
@@ -57,7 +58,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="Sortilège",
-    version="0.1.0",
+    # Une version en dur se perime des la premiere release. Elle vient donc
+    # de __init__.py, seule source de verite, mise a jour avec le tag.
+    version=__version__,
     docs_url=None,  # pas de surface d'API publique inutile
     redoc_url=None,
     lifespan=lifespan,
@@ -100,6 +103,7 @@ def health() -> dict[str, object]:
     conf = get_settings()
     return {
         "status": "ok",
+        "version": __version__,
         "ai_enabled": conf.ai_enabled,
         "ffprobe": ffprobe_available(),
     }

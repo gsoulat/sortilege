@@ -75,6 +75,7 @@ onUnmounted(() => {
       <div class="brand">
         <span class="mark">✦</span>
         <h1>Sortilège</h1>
+        <span v-if="health?.version" class="version">v{{ health.version }}</span>
       </div>
 
       <nav>
@@ -123,6 +124,7 @@ header {
 .brand { display: flex; align-items: baseline; gap: 9px; }
 .mark { color: var(--accent); font-size: 17px; }
 h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
+.version { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
 
 nav { display: flex; gap: 2px; margin-right: auto; }
 nav button {
