@@ -1,6 +1,61 @@
 # CHANGELOG
 
 
+## v0.25.0 (2026-09-08)
+
+### Documentation
+
+- Corriger la section securite, qui decrivait un verrou supprime
+  ([`c8a1e5a`](https://github.com/gsoulat/sortilege/commit/c8a1e5af25dc67be1026987196c9d00e5d2b1328))
+
+Le README annoncait encore SORTILEGE_DRY_RUN comme mode par defaut. Cette variable a ete retiree il
+  y a plusieurs versions au profit des deux boutons « Simuler » et « Executer » : la documentation
+  promettait donc un garde-fou qui n'existe plus, ce qui est pire que de n'en promettre aucun.
+
+Il affirmait aussi que les cles vivent uniquement dans l'environnement. C'est faux depuis que le
+  fournisseur d'IA et le webhook Discord se reglent depuis l'interface. Ce qui compte vraiment est
+  ailleurs et n'etait pas dit : aucun secret ne redescend au navigateur, le jeton TMDB ne passe pas
+  en parametre d'URL, et les doublons partent a la corbeille et jamais a la suppression.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+### Features
+
+- **persistance**: Reprendre le scan et les plans apres un redemarrage
+  ([`6d5f721`](https://github.com/gsoulat/sortilege/commit/6d5f72126103d19e167ce85543d2f42759e15f34))
+
+Scan et plans ne vivaient qu'en memoire. Un redemarrage du conteneur — donc chaque mise a jour
+  d'image — remettait tout a zero : plusieurs minutes de disque a rouvrir mille conteneurs avec
+  ffprobe, puis des centaines d'appels a TMDB, pour reconstruire exactement ce qu'on venait de
+  perdre. Sur une bibliotheque reelle cela suffit a rendre l'outil penible.
+
+Les deux etats sont maintenant ecrits dans la base SQLite qui vit deja dans le volume monte, et
+  relus au demarrage. L'avancement du traitement par lots en fait partie : sans les chemins deja
+  planifies, « Traiter les 100 suivants » repartirait du premier lot au lieu d'avancer.
+
+Deux precautions structurent le module :
+
+**Un instantane est une vue, pas une verite.** Entre l'enregistrement et la relecture, un fichier a
+  pu etre deplace ou supprime par autre chose. Rien n'est tenu pour acquis : un plan relu est
+  verifie a l'application comme n'importe quel plan frais. La reprise economise du calcul, elle ne
+  court-circuite aucun controle.
+
+**Un format qui ne se relit pas se jette.** Le schema porte un numero ; toute divergence — version
+  anterieure, champ disparu, decision inconnue — ramene a « pas d'instantane ». Perdre une reprise
+  est un desagrement, ne plus demarrer est une panne.
+
+L'encodage est ecrit a la main plutot que derive des dataclasses. C'est volontaire : un champ oublie
+  par un encodage automatique ne leverait rien, il reviendrait a sa valeur par defaut et le plan
+  repris serait subtilement faux — un fichier deplace au mauvais endroit sans que rien ne l'ait
+  signale. Les tests verifient donc l'aller-retour de ce qui coute cher : la sonde ffprobe, les
+  sous-titres accompagnants, les candidats alternatifs, et le fait qu'un choix humain reste un choix
+  humain.
+
+25 tests, dont la reprise reelle a travers la base.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.24.0 (2026-09-08)
 
 ### Bug Fixes
