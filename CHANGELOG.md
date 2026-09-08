@@ -1,6 +1,62 @@
 # CHANGELOG
 
 
+## v0.10.0 (2026-09-08)
+
+### Features
+
+- Compagnons, nettoyage en corbeille, et correction d'une ruee sur le cache
+  ([`2016c9b`](https://github.com/gsoulat/sortilege/commit/2016c9b1969ba3732faff93cdc1dc323dc97f2b0))
+
+Compagnons ---------- Seul le fichier video etait deplace : les sous-titres restaient en arriere.
+  Perte de donnees silencieuse — Jellyfin affiche un film sans VOSTFR et personne ne s'en apercoit
+  avant de lancer la lecture.
+
+Les sous-titres et les jaquettes suivent desormais la video en etant renommes comme elle. Le suffixe
+  distinctif est preserve (« .fr.srt », « .eng.forced.srt ») sans quoi deux pistes se recouvriraient
+  sous le meme nom. Une jaquette au nom canonique (poster.jpg) n'est emportee que si la video est
+  seule dans son dossier : sinon elle n'appartient a personne en particulier.
+
+Nettoyage --------- Les restes de release vont dans une corbeille datee sous la racine de
+  bibliotheque. RIEN N'EST JAMAIS SUPPRIME, hormis les dossiers devenus vides — un dossier vide ne
+  contient rien a recuperer.
+
+La liste des dechets reconnus est volontairement CONSERVATRICE : tout ce qui n'y figure pas reste en
+  place. Oublier un dechet coute un peu de desordre ; evacuer un fichier qui comptait coute bien
+  plus.
+
+L'annulation ramene tout : video, compagnons et restes. Chaque deplacement est journalise
+  separement, une annulation partielle serait pire que pas d'annulation du tout.
+
+Ruee sur le cache ----------------- Trouve en MESURANT le volume de requetes plutot qu'en le
+  supposant : 96 recherches pour 6 series. Le cache existait mais n'etait rempli QU'APRES la reponse
+  ; les 96 fichiers etant traites en parallele, tous consultaient le cache avant la premiere
+  reponse, tous manquaient, et tous partaient. Le cache ne servait qu'aux scans suivants.
+
+SingleFlight deduplique les requetes identiques en vol : le premier appelant lance, les suivants
+  attendent la meme tache. 6 requetes au lieu de 96, verifie au niveau du transport HTTP sur le vrai
+  fournisseur — une imitation contournerait justement les caches qu'on veut tester.
+
+Deux autres reductions du meme ordre : une saison entiere est recuperee en une requete au lieu d'une
+  par episode (400 requetes -> 60 sur une bibliotheque reelle), et les sagas de films sont mises en
+  cache.
+
+Ajout d'un limiteur de debit a 20 requetes/seconde. Le semaphore bornait les appels SIMULTANES, pas
+  le debit : six requetes concurrentes de 50 ms enchainees font 120 requetes par seconde.
+
+Titre des series ---------------- « Avatar The Last Airbender 2024 » gardait l'annee dans le titre —
+  vu sur une vraie bibliotheque. Pour un film le titre est coupe a l'annee, mais pour un episode il
+  est coupe au motif SxxExx, donc une annee placee avant restait collee et faisait echouer la
+  recherche. Elle est retiree, sauf si elle EST le titre (« 2012 »).
+
+Interface --------- Explorateur de dossiers pour choisir les destinations par type, extrait en
+  composant reutilisable partage avec le selecteur de sources. Le chemin choisi est converti en
+  relatif a la racine de bibliotheque, et un dossier hors de cette racine est refuse avec le motif —
+  c'est elle qui garantit le confinement.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.9.1 (2026-09-08)
 
 ### Bug Fixes
