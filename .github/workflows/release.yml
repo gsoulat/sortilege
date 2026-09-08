@@ -3,11 +3,8 @@ name: Release
 on:
   push:
     branches: [main]
-  # Rattrapage manuel. Une poussee de tag peut echouer cote GitHub
-  # (« fatal error in commit_refs ») APRES que le commit de version soit
-  # parti : la release est alors a moitie faite, et relancer le workflow
-  # repart d'une base perimee. Ce declencheur reconstruit et publie l'image
-  # du dernier tag sans retoucher aux versions.
+  # Rattrapage manuel : reconstruit et republie l'image du dernier tag sans
+  # retoucher aux versions.
   workflow_dispatch:
 
 # Deux releases simultanees produiraient deux tags concurrents.
@@ -30,12 +27,19 @@ jobs:
           fetch-depth: 0        # semantic-release lit tout l'historique
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Version calculee, fichiers modifies, commit et tag faits EN LOCAL.
+      # Rien n'est pousse ici : la poussee depuis le runner echoue par
+      # intermittence cote GitHub (« remote: fatal error in commit_refs »), et
+      # tant qu'elle vivait dans cette etape son echec emportait tout le reste,
+      # y compris l'image — le seul artefact reellement deployable.
       - name: Determiner la version depuis les commits
         id: release
         if: github.event_name == 'push'
         uses: python-semantic-release/python-semantic-release@v9
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          push: "false"
+          vcs_release: "false"
 
       # Une seule variable decide de la suite, qu'on vienne d'un push ou d'un
       # rattrapage manuel : sans elle, chaque etape suivante devrait connaitre
@@ -56,17 +60,12 @@ jobs:
             echo "Aucune version a publier."
           fi
 
-      # Liee au VRAI declenchement et non a la variable commune : lors d'un
-      # rattrapage manuel, la release GitHub existe deja et son tag n'est pas
-      # dans les sorties de l'etape precedente, qui n'a pas tourne.
-      - name: Publier la release GitHub
-        if: steps.release.outputs.released == 'true'
-        uses: python-semantic-release/publish-action@v9
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ steps.release.outputs.tag }}
-
-      # --- Image Docker, uniquement si une version a ete produite ---
+      # --- Image Docker ------------------------------------------------------
+      #
+      # AVANT la poussee git, deliberement. L'image se construit depuis l'arbre
+      # de travail, qui porte deja la version bumpee. Un incident cote GitHub
+      # sur la poussee des refs ne coute donc plus l'image : c'est elle qu'on
+      # deploie, et la refaire coute un build multi-architecture complet.
 
       - uses: docker/setup-qemu-action@v3
         if: steps.target.outputs.publish == 'true'
@@ -105,3 +104,45 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # --- Poussee des refs --------------------------------------------------
+
+      - name: Pousser le commit de version et son tag
+        id: push
+        if: steps.release.outputs.released == 'true'
+        continue-on-error: true
+        run: |
+          # Trois tentatives espacees : l'erreur observee est transitoire cote
+          # serveur, pas un refus. Une tentative unique faisait dependre la
+          # release d'un alea qu'on ne controle pas.
+          for attempt in 1 2 3; do
+            if git push --follow-tags origin "HEAD:${GITHUB_REF_NAME}"; then
+              echo "pushed=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "::warning::poussee refusee (tentative $attempt/3), nouvel essai"
+            sleep $((attempt * 15))
+            # Un autre commit a pu arriver entre-temps : on rejoue par-dessus
+            # plutot que d'ecraser.
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+          done
+          echo "pushed=false" >> "$GITHUB_OUTPUT"
+          exit 1
+
+      - name: Publier la release GitHub
+        if: steps.push.outputs.pushed == 'true'
+        uses: python-semantic-release/publish-action@v9
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ steps.release.outputs.tag }}
+
+      # Le job ne doit pas passer au vert quand le depot n'a pas recu son tag :
+      # la meme version serait recalculee au commit suivant, sans qu'on
+      # comprenne pourquoi elle n'a pas bouge.
+      - name: Signaler une poussee impossible
+        if: steps.release.outputs.released == 'true' && steps.push.outputs.pushed != 'true'
+        run: |
+          echo "::error::Image ${{ steps.target.outputs.version }} publiee sur GHCR," \
+               "mais le commit de version et le tag n'ont pas pu etre pousses." \
+               "Depuis un poste : git pull, puis git push --follow-tags origin main."
+          exit 1
