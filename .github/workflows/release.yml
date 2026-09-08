@@ -3,6 +3,12 @@ name: Release
 on:
   push:
     branches: [main]
+  # Rattrapage manuel. Une poussee de tag peut echouer cote GitHub
+  # (« fatal error in commit_refs ») APRES que le commit de version soit
+  # parti : la release est alors a moitie faite, et relancer le workflow
+  # repart d'une base perimee. Ce declencheur reconstruit et publie l'image
+  # du dernier tag sans retoucher aux versions.
+  workflow_dispatch:
 
 # Deux releases simultanees produiraient deux tags concurrents.
 concurrency:
@@ -26,10 +32,33 @@ jobs:
 
       - name: Determiner la version depuis les commits
         id: release
+        if: github.event_name == 'push'
         uses: python-semantic-release/python-semantic-release@v9
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
+      # Une seule variable decide de la suite, qu'on vienne d'un push ou d'un
+      # rattrapage manuel : sans elle, chaque etape suivante devrait connaitre
+      # les deux cas.
+      - name: Version a publier
+        id: target
+        run: |
+          if [ "${{ steps.release.outputs.released }}" = "true" ]; then
+            echo "version=${{ steps.release.outputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          elif [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            latest=$(git describe --tags --abbrev=0 | sed 's/^v//')
+            echo "version=$latest" >> "$GITHUB_OUTPUT"
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "Rattrapage : republication de la version $latest"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "Aucune version a publier."
+          fi
+
+      # Liee au VRAI declenchement et non a la variable commune : lors d'un
+      # rattrapage manuel, la release GitHub existe deja et son tag n'est pas
+      # dans les sorties de l'etape precedente, qui n'a pas tourne.
       - name: Publier la release GitHub
         if: steps.release.outputs.released == 'true'
         uses: python-semantic-release/publish-action@v9
@@ -40,13 +69,13 @@ jobs:
       # --- Image Docker, uniquement si une version a ete produite ---
 
       - uses: docker/setup-qemu-action@v3
-        if: steps.release.outputs.released == 'true'
+        if: steps.target.outputs.publish == 'true'
 
       - uses: docker/setup-buildx-action@v3
-        if: steps.release.outputs.released == 'true'
+        if: steps.target.outputs.publish == 'true'
 
       - name: Connexion a GHCR
-        if: steps.release.outputs.released == 'true'
+        if: steps.target.outputs.publish == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -54,18 +83,18 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Metadonnees de l'image
-        if: steps.release.outputs.released == 'true'
+        if: steps.target.outputs.publish == 'true'
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}},value=${{ steps.release.outputs.version }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ steps.release.outputs.version }}
+            type=semver,pattern={{version}},value=${{ steps.target.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ steps.target.outputs.version }}
             type=raw,value=latest
 
       - name: Construire et publier
-        if: steps.release.outputs.released == 'true'
+        if: steps.target.outputs.publish == 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
