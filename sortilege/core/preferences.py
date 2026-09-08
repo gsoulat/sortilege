@@ -42,6 +42,31 @@ class PreferenceError(ValueError):
 
 
 @dataclass
+class AISettings:
+    """Choix du fournisseur IA, modifiable depuis l'interface.
+
+    La cle vit ici et non dans l'environnement : changer de fournisseur ne doit
+    pas imposer de modifier la stack et de redemarrer. Elle n'est JAMAIS
+    renvoyee au navigateur — l'API n'expose qu'un booleen « configuree ».
+    """
+
+    enabled: bool = False
+    provider: str = "anthropic"
+    model: str = ""
+    """Vide = le modele par defaut du fournisseur."""
+
+    base_url: str = ""
+    """Vide = l'URL connue du fournisseur. A renseigner pour « custom »."""
+
+    api_key: str = ""
+    threshold: float = 0.80
+    """En dessous de ce score, le resolveur est sollicite. Au-dessus, le
+    resultat deterministe est deja bon : payer un appel n'apporterait rien."""
+
+    batch_size: int = 12
+
+
+@dataclass
 class Preferences:
     """Ce que l'utilisateur choisit, par opposition a ce que l'admin deploie."""
 
@@ -65,6 +90,8 @@ class Preferences:
 
     templates: dict[str, str] = field(default_factory=dict)
     """Gabarit par type. Vide = celui du prereglage Jellyfin."""
+
+    ai: AISettings = field(default_factory=AISettings)
 
     def template_for(self, kind: str) -> str:
         return self.templates.get(kind) or PRESETS["jellyfin"].get(kind, "")
@@ -118,6 +145,7 @@ class PreferenceStore:
                 enabled_sources=list(raw.get("enabled_sources") or []),
                 destinations={**DEFAULT_DESTINATIONS, **(raw.get("destinations") or {})},
                 templates=dict(raw.get("templates") or {}),
+                ai=AISettings(**{**asdict(AISettings()), **(raw.get("ai") or {})}),
             )
             return self._cache
 
@@ -222,6 +250,20 @@ class PreferenceStore:
                 resolve_within(self._library_root, sub)
             except PathConfinementError as exc:
                 raise PreferenceError(f"destination refusee pour « {kind} » : {exc}") from exc
+
+        from .ai import BY_KEY
+
+        if prefs.ai.provider not in BY_KEY:
+            raise PreferenceError(f"fournisseur IA inconnu : {prefs.ai.provider}")
+        if not 0.0 <= prefs.ai.threshold <= 1.0:
+            raise PreferenceError("le seuil IA doit etre compris entre 0 et 1")
+        if prefs.ai.base_url and not prefs.ai.base_url.startswith(("http://", "https://")):
+            raise PreferenceError("l'URL du service IA doit commencer par http:// ou https://")
+        if prefs.ai.provider == "custom" and prefs.ai.enabled and not prefs.ai.base_url:
+            raise PreferenceError(
+                "un fournisseur « Autre » demande une URL de base : sans elle, "
+                "on ne sait pas qui appeler."
+            )
 
         for kind, tpl in prefs.templates.items():
             if kind not in KINDS:

@@ -18,13 +18,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
 from ..providers.anilist import AniListProvider
 from ..providers.base import Candidate
 from ..providers.tmdb import TMDBProvider
-from .ai_resolver import AIProposal, AmbiguousItem
+from .ai import AIProposal, AmbiguousItem
 from .matching import MatchResult, best_match, build_signals
 from .parser import MediaKind, ParsedName
 from .planner import Plan, build_plan
@@ -52,6 +53,7 @@ class Pipeline:
         policy: Policy,
         ai=None,
         ai_batch_size: int = 12,
+        ai_threshold: float = 0.80,
     ) -> None:
         self._tmdb = tmdb
         self._anilist = anilist
@@ -60,6 +62,7 @@ class Pipeline:
         self._policy = policy
         self._ai = ai
         self._ai_batch_size = max(1, ai_batch_size)
+        self._ai_threshold = ai_threshold
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
     async def aclose(self) -> None:
@@ -248,16 +251,40 @@ class Pipeline:
             ]
         return plan
 
-    async def plan_all(self, files: list[ScannedFile]) -> list[Plan]:
+    async def plan_all(
+        self,
+        files: list[ScannedFile],
+        on_progress: Callable[[int, int, str], None] | None = None,
+    ) -> list[Plan]:
         """Planifie un lot. Les fichiers deja ranges sont ignores.
 
         Les rescanner produirait des plans « deplacer X vers X » : du bruit
         dans la file de revue, et des entrees vides au journal d'annulation.
         """
         todo = [f for f in files if not f.in_library and f.skipped_reason is None]
-        plans = list(await asyncio.gather(*(self.plan_one(f) for f in todo)))
+        total = len(todo)
+        done = 0
+
+        async def one(scanned: ScannedFile) -> Plan:
+            nonlocal done
+            plan = await self.plan_one(scanned)
+            done += 1
+            if on_progress:
+                # Le nom du fichier TERMINE, pas celui en cours : avec six
+                # taches en parallele, « en cours » n'aurait pas de sens unique.
+                on_progress(done, total, scanned.path.name)
+            return plan
+
+        if on_progress:
+            on_progress(0, total, "")
+
+        plans = list(await asyncio.gather(*(one(f) for f in todo)))
 
         if self._ai is not None:
+            # La seconde passe n'a pas d'avancement fin : c'est un ou deux
+            # appels groupes. On annonce la phase plutot que de figer la barre.
+            if on_progress:
+                on_progress(done, total, "seconde passe IA…")
             plans = await self._second_pass(todo, plans)
 
         return plans
@@ -274,7 +301,11 @@ class Pipeline:
         pending = [
             (index, f)
             for index, (f, p) in enumerate(zip(files, plans, strict=True))
-            if p.decision is not Decision.AUTO
+            # Seuil dedie plutot que « tout ce qui n'est pas automatique » :
+            # entre le seuil IA et le seuil d'application, le score est deja
+            # bon et une revue humaine suffit. Payer un appel la n'apporterait
+            # rien.
+            if p.decision is not Decision.AUTO and p.score < self._ai_threshold
         ]
         if not pending:
             return plans

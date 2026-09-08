@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import SourcePicker from './SourcePicker.vue'
 import FolderBrowser from './FolderBrowser.vue'
+import AiSettings from './AiSettings.vue'
 
 const KIND_LABELS = { movie: 'Films', episode: 'Séries TV', anime: 'Animes' }
 
@@ -20,6 +21,14 @@ const dirty = ref(false)
 function onSourceChange(patch) {
   Object.assign(prefs.value, patch)
   save()
+}
+
+// Les réglages IA s'enregistrent au changement : ce sont des choix discrets
+// (un fournisseur, un seuil), pas une saisie qu'on affine caractère par
+// caractère comme un chemin.
+function onAiChange(patch) {
+  Object.assign(prefs.value.ai, patch)
+  save({ ai: patch })
 }
 
 function setDestination(kind, value) {
@@ -66,7 +75,7 @@ async function load() {
   prefs.value = await (await fetch('/api/settings/preferences')).json()
 }
 
-async function save() {
+async function save(extra = {}) {
   saving.value = true
   saveError.value = null
   saved.value = false
@@ -80,6 +89,10 @@ async function save() {
       enabled_sources: prefs.value.enabled_sources,
       destinations: prefs.value.destinations,
       templates: {},
+      // Le bloc IA n'est envoyé QUE lorsqu'il change, et sous forme de patch :
+      // la clé n'étant jamais renvoyée par le serveur, un envoi systématique
+      // de l'état complet l'écraserait par une chaîne vide.
+      ...extra,
     }
     const res = await fetch('/api/settings/preferences', {
       method: 'PUT',
@@ -162,6 +175,8 @@ onMounted(load)
 
     <!-- ========== Lecture seule : le déploiement ========== -->
 
+    <AiSettings :ai="prefs.ai" :providers="prefs.ai_providers" @change="onAiChange" />
+
     <p class="lead">
       Ce qui suit décrit le <strong>déploiement</strong> et vient de l'environnement.
       Ces valeurs doivent correspondre aux volumes du conteneur, les modifier depuis
@@ -189,29 +204,9 @@ onMounted(load)
           <dd>entre <code>{{ s.behaviour.reject_threshold }}</code> et <code>{{ s.behaviour.auto_apply_threshold }}</code></dd>
           <dt>Rejet</dt>
           <dd>score &lt; <code>{{ s.behaviour.reject_threshold }}</code></dd>
-          <dt>Mode simulation</dt>
-          <dd>
-            <span :class="s.behaviour.dry_run ? 'on' : 'off'">
-              {{ s.behaviour.dry_run ? 'actif — rien n\'est déplacé' : 'désactivé — les fichiers bougent' }}
-            </span>
-          </dd>
         </dl>
       </section>
 
-      <section>
-        <h3>Résolveur IA</h3>
-        <dl>
-          <dt>État</dt>
-          <dd>
-            <span :class="s.ai.enabled ? 'on' : 'off'">{{ s.ai.enabled ? 'activé' : 'désactivé' }}</span>
-            <span v-if="s.ai.enabled && !s.ai.configured" class="warn"> — clé absente</span>
-          </dd>
-          <dt>Modèle</dt>
-          <dd><code>{{ s.ai.model }}</code></dd>
-          <dt>Taille de lot</dt>
-          <dd>{{ s.ai.batch_size }} fichiers par appel</dd>
-        </dl>
-      </section>
     </div>
 
     <section>

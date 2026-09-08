@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 from helpers import FakeTMDB, big_file, cand
 
-from sortilege.core.ai_resolver import AIProposal
+from sortilege.core.ai import AIProposal
 from sortilege.core.pipeline import Pipeline
 from sortilege.core.scanner import scan
 from sortilege.core.scoring import Decision, Policy

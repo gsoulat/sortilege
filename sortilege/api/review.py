@@ -8,6 +8,8 @@ durable — ce qui a REELLEMENT ete deplace — vit dans le journal sur disque.
 from __future__ import annotations
 
 import logging
+import time
+from dataclasses import dataclass
 from threading import Lock
 
 from fastapi import APIRouter, HTTPException
@@ -56,25 +58,17 @@ class UndoRequest(BaseModel):
 
 
 def _ai_resolver():
-    """Construit le resolveur, ou None s'il n'est pas utilisable.
+    """Construit le resolveur choisi dans les reglages, ou None.
 
-    L'import est tardif : le paquet `anthropic` est une dependance optionnelle,
-    et une installation sans lui doit fonctionner normalement plutot que de
-    planter a l'import du module.
+    Renvoyer None plutot que lever : un resolveur mal configure doit degrader
+    vers la revue manuelle, pas empecher un calcul de plans.
     """
-    conf = get_settings()
-    if not conf.ai_enabled or not conf.anthropic_api_key:
-        return None
-    try:
-        from ..core.ai_resolver import AIResolver
+    from ..core.ai import build_resolver
 
-        return AIResolver(conf.anthropic_api_key, conf.ai_model)
-    except ImportError:
-        logger.warning(
-            "SORTILEGE_AI_ENABLED=true mais le paquet `anthropic` est absent ; "
-            "resolveur IA desactive"
-        )
+    ai = get_store().load().ai
+    if not ai.enabled:
         return None
+    return build_resolver(ai.provider, ai.api_key, ai.model, ai.base_url)
 
 
 def _plan_out(plan: Plan) -> dict[str, object]:
@@ -109,6 +103,56 @@ def _plan_out(plan: Plan) -> dict[str, object]:
     }
 
 
+@dataclass
+class PlanJob:
+    """Avancement du calcul des plans.
+
+    Meme raison que pour le scan : sur 426 fichiers l'operation dure des
+    minutes — recherches TMDB, titres d'episodes, eventuelle passe IA — et un
+    bouton fige ne dit pas si l'outil travaille ou s'il est bloque.
+    """
+
+    running: bool = False
+    processed: int = 0
+    total: int = 0
+    current: str = ""
+    started_at: float = 0.0
+    finished_at: float = 0.0
+    error: str | None = None
+
+    @property
+    def elapsed(self) -> float:
+        if not self.started_at:
+            return 0.0
+        return (self.finished_at or time.monotonic()) - self.started_at
+
+    @property
+    def eta_seconds(self) -> float | None:
+        if not self.running or self.processed <= 0 or self.total <= 0:
+            return None
+        return max(0.0, (self.elapsed / self.processed) * (self.total - self.processed))
+
+
+_job = PlanJob()
+
+
+def _plan_status() -> dict[str, object]:
+    return {
+        "running": _job.running,
+        "processed": _job.processed,
+        "total": _job.total,
+        "current": _job.current,
+        "elapsed": round(_job.elapsed, 1),
+        "eta": round(_job.eta_seconds, 1) if _job.eta_seconds is not None else None,
+        "error": _job.error,
+    }
+
+
+@router.get("/plan/status")
+def plan_status() -> dict[str, object]:
+    return _plan_status()
+
+
 @router.post("/plan")
 async def build_plans() -> dict[str, object]:
     """Confronte le dernier scan aux fournisseurs et calcule les plans."""
@@ -139,13 +183,34 @@ async def build_plans() -> dict[str, object]:
             reject_threshold=conf.reject_threshold,
         ),
         ai=_ai_resolver(),
-        ai_batch_size=conf.ai_batch_size,
+        ai_batch_size=prefs.ai.batch_size,
+        ai_threshold=prefs.ai.threshold,
     )
 
+    def progress(processed: int, total: int, name: str) -> None:
+        _job.processed = processed
+        _job.total = total
+        _job.current = name
+
+    _job.running = True
+    _job.processed = 0
+    _job.total = 0
+    _job.current = ""
+    _job.error = None
+    _job.started_at = time.monotonic()
+    _job.finished_at = 0.0
+
     try:
-        plans = await pipeline.plan_all(scan.files)
+        plans = await pipeline.plan_all(scan.files, on_progress=progress)
+    except Exception as exc:
+        _job.error = f"{type(exc).__name__}: {exc}"
+        logger.exception("le calcul des plans a echoue")
+        raise HTTPException(status_code=500, detail=_job.error) from exc
     finally:
         await pipeline.aclose()
+        _job.running = False
+        _job.finished_at = time.monotonic()
+        _job.current = ""
 
     with _lock:
         _plans.clear()

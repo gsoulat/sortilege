@@ -9,6 +9,20 @@ const message = ref(null)
 const error = ref(null)
 const results = ref(null)
 const selected = ref(new Set())
+const progress = ref(null)
+
+const percent = computed(() => {
+  const p = progress.value
+  if (!p || !p.total) return 0
+  return Math.min(100, Math.round((p.processed / p.total) * 100))
+})
+
+function humanDuration(seconds) {
+  if (seconds == null) return null
+  if (seconds < 60) return `${Math.round(seconds)} s`
+  const m = Math.floor(seconds / 60)
+  return `${m} min ${String(Math.round(seconds % 60)).padStart(2, '0')}`
+}
 
 const hasPlans = computed(() => (data.value?.counts?.auto ?? 0) + (data.value?.counts?.review ?? 0) > 0)
 
@@ -31,14 +45,36 @@ async function call(url, body = null) {
   return parsed
 }
 
+/**
+ * Le calcul interroge TheMovieDB pour chaque œuvre : sur une vraie
+ * bibliothèque cela dure des minutes. On suit son avancement au lieu de figer
+ * le bouton — la requête reste ouverte, mais le serveur répond en parallèle.
+ */
+let poller = null
+
 async function plan() {
   planning.value = true
   results.value = null
+  progress.value = null
+
+  poller = setInterval(async () => {
+    try {
+      const status = await (await fetch('/api/review/plan/status')).json()
+      progress.value = status
+      if (!status.running && status.total) clearInterval(poller)
+    } catch {
+      clearInterval(poller)
+    }
+  }, 700)
+
   try {
     const out = await call('/api/review/plan')
     if (out) data.value = out
   } finally {
+    clearInterval(poller)
+    poller = null
     planning.value = false
+    progress.value = null
   }
 }
 
@@ -174,6 +210,19 @@ onMounted(load)
         class="undo"
         @click="undo(data.journal_size)"
       >Tout annuler ({{ data.journal_size }})</button>
+    </div>
+
+    <div v-if="planning && progress?.total" class="progress">
+      <div class="bar"><div class="fill" :style="{ width: percent + '%' }"></div></div>
+      <div class="stats">
+        <span class="phase">{{ progress.processed }} / {{ progress.total }}</span>
+        <span class="pct">{{ percent }} %</span>
+        <span v-if="progress.eta != null" class="eta">
+          environ {{ humanDuration(progress.eta) }} restantes
+        </span>
+        <span class="elapsed">{{ humanDuration(progress.elapsed) }} écoulées</span>
+      </div>
+      <div v-if="progress.current" class="current">{{ progress.current }}</div>
     </div>
 
     <p v-if="error" class="err-msg">{{ error }}</p>
@@ -365,6 +414,16 @@ button.primary {
 .err-msg, .ok-msg { margin: 0; font-size: 13px; border-radius: 7px; padding: 9px 12px; }
 .err-msg { color: var(--err); background: color-mix(in srgb, var(--err) 8%, transparent); border: 1px solid color-mix(in srgb, var(--err) 30%, transparent); }
 .ok-msg { color: var(--ok); background: color-mix(in srgb, var(--ok) 8%, transparent); border: 1px solid color-mix(in srgb, var(--ok) 25%, transparent); }
+
+/* --- Progression du calcul --- */
+.progress { background: var(--surface); border: 1px solid var(--accent-dim); border-radius: 9px; padding: 12px 14px; }
+.bar { height: 4px; border-radius: 2px; overflow: hidden; background: var(--surface-2); margin-bottom: 9px; }
+.fill { height: 100%; background: var(--accent); transition: width .4s ease; }
+.stats { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; font-size: 12.5px; }
+.stats .phase { font-family: var(--mono); color: var(--text); }
+.stats .pct { font-family: var(--mono); color: var(--accent); }
+.stats .eta, .stats .elapsed { color: var(--text-faint); font-size: 11.5px; }
+.current { margin-top: 6px; font-family: var(--mono); font-size: 11px; color: var(--text-faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .group {
   background: var(--surface); border: 1px solid var(--border);

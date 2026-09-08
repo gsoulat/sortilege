@@ -16,15 +16,32 @@ navigateur.
 
 from __future__ import annotations
 
+from dataclasses import asdict
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..config import get_settings
-from ..core.preferences import KINDS, PreferenceError, Preferences
+from ..core.ai import PROVIDERS
+from ..core.preferences import KINDS, AISettings, PreferenceError, Preferences
 from ..core.probe import ffprobe_available
 from .deps import get_store
 
 router = APIRouter(prefix="/api/settings", tags=["reglages"])
+
+
+class AIIn(BaseModel):
+    enabled: bool | None = None
+    provider: str | None = None
+    model: str | None = None
+    base_url: str | None = None
+    threshold: float | None = None
+    batch_size: int | None = None
+
+    api_key: str | None = None
+    """Ecriture seule. Absent ou vide = on conserve la cle existante, ce qui
+    permet de modifier le modele ou le seuil sans avoir a la ressaisir — et
+    sans qu'elle ait a transiter une seconde fois."""
 
 
 class PreferencesIn(BaseModel):
@@ -32,6 +49,7 @@ class PreferencesIn(BaseModel):
     enabled_sources: list[str] | None = None
     destinations: dict[str, str] = Field(default_factory=dict)
     templates: dict[str, str] = Field(default_factory=dict)
+    ai: AIIn | None = None
 
 
 @router.get("/preferences")
@@ -60,6 +78,28 @@ def read_preferences() -> dict[str, object]:
         ],
         "library_root": str(conf.library_root),
         "resolved_destinations": {k: str(store.destination_root(k)) for k in KINDS},
+        "ai": {
+            "enabled": prefs.ai.enabled,
+            "provider": prefs.ai.provider,
+            "model": prefs.ai.model,
+            "base_url": prefs.ai.base_url,
+            "threshold": prefs.ai.threshold,
+            "batch_size": prefs.ai.batch_size,
+            # La cle ne sort jamais : cette reponse finit dans la console du
+            # navigateur et dans son cache.
+            "api_key_set": bool(prefs.ai.api_key),
+        },
+        "ai_providers": [
+            {
+                "key": p.key,
+                "label": p.label,
+                "base_url": p.base_url,
+                "default_model": p.default_model,
+                "needs_key": p.needs_key,
+                "hint": p.hint,
+            }
+            for p in PROVIDERS
+        ],
     }
 
 
@@ -70,6 +110,16 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
 
     # None = « ne touche pas a ce champ ». Une liste vide reste une valeur
     # significative (aucune source ajoutee, ou toutes les sources activees).
+    ai = current.ai
+    if body.ai is not None:
+        patch = body.ai.model_dump(exclude_none=True)
+        # Une cle vide signifie « ne change pas », pas « efface » : l'interface
+        # renvoie le formulaire entier a chaque enregistrement et ne connait
+        # pas la valeur actuelle.
+        if not patch.get("api_key"):
+            patch.pop("api_key", None)
+        ai = AISettings(**{**asdict(current.ai), **patch})
+
     merged = Preferences(
         custom_sources=(
             current.custom_sources if body.custom_sources is None else body.custom_sources
@@ -79,6 +129,7 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
         ),
         destinations={**current.destinations, **body.destinations},
         templates={**current.templates, **body.templates},
+        ai=ai,
     )
 
     try:
