@@ -42,8 +42,6 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             logger.error("configuration invalide : %s", p)
         raise RuntimeError("configuration invalide — voir les erreurs ci-dessus")
 
-    if conf.dry_run:
-        logger.info("MODE SIMULATION actif : aucun fichier ne sera deplace")
     if not ffprobe_available():
         logger.warning("ffprobe absent : duree et tags des conteneurs non lisibles")
 
@@ -93,7 +91,6 @@ def health() -> dict[str, object]:
     conf = get_settings()
     return {
         "status": "ok",
-        "dry_run": conf.dry_run,
         "ai_enabled": conf.ai_enabled,
         "ffprobe": ffprobe_available(),
     }

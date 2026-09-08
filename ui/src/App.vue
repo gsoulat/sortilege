@@ -86,10 +86,6 @@ onUnmounted(() => {
 
       <div class="status">
         <template v-if="health && health.status !== 'unreachable'">
-          <span v-if="health.dry_run" class="badge warn" title="Aucun fichier ne sera déplacé">
-            simulation
-          </span>
-          <span v-else class="badge live">actif</span>
           <span v-if="health.ffprobe === false" class="badge warn" title="Durée et tags non lisibles">
             sans ffprobe
           </span>

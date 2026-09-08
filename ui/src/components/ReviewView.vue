@@ -58,11 +58,7 @@ async function apply(ids, { includeReview = false, dryRun = true } = {}) {
     if (!out) return
 
     results.value = out
-    if (out.locked) {
-      message.value =
-        `Exécution refusée : SORTILEGE_DRY_RUN=true verrouille cette instance. ` +
-        `Résultat de la simulation : ${out.applied} déplacement(s) possible(s).`
-    } else if (out.dry_run) {
+    if (out.dry_run) {
       message.value = `Simulation : ${out.applied} déplacement(s) possible(s), ${out.failed} bloqué(s).`
     } else {
       message.value = `${out.applied} fichier(s) rangé(s), ${out.failed} en échec.`
@@ -173,9 +169,6 @@ onMounted(load)
       <button class="primary" :disabled="planning" @click="plan">
         {{ planning ? 'Identification en cours…' : 'Calculer les plans' }}
       </button>
-      <span v-if="data.dry_run_locked" class="badge warn" title="SORTILEGE_DRY_RUN=true">
-        verrouillé — l'exécution est refusée par la configuration
-      </span>
       <button
         v-if="data.journal_size"
         class="undo"

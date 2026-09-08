@@ -45,9 +45,10 @@ class ApplyRequest(BaseModel):
     """Simuler plutot que deplacer.
 
     Par defaut a True : une requete qui omettrait ce champ simule, elle ne
-    deplace pas. Le defaut d'une operation irreversible doit etre l'inaction.
-
-    SORTILEGE_DRY_RUN peut forcer la simulation mais jamais l'inverse."""
+    deplace pas. Le defaut d'une operation irreversible doit etre l'inaction —
+    c'est la seule protection dont on ait besoin, et elle ne peut pas se
+    desynchroniser de l'interface comme le faisait une variable
+    d'environnement."""
 
 
 class UndoRequest(BaseModel):
@@ -172,7 +173,6 @@ def _queue() -> dict[str, object]:
         "auto": [_plan_out(p) for p in by_decision[Decision.AUTO]],
         "items": [_plan_out(p) for p in by_decision[Decision.REVIEW]],
         "rejected": [_plan_out(p) for p in by_decision[Decision.REJECT]],
-        "dry_run_locked": conf.dry_run,
         "policy": {
             "auto_apply_threshold": conf.auto_apply_threshold,
             "reject_threshold": conf.reject_threshold,
@@ -227,10 +227,7 @@ def apply(body: ApplyRequest) -> dict[str, object]:
     # au lieu d'etre deplace.
     trash_root = conf.library_root / TRASH_DIRNAME
 
-    # La variable d'environnement ne peut que RENFORCER la simulation, jamais
-    # l'inverse : un verrou pose volontairement sur une instance ne doit pas
-    # etre contournable par un clic dans l'interface.
-    simulate = body.dry_run or conf.dry_run
+    simulate = body.dry_run
 
     results = [apply_plan(p, journal, dry_run=simulate, trash_root=trash_root) for p in selected]
 
@@ -244,10 +241,6 @@ def apply(body: ApplyRequest) -> dict[str, object]:
 
     return {
         "dry_run": simulate,
-        # L'utilisateur a demande une execution mais la configuration l'a
-        # refusee : sans ce drapeau, l'interface annoncerait une simulation
-        # sans dire pourquoi.
-        "locked": conf.dry_run and not body.dry_run,
         "applied": sum(1 for r in results if r.ok),
         "failed": sum(1 for r in results if not r.ok),
         "results": [

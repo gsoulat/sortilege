@@ -56,7 +56,6 @@ class Settings(BaseSettings):
     admin_password: str = ""
 
     # --- Comportement ---
-    dry_run: bool = True
     auto_apply_threshold: float = 0.92
     reject_threshold: float = 0.40
 

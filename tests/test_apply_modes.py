@@ -1,8 +1,11 @@
 """Simuler et executer sont deux boutons, pas deux deploiements.
 
-Le mode vient desormais de la requete. La variable d'environnement reste un
-VERROU : elle peut forcer la simulation, jamais l'autoriser a l'inverse — sinon
-un verrou pose volontairement sur une instance serait contourne par un clic.
+Le mode vient uniquement de la requete. Il n'y a plus de variable
+d'environnement : une configuration qui contredit l'interface est un piege, et
+c'est exactement ce qui s'est produit — un bouton « Executer » present mais
+refuse, sans que rien dans l'interface ne l'explique avant le clic.
+
+La seule protection restante est le DEFAUT de la requete : simuler.
 """
 
 from __future__ import annotations
@@ -71,8 +74,7 @@ def test_simuler_ne_deplace_rien(client: TestClient, un_plan) -> None:
     assert un_plan.source.is_file()
 
 
-def test_executer_deplace(client: TestClient, un_plan, monkeypatch) -> None:
-    monkeypatch.setattr(get_settings(), "dry_run", False)
+def test_executer_deplace(client: TestClient, un_plan) -> None:
     res = client.post("/api/review/apply", json={"plan_ids": ["plan-test"], "dry_run": False})
     body = res.json()
     assert body["dry_run"] is False
@@ -81,40 +83,13 @@ def test_executer_deplace(client: TestClient, un_plan, monkeypatch) -> None:
     assert un_plan.destination.is_file()
 
 
-def test_la_variable_peut_forcer_la_simulation(client: TestClient, un_plan, monkeypatch) -> None:
-    """Le verrou l'emporte sur le bouton, et le dit."""
-    monkeypatch.setattr(get_settings(), "dry_run", True)
-    res = client.post("/api/review/apply", json={"plan_ids": ["plan-test"], "dry_run": False})
-    body = res.json()
-    assert body["dry_run"] is True
-    assert body["locked"] is True
-    assert un_plan.source.is_file(), "le verrou n'a pas empeche le deplacement"
-
-
-def test_la_variable_ne_peut_pas_forcer_l_execution(
-    client: TestClient, un_plan, monkeypatch
-) -> None:
-    """L'inverse n'existe pas : dry_run=false dans l'environnement ne doit pas
-    transformer un clic sur « Simuler » en deplacement reel."""
-    monkeypatch.setattr(get_settings(), "dry_run", False)
-    res = client.post("/api/review/apply", json={"plan_ids": ["plan-test"], "dry_run": True})
-    assert res.json()["dry_run"] is True
-    assert un_plan.source.is_file()
-
-
 def test_une_simulation_ne_vide_pas_la_file(client: TestClient, un_plan) -> None:
     """On doit pouvoir enchainer simulation puis execution sur les memes plans."""
     client.post("/api/review/apply", json={"plan_ids": ["plan-test"], "dry_run": True})
     assert "plan-test" in review._plans
 
 
-def test_une_execution_retire_le_plan(client: TestClient, un_plan, monkeypatch) -> None:
+def test_une_execution_retire_le_plan(client: TestClient, un_plan) -> None:
     """Sa source n'existe plus : le laisser inviterait a le rejouer."""
-    monkeypatch.setattr(get_settings(), "dry_run", False)
     client.post("/api/review/apply", json={"plan_ids": ["plan-test"], "dry_run": False})
     assert "plan-test" not in review._plans
-
-
-def test_le_statut_expose_le_verrou(client: TestClient, monkeypatch) -> None:
-    monkeypatch.setattr(get_settings(), "dry_run", True)
-    assert client.get("/api/review").json()["dry_run_locked"] is True

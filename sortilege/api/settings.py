@@ -112,7 +112,6 @@ def read_settings() -> dict[str, object]:
             "library_root": str(s.library_root),
         },
         "behaviour": {
-            "dry_run": s.dry_run,
             "auto_apply_threshold": s.auto_apply_threshold,
             "reject_threshold": s.reject_threshold,
         },
@@ -197,16 +196,6 @@ def _diagnostics(s) -> list[dict[str, object]]:
             "detail": "Clé présente"
             if s.tmdb_api_key
             else "Sans clé, aucun candidat n'est proposé et rien ne peut être identifié",
-        }
-    )
-
-    checks.append(
-        {
-            "name": "Mode simulation",
-            "ok": True,
-            "detail": "Actif : aucun fichier ne sera déplacé"
-            if s.dry_run
-            else "Désactivé : les fichiers seront réellement déplacés",
         }
     )
 
