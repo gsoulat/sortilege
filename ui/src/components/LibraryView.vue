@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 
 const KIND_LABELS = { movie: 'Film', episode: 'Série', anime: 'Anime', unknown: '?' }
 
@@ -9,6 +9,13 @@ const error = ref(null)
 const deep = ref(true)
 const filter = ref('all')
 const collapsed = ref(new Set())
+const progress = ref(null)
+
+const percent = computed(() => {
+  const p = progress.value
+  if (!p || !p.total) return 0
+  return Math.min(100, Math.round((p.processed / p.total) * 100))
+})
 
 const all = computed(() => data.value?.files ?? [])
 
@@ -86,6 +93,42 @@ async function load() {
   data.value = await (await fetch('/api/library')).json()
 }
 
+/**
+ * Le scan tourne côté serveur ; on interroge son état plutôt que d'attendre
+ * une réponse qui mettrait des minutes à venir. 700 ms est un compromis :
+ * assez réactif pour que le compteur bouge visiblement, assez espacé pour ne
+ * pas saturer un NAS déjà occupé à lire des fichiers.
+ */
+let poller = null
+
+function stopPolling() {
+  if (poller) {
+    clearInterval(poller)
+    poller = null
+  }
+}
+
+async function pollStatus() {
+  try {
+    progress.value = await (await fetch('/api/library/scan/status')).json()
+  } catch {
+    stopPolling()
+    loading.value = false
+    error.value = 'Contact perdu avec le serveur pendant le scan.'
+    return
+  }
+
+  if (progress.value.error) {
+    error.value = progress.value.error
+  }
+
+  if (!progress.value.running) {
+    stopPolling()
+    loading.value = false
+    if (progress.value.has_result) await load()
+  }
+}
+
 async function runScan() {
   loading.value = true
   error.value = null
@@ -93,14 +136,24 @@ async function runScan() {
     const res = await fetch(`/api/library/scan?deep=${deep.value}`, { method: 'POST' })
     if (!res.ok) {
       error.value = (await res.json()).detail ?? 'Le scan a échoué.'
+      loading.value = false
       return
     }
-    data.value = await res.json()
+    progress.value = await res.json()
+    stopPolling()
+    poller = setInterval(pollStatus, 700)
   } catch {
     error.value = 'Impossible de joindre le serveur.'
-  } finally {
     loading.value = false
   }
+}
+
+function humanDuration(seconds) {
+  if (seconds == null) return null
+  if (seconds < 60) return `${Math.round(seconds)} s`
+  const m = Math.floor(seconds / 60)
+  const s = Math.round(seconds % 60)
+  return `${m} min ${String(s).padStart(2, '0')}`
 }
 
 function duration(seconds) {
@@ -120,7 +173,20 @@ function episodeLabel(p) {
   return null
 }
 
-onMounted(load)
+onMounted(async () => {
+  await load()
+  // Un scan peut avoir ete lance depuis un autre onglet, ou etre encore en
+  // cours apres un rechargement de page : on reprend son suivi plutot que de
+  // faire croire qu'il ne se passe rien.
+  const status = await (await fetch('/api/library/scan/status')).json()
+  if (status.running) {
+    progress.value = status
+    loading.value = true
+    poller = setInterval(pollStatus, 700)
+  }
+})
+
+onUnmounted(stopPolling)
 </script>
 
 <template>
@@ -140,6 +206,26 @@ onMounted(load)
         {{ data.total }} fichier{{ data.total > 1 ? 's' : '' }}
         <span v-if="data.skipped"> · {{ data.skipped }} ignoré{{ data.skipped > 1 ? 's' : '' }}</span>
       </div>
+    </div>
+
+    <!-- Progression : un scan profond sur une vraie bibliothèque dure des
+         minutes, il faut voir qu'il avance et sur quoi. -->
+    <div v-if="loading && progress" class="progress">
+      <div class="bar"><div class="fill" :style="{ width: percent + '%' }"></div></div>
+      <div class="stats">
+        <span v-if="progress.phase === 'recensement'" class="phase">
+          Recensement des fichiers…
+        </span>
+        <template v-else>
+          <span class="phase">{{ progress.processed }} / {{ progress.total }}</span>
+          <span class="pct">{{ percent }} %</span>
+          <span v-if="progress.eta != null" class="eta">
+            environ {{ humanDuration(progress.eta) }} restantes
+          </span>
+          <span class="elapsed">{{ humanDuration(progress.elapsed) }} écoulées</span>
+        </template>
+      </div>
+      <div v-if="progress.current" class="current">{{ progress.current }}</div>
     </div>
 
     <p v-if="error" class="error">{{ error }}</p>
@@ -248,6 +334,29 @@ button.primary {
 .toggle input { width: auto; }
 .hint { font-size: 12px; color: var(--text-faint); }
 .summary { font-size: 13px; color: var(--text-dim); }
+
+/* --- Progression --- */
+.progress {
+  background: var(--surface); border: 1px solid var(--accent-dim);
+  border-radius: 9px; padding: 12px 14px;
+}
+.bar {
+  height: 4px; border-radius: 2px; overflow: hidden;
+  background: var(--surface-2); margin-bottom: 9px;
+}
+.fill {
+  height: 100%; background: var(--accent);
+  transition: width .4s ease;
+}
+.stats { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; font-size: 12.5px; }
+.stats .phase { color: var(--text); font-family: var(--mono); }
+.stats .pct { color: var(--accent); font-family: var(--mono); }
+.stats .eta, .stats .elapsed { color: var(--text-faint); font-size: 11.5px; }
+.current {
+  margin-top: 6px; font-family: var(--mono); font-size: 11px;
+  color: var(--text-faint); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis;
+}
 
 .filters { display: flex; gap: 4px; flex-wrap: wrap; }
 .filters button { font-size: 12px; padding: 4px 10px; }

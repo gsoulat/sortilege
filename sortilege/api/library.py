@@ -1,15 +1,22 @@
 """Bibliotheque : lancer un scan et consulter ce qui a ete trouve.
 
-Le resultat est garde en memoire pour l'instant. C'est assume et temporaire :
-la persistance arrivera avec les modeles SQLModel et le journal d'annulation.
-Une bibliotheque scannee tient largement en memoire, et rien n'est encore
-applique au disque, donc rien de precieux n'est perdu au redemarrage.
+Le scan tourne en TACHE DE FOND. Une bibliotheque reelle prend plusieurs
+minutes a analyser quand ffprobe est actif ; le faire dans la requete HTTP
+laissait l'utilisateur devant un bouton fige, et surtout exposait a un
+delai d'attente du navigateur qui aurait perdu le resultat d'un travail
+pourtant termine.
+
+Le resultat est garde en memoire pour l'instant, en attendant la persistance.
+Rien de precieux ne s'y trouve : le seul etat durable — ce qui a REELLEMENT ete
+deplace — vit dans le journal sur disque.
 """
 
 from __future__ import annotations
 
 import logging
-from threading import Lock
+import time
+from dataclasses import dataclass, field
+from threading import Lock, Thread
 
 from fastapi import APIRouter, HTTPException
 
@@ -22,70 +29,162 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/library", tags=["bibliotheque"])
 
-_last_scan: ScanResult | None = None
-_last_deep: bool = True
-_lock = Lock()
+
+@dataclass
+class ScanJob:
+    """Etat d'un scan en cours ou termine."""
+
+    running: bool = False
+    processed: int = 0
+    total: int = 0
+    current: str = ""
+    phase: str = "idle"
+    started_at: float = 0.0
+    finished_at: float = 0.0
+    error: str | None = None
+    result: ScanResult | None = None
+    deep: bool = True
+    _lock: Lock = field(default_factory=Lock, repr=False)
+
+    @property
+    def elapsed(self) -> float:
+        if not self.started_at:
+            return 0.0
+        end = self.finished_at or time.monotonic()
+        return end - self.started_at
+
+    @property
+    def eta_seconds(self) -> float | None:
+        """Temps restant estime, par simple extrapolation lineaire.
+
+        Les fichiers ne coutent pas tous pareil (ffprobe depend de la taille et
+        du conteneur), donc l'estimation bouge. Elle reste bien plus utile
+        qu'aucune indication : ce que l'utilisateur veut savoir, c'est « des
+        secondes ou des minutes ».
+        """
+        if not self.running or self.processed <= 0 or self.total <= 0:
+            return None
+        rate = self.elapsed / self.processed
+        return max(0.0, rate * (self.total - self.processed))
 
 
-@router.post("/scan", response_model=ScanOut)
-def run_scan(deep: bool = True, limit: int | None = 500) -> ScanOut:
-    """Parcourt les racines sources.
+_job = ScanJob()
 
-    ``deep`` lit aussi le contenu des fichiers (ffprobe, .nfo) : bien plus
-    informatif, et bien plus lent. ``limit`` borne le nombre de fichiers pour
-    qu'un premier scan sur une grosse bibliotheque reste rapide.
+
+def last_scan() -> ScanResult | None:
+    """Dernier scan termine, pour les autres routeurs.
+
+    Un accesseur plutot qu'un import de la variable : ``from .library import
+    _job`` capturerait la valeur au moment de l'import.
     """
-    global _last_scan, _last_deep
+    return _job.result
 
-    settings = get_settings()
-    if not settings.source_roots:
-        raise HTTPException(
-            status_code=400,
-            detail="Aucune racine source configuree (SORTILEGE_SOURCE_ROOTS).",
-        )
 
-    # Les racines effectivement parcourues dependent des preferences : on peut
-    # exclure un montage reseau lent qu'on ne veut pas reparcourir a chaque fois.
-    roots = get_store().resolved_sources()
-    if not roots:
-        raise HTTPException(
-            status_code=400,
-            detail="Aucune source selectionnee. Active au moins une racine dans les réglages.",
-        )
-
-    # Un scan est du travail bloquant : deux scans concurrents doubleraient la
-    # charge disque pour un resultat identique.
-    if not _lock.acquire(blocking=False):
-        raise HTTPException(status_code=409, detail="Un scan est deja en cours.")
-
+def _run(roots, deep: bool, limit: int | None, library_root) -> None:
+    """Corps du scan, execute dans un thread."""
     try:
-        result = scan(roots, deep=deep, limit=limit, library_root=settings.library_root)
-        _last_scan = result
-        _last_deep = deep
+        _job.phase = "recensement"
+
+        def progress(processed: int, total: int, name: str) -> None:
+            _job.processed = processed
+            _job.total = total
+            _job.current = name
+            _job.phase = "analyse"
+
+        result = scan(
+            roots,
+            deep=deep,
+            limit=limit,
+            library_root=library_root,
+            on_progress=progress,
+        )
+        _job.result = result
+        _job.error = None
         logger.info(
             "scan termine : %s fichiers, %s ignores, %s erreurs",
             result.total,
             result.skipped,
             len(result.errors),
         )
-        return scan_to_out(result, deep=deep)
+    except Exception as exc:
+        # Un thread qui leve mourrait en silence : sans cette capture, l'UI
+        # attendrait indefiniment un scan qui n'existe plus.
+        logger.exception("le scan a echoue")
+        _job.error = f"{type(exc).__name__}: {exc}"
     finally:
-        _lock.release()
+        _job.running = False
+        _job.phase = "termine"
+        _job.finished_at = time.monotonic()
+        _job.current = ""
 
 
-def last_scan() -> ScanResult | None:
-    """Dernier scan, pour les autres routeurs.
+@router.post("/scan")
+def start_scan(deep: bool = True, limit: int | None = None) -> dict[str, object]:
+    """Demarre un scan et rend la main immediatement."""
+    settings = get_settings()
+    if not settings.source_roots:
+        raise HTTPException(
+            status_code=400,
+            detail="Aucune racine source configurée (SORTILEGE_SOURCE_ROOTS).",
+        )
 
-    Un accesseur plutot qu'un import de la variable : ``from .library import
-    _last_scan`` capturerait la valeur au moment de l'import, donc None pour
-    toujours.
-    """
-    return _last_scan
+    roots = get_store().resolved_sources()
+    if not roots:
+        raise HTTPException(
+            status_code=400,
+            detail="Aucune source sélectionnée. Active au moins une source dans les réglages.",
+        )
+
+    with _job._lock:
+        if _job.running:
+            # Ni une erreur ni un second scan : on renvoie l'etat du scan en
+            # cours. Cliquer deux fois doit montrer la progression, pas
+            # afficher un refus.
+            return _status()
+
+        _job.running = True
+        _job.processed = 0
+        _job.total = 0
+        _job.current = ""
+        _job.phase = "recensement"
+        _job.error = None
+        _job.started_at = time.monotonic()
+        _job.finished_at = 0.0
+        _job.deep = deep
+
+    Thread(
+        target=_run,
+        args=(roots, deep, limit, settings.library_root),
+        daemon=True,
+        name="sortilege-scan",
+    ).start()
+
+    return _status()
+
+
+@router.get("/scan/status")
+def scan_status() -> dict[str, object]:
+    return _status()
+
+
+def _status() -> dict[str, object]:
+    return {
+        "running": _job.running,
+        "phase": _job.phase,
+        "processed": _job.processed,
+        "total": _job.total,
+        "current": _job.current,
+        "elapsed": round(_job.elapsed, 1),
+        "eta": round(_job.eta_seconds, 1) if _job.eta_seconds is not None else None,
+        "error": _job.error,
+        "has_result": _job.result is not None,
+        "found": _job.result.total if _job.result else 0,
+    }
 
 
 @router.get("", response_model=ScanOut)
 def get_library() -> ScanOut:
-    """Dernier scan connu. Vide tant qu'aucun scan n'a ete lance."""
-    if _last_scan is None:
-        return ScanOut(total=0, skipped=0, errors=[], files=[], deep=_last_deep)
-    return scan_to_out(_last_scan, deep=_last_deep)
+    """Dernier scan connu. Vide tant qu'aucun scan n'a abouti."""
+    if _job.result is None:
+        return ScanOut(total=0, skipped=0, errors=[], files=[], deep=_job.deep)
+    return scan_to_out(_job.result, deep=_job.deep)

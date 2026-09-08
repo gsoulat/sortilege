@@ -9,6 +9,7 @@ comprend d'une bibliotheque avant meme de la configurer.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -98,65 +99,103 @@ def _under(path: Path, root: Path | None) -> bool:
     return resolved == root or root in resolved.parents
 
 
-def scan(
-    roots: list[Path],
-    *,
-    deep: bool = True,
-    limit: int | None = None,
-    library_root: Path | None = None,
-) -> ScanResult:
-    """Parcourt les racines et analyse chaque fichier video.
+def collect(
+    roots: list[Path], limit: int | None = None
+) -> tuple[list[tuple[Path, Path]], int, list[str]]:
+    """Recense les fichiers video sans les analyser.
 
-    ``deep`` active la lecture du fichier lui-meme (ffprobe et .nfo). C'est
-    nettement plus lent — quelques dizaines de millisecondes par fichier — donc
-    on peut le desactiver pour un apercu rapide sur une grosse bibliotheque.
+    Passe rapide et separee : elle ne fait que parcourir l'arborescence, sans
+    ffprobe ni lecture de .nfo. C'est ce qui permet d'annoncer un TOTAL avant
+    de commencer — sans lui, une barre de progression n'aurait pas de
+    denominateur et on ne pourrait afficher qu'un compteur qui monte.
     """
-    result = ScanResult()
+    found: list[tuple[Path, Path]] = []
+    skipped = 0
+    errors: list[str] = []
 
     for root in roots:
         if not root.is_dir():
-            result.errors.append(f"racine introuvable : {root}")
+            errors.append(f"racine introuvable : {root}")
             continue
 
         for path in sorted(root.rglob("*")):
-            if limit is not None and result.total >= limit:
-                return result
+            if limit is not None and len(found) >= limit:
+                return found, skipped, errors
 
             if any(_should_skip_dir(part) for part in path.relative_to(root).parts[:-1]):
                 continue
             if not path.is_file() or not is_video(path):
                 continue
             if _should_skip_file(path):
-                result.skipped += 1
+                skipped += 1
                 continue
 
-            try:
-                # Ceinture et bretelles : un lien symbolique pourrait pointer
-                # hors de la racine declaree.
-                assert_readable_source(path, [root])
-                size = path.stat().st_size
-            except (PathConfinementError, OSError) as exc:
-                result.errors.append(f"{path.name} : {exc}")
-                continue
+            found.append((root, path))
 
-            # Toute la chaine de dossiers entre la racine et le fichier, pas
-            # seulement le parent immediat : sur « Dune (2024)/CD1/film.mkv »
-            # ou « Severance/Season 02/ep07.mkv », l'information utile est plus
-            # haut que le dossier direct.
-            ancestors = list(path.relative_to(root).parts[:-1])
+    return found, skipped, errors
 
-            parsed = parse(path, ancestors)
-            probe = inspect(path) if deep else FileProbe()
 
-            result.files.append(
-                ScannedFile(
-                    path=path,
-                    size_bytes=size,
-                    parsed=parsed,
-                    probe=probe,
-                    relative_path=str(path.relative_to(root)),
-                    in_library=_under(path, library_root),
-                )
+def scan(
+    roots: list[Path],
+    *,
+    deep: bool = True,
+    limit: int | None = None,
+    library_root: Path | None = None,
+    on_progress: Callable[[int, int, str], None] | None = None,
+) -> ScanResult:
+    """Parcourt les racines et analyse chaque fichier video.
+
+    ``deep`` active la lecture du fichier lui-meme (ffprobe et .nfo). C'est
+    nettement plus lent — quelques dizaines de millisecondes par fichier — donc
+    on peut le desactiver pour un apercu rapide sur une grosse bibliotheque.
+
+    ``on_progress(traites, total, nom_du_fichier)`` est appele apres chaque
+    fichier. C'est ce qui permet a l'interface de montrer ou en est un scan qui
+    dure des minutes, plutot qu'un bouton fige.
+    """
+    result = ScanResult()
+
+    candidates, skipped, errors = collect(roots, limit)
+    result.skipped = skipped
+    result.errors.extend(errors)
+
+    total = len(candidates)
+    if on_progress:
+        on_progress(0, total, "")
+
+    for index, (root, path) in enumerate(candidates, start=1):
+        try:
+            # Ceinture et bretelles : un lien symbolique pourrait pointer
+            # hors de la racine declaree.
+            assert_readable_source(path, [root])
+            size = path.stat().st_size
+        except (PathConfinementError, OSError) as exc:
+            result.errors.append(f"{path.name} : {exc}")
+            if on_progress:
+                on_progress(index, total, path.name)
+            continue
+
+        # Toute la chaine de dossiers entre la racine et le fichier, pas
+        # seulement le parent immediat : sur « Dune (2024)/CD1/film.mkv »
+        # ou « Severance/Season 02/ep07.mkv », l'information utile est plus
+        # haut que le dossier direct.
+        ancestors = list(path.relative_to(root).parts[:-1])
+
+        parsed = parse(path, ancestors)
+        probe = inspect(path) if deep else FileProbe()
+
+        result.files.append(
+            ScannedFile(
+                path=path,
+                size_bytes=size,
+                parsed=parsed,
+                probe=probe,
+                relative_path=str(path.relative_to(root)),
+                in_library=_under(path, library_root),
             )
+        )
+
+        if on_progress:
+            on_progress(index, total, path.name)
 
     return result
