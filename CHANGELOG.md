@@ -1,6 +1,37 @@
 # CHANGELOG
 
 
+## v0.16.0 (2026-09-08)
+
+### Features
+
+- **destinations**: Dossier separe pour les gros fichiers, et gabarits relatifs
+  ([`527dc78`](https://github.com/gsoulat/sortilege/commit/527dc78b1d12863fbdbf68fea32a392385d63275))
+
+Correction prealable, plus importante que la fonctionnalite
+  ---------------------------------------------------------- Les gabarits commencaient par « Films/
+  », « Series/ », alors que la destination par type est deja reglable dans l interface. Les deux se
+  superposaient : passer la destination de « Series » a « Series TV » n avait AUCUN effet, le
+  gabarit imposant son prefixe. Le reglage existait et ne servait a rien.
+
+Les gabarits sont desormais relatifs a la destination du type. Une seule source de verite pour le
+  premier niveau d arborescence.
+
+Dossier des fichiers volumineux ------------------------------- Au-dela d un seuil reglable, un
+  fichier part dans une destination distincte — souvent sur un autre volume, ou simplement isole
+  pour etre repere. Un remux 4K de 60 Go et un episode de 800 Mo n ont pas les memes contraintes.
+
+La resolution de destination est INJECTEE dans le pipeline plutot que codee dedans : il n a pas a
+  connaitre les preferences, et le routage par taille devient testable sans configuration.
+
+Un test a rattrape une faute au passage : j avais fusionne les deux tables de destinations par cle
+  pour les valider, ce qui faisait ecraser une destination par son homologue « volumineux ». La
+  premiere echappait alors silencieusement a la validation de confinement. Les deux tables sont
+  desormais parcourues separement.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.15.0 (2026-09-08)
 
 ### Features
