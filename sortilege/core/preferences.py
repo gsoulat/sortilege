@@ -67,6 +67,22 @@ class AISettings:
 
 
 @dataclass
+class AutomationSettings:
+    """Traitement automatique de bout en bout."""
+
+    enabled: bool = False
+    interval_minutes: int = 15
+    quiet_seconds: int = 120
+    """Un fichier doit n'avoir plus bouge depuis ce delai. Attendre trop coute
+    un cycle ; traiter trop tot coute un fichier incomplet deplace."""
+
+    apply_auto: bool = False
+    """Deplacer reellement, ou seulement remplir la file. Desactive par
+    defaut : ranger sans personne devant est un engagement plus lourd
+    qu'identifier."""
+
+
+@dataclass
 class Preferences:
     """Ce que l'utilisateur choisit, par opposition a ce que l'admin deploie."""
 
@@ -92,6 +108,7 @@ class Preferences:
     """Gabarit par type. Vide = celui du prereglage Jellyfin."""
 
     ai: AISettings = field(default_factory=AISettings)
+    automation: AutomationSettings = field(default_factory=AutomationSettings)
 
     def template_for(self, kind: str) -> str:
         return self.templates.get(kind) or PRESETS["jellyfin"].get(kind, "")
@@ -146,6 +163,9 @@ class PreferenceStore:
                 destinations={**DEFAULT_DESTINATIONS, **(raw.get("destinations") or {})},
                 templates=dict(raw.get("templates") or {}),
                 ai=AISettings(**{**asdict(AISettings()), **(raw.get("ai") or {})}),
+                automation=AutomationSettings(
+                    **{**asdict(AutomationSettings()), **(raw.get("automation") or {})}
+                ),
             )
             return self._cache
 
@@ -255,6 +275,11 @@ class PreferenceStore:
 
         if prefs.ai.provider not in BY_KEY:
             raise PreferenceError(f"fournisseur IA inconnu : {prefs.ai.provider}")
+        if prefs.automation.interval_minutes < 1:
+            raise PreferenceError("l'intervalle doit valoir au moins une minute")
+        if prefs.automation.quiet_seconds < 0:
+            raise PreferenceError("le delai de stabilite ne peut pas etre negatif")
+
         if not 0.0 <= prefs.ai.threshold <= 1.0:
             raise PreferenceError("le seuil IA doit etre compris entre 0 et 1")
         if prefs.ai.base_url and not prefs.ai.base_url.startswith(("http://", "https://")):

@@ -16,7 +16,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .api import auth, library, review, settings, templates
+from .api import auth, automation, library, review, settings, templates
 from .config import get_settings
 from .core.auth import SESSION_COOKIE, verify_session
 from .core.probe import ffprobe_available
@@ -45,7 +45,14 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     if not ffprobe_available():
         logger.warning("ffprobe absent : duree et tags des conteneurs non lisibles")
 
+    # La boucle tourne toujours ; elle consulte les preferences a chaque tour
+    # et ne fait rien tant que l'automatisation est desactivee. La demarrer
+    # conditionnellement obligerait a redemarrer le conteneur pour l'activer.
+    automation.start()
+
     yield
+
+    await automation.stop()
 
 
 app = FastAPI(
@@ -61,6 +68,7 @@ app.include_router(templates.router)
 app.include_router(library.router)
 app.include_router(review.router)
 app.include_router(settings.router)
+app.include_router(automation.router)
 
 # Routes accessibles sans session. Liste blanche et non liste noire : oublier
 # d'ajouter une exception rend une page inaccessible, ce qui se voit

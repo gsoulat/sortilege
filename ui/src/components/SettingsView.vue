@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import SourcePicker from './SourcePicker.vue'
 import FolderBrowser from './FolderBrowser.vue'
 import AiSettings from './AiSettings.vue'
+import AutomationSettings from './AutomationSettings.vue'
 
 const KIND_LABELS = { movie: 'Films', episode: 'Séries TV', anime: 'Animes' }
 
@@ -29,6 +30,11 @@ function onSourceChange(patch) {
 function onAiChange(patch) {
   Object.assign(prefs.value.ai, patch)
   save({ ai: patch })
+}
+
+function onAutomationChange(patch) {
+  Object.assign(prefs.value.automation, patch)
+  save({ automation: patch })
 }
 
 function setDestination(kind, value) {
@@ -174,6 +180,8 @@ onMounted(load)
     </section>
 
     <!-- ========== Lecture seule : le déploiement ========== -->
+
+    <AutomationSettings :automation="prefs.automation" @change="onAutomationChange" />
 
     <AiSettings :ai="prefs.ai" :providers="prefs.ai_providers" @change="onAiChange" />
 

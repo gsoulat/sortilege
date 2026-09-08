@@ -23,7 +23,13 @@ from pydantic import BaseModel, Field
 
 from ..config import get_settings
 from ..core.ai import PROVIDERS
-from ..core.preferences import KINDS, AISettings, PreferenceError, Preferences
+from ..core.preferences import (
+    KINDS,
+    AISettings,
+    AutomationSettings,
+    PreferenceError,
+    Preferences,
+)
 from ..core.probe import ffprobe_available
 from .deps import get_store
 
@@ -44,12 +50,20 @@ class AIIn(BaseModel):
     sans qu'elle ait a transiter une seconde fois."""
 
 
+class AutomationIn(BaseModel):
+    enabled: bool | None = None
+    interval_minutes: int | None = None
+    quiet_seconds: int | None = None
+    apply_auto: bool | None = None
+
+
 class PreferencesIn(BaseModel):
     custom_sources: list[str] | None = None
     enabled_sources: list[str] | None = None
     destinations: dict[str, str] = Field(default_factory=dict)
     templates: dict[str, str] = Field(default_factory=dict)
     ai: AIIn | None = None
+    automation: AutomationIn | None = None
 
 
 @router.get("/preferences")
@@ -89,6 +103,7 @@ def read_preferences() -> dict[str, object]:
             # navigateur et dans son cache.
             "api_key_set": bool(prefs.ai.api_key),
         },
+        "automation": asdict(prefs.automation),
         "ai_providers": [
             {
                 "key": p.key,
@@ -120,6 +135,12 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
             patch.pop("api_key", None)
         ai = AISettings(**{**asdict(current.ai), **patch})
 
+    auto = current.automation
+    if body.automation is not None:
+        auto = AutomationSettings(
+            **{**asdict(current.automation), **body.automation.model_dump(exclude_none=True)}
+        )
+
     merged = Preferences(
         custom_sources=(
             current.custom_sources if body.custom_sources is None else body.custom_sources
@@ -130,6 +151,7 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
         destinations={**current.destinations, **body.destinations},
         templates={**current.templates, **body.templates},
         ai=ai,
+        automation=auto,
     )
 
     try:

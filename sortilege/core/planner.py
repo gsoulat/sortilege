@@ -46,6 +46,11 @@ class Plan:
     year: int | None = None
     provider: str = ""
     external_id: str = ""
+    poster_url: str = ""
+    """Affiche de l'oeuvre retenue. Une vignette rend une liste de plans
+    lisible d'un coup d'oeil : on reconnait une erreur d'identification bien
+    plus vite sur une image que sur un titre."""
+
     error: str | None = None
 
     companions: list[tuple[Path, Path]] = field(default_factory=list)
@@ -209,6 +214,7 @@ def build_plan(
         year=match.candidate.year,
         provider=match.candidate.provider,
         external_id=match.candidate.external_id,
+        poster_url=match.candidate.poster_url,
         companions=[(c.path, c.destination_for(destination)) for c in companions],
         leftovers=leftovers,
         alternatives=_alternatives(match, all_candidates),

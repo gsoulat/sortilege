@@ -71,6 +71,20 @@ class ScanJob:
 _job = ScanJob()
 
 
+def adopt_scan(result: ScanResult, *, deep: bool) -> None:
+    """Enregistre un scan produit hors de l'endpoint.
+
+    Le cycle automatique passe par ici plutot que d'appeler l'API : l'interface
+    doit montrer le meme etat, qu'un humain ou l'horloge ait declenche le scan.
+    """
+    _job.result = result
+    _job.deep = deep
+    _job.processed = result.total
+    _job.total = result.total
+    _job.finished_at = time.monotonic()
+    _job.phase = "termine"
+
+
 def last_scan() -> ScanResult | None:
     """Dernier scan termine, pour les autres routeurs.
 

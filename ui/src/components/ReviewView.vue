@@ -147,7 +147,12 @@ const reviewGroups = computed(() => {
     movies,
     shows: [...shows.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([title, plans]) => ({ title, plans, year: plans[0].year })),
+      .map(([title, plans]) => ({
+        title,
+        plans,
+        year: plans[0].year,
+        poster: plans[0].poster_url,
+      })),
   }
 })
 
@@ -170,7 +175,10 @@ async function choose(planId, candidate) {
     if (out) {
       data.value = out.queue
       picking.value = null
-      message.value = `Identifié comme « ${candidate.title} »${candidate.year ? ` (${candidate.year})` : ''}.`
+      const n = out.corrected ?? 1
+      message.value =
+        `Identifié comme « ${candidate.title} »${candidate.year ? ` (${candidate.year})` : ''}` +
+        (n > 1 ? ` — ${n} épisodes corrigés.` : '.')
     }
   } finally {
     choosing.value = false
@@ -258,6 +266,8 @@ onMounted(load)
         <ul class="plans">
           <li v-for="p in data.auto" :key="p.id">
             <div class="line">
+              <img v-if="p.poster_url" class="thumb" :src="p.poster_url" :alt="p.title" loading="lazy" />
+              <span v-else class="thumb empty"></span>
               <span class="score ok">{{ (p.score * 100).toFixed(0) }}</span>
               <span class="title">{{ p.title }}<span v-if="p.year" class="year"> ({{ p.year }})</span></span>
             </div>
@@ -293,6 +303,8 @@ onMounted(load)
               :indeterminate.prop="groupState(show.plans) === 'some'"
               @change="toggleGroup(show.plans)"
             />
+            <img v-if="show.poster" class="thumb" :src="show.poster" :alt="show.title" loading="lazy" />
+            <span v-else class="thumb empty"></span>
             <span class="show-title">{{ show.title }}</span>
             <span v-if="show.year" class="year">({{ show.year }})</span>
             <span class="count">{{ show.plans.length }} épisode{{ show.plans.length > 1 ? 's' : '' }}</span>
@@ -331,6 +343,8 @@ onMounted(load)
           <li v-for="p in reviewGroups.movies" :key="p.id" :class="{ picked: selected.has(p.id) }">
             <label class="line">
               <input type="checkbox" :checked="selected.has(p.id)" @change="toggle(p.id)" />
+              <img v-if="p.poster_url" class="thumb" :src="p.poster_url" :alt="p.title" loading="lazy" />
+              <span v-else class="thumb empty"></span>
               <span class="score mid">{{ (p.score * 100).toFixed(0) }}</span>
               <span class="title">{{ p.title }}<span v-if="p.year" class="year"> ({{ p.year }})</span></span>
               <span class="provider">{{ p.provider }}</span>
@@ -450,6 +464,12 @@ h3 { margin: 0; font-size: 12px; font-weight: 600; text-transform: uppercase; le
 .show-head .count { margin-left: auto; font-size: 11px; color: var(--text-faint); }
 .plans.nested { padding: 6px 12px 9px 32px; }
 .plans.nested > li { border-top: none; padding: 3px 0; }
+
+.thumb {
+  width: 30px; height: 45px; flex: none; border-radius: 3px;
+  object-fit: cover; background: var(--surface-2);
+}
+.thumb.empty { display: inline-block; border: 1px dashed var(--border); }
 
 .plans { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
 .plans > li { padding: 8px 0; border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }

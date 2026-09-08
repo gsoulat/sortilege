@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from threading import Lock
 
 from fastapi import APIRouter, HTTPException
@@ -71,6 +71,19 @@ def _ai_resolver():
     return build_resolver(ai.provider, ai.api_key, ai.model, ai.base_url)
 
 
+def adopt_plans(plans: list[Plan]) -> None:
+    """Remplace la file par un lot calcule ailleurs (cycle automatique)."""
+    with _lock:
+        _plans.clear()
+        _plans.update({p.id: p for p in plans})
+
+
+def drop_applied(plan_ids: list[str]) -> None:
+    with _lock:
+        for pid in plan_ids:
+            _plans.pop(pid, None)
+
+
 def _plan_out(plan: Plan) -> dict[str, object]:
     return {
         "id": plan.id,
@@ -85,6 +98,7 @@ def _plan_out(plan: Plan) -> dict[str, object]:
         "year": plan.year,
         "provider": plan.provider,
         "external_id": plan.external_id,
+        "poster_url": plan.poster_url,
         "error": plan.error,
         "is_noop": plan.is_noop,
         "manual": plan.manual,
@@ -326,6 +340,13 @@ class ChooseRequest(BaseModel):
     provider: str
     external_id: str
 
+    whole_series: bool = True
+    """Applique le choix a TOUS les episodes de la meme serie.
+
+    L'identification porte sur l'oeuvre, pas sur le fichier : corriger episode
+    par episode reviendrait a repondre douze fois a la meme question. Les films
+    ignorent ce champ, chacun etant une decision independante."""
+
 
 @router.post("/{plan_id}/choose")
 async def choose(plan_id: str, body: ChooseRequest) -> dict[str, object]:
@@ -358,12 +379,25 @@ async def choose(plan_id: str, body: ChooseRequest) -> dict[str, object]:
         raise HTTPException(status_code=400, detail="Ce candidat n'est pas propose pour ce plan.")
 
     scan = last_scan()
-    scanned = next((f for f in (scan.files if scan else []) if f.path == plan.source), None)
-    if scanned is None:
+    by_path = {f.path: f for f in (scan.files if scan else [])}
+    if plan.source not in by_path:
         raise HTTPException(
             status_code=409,
             detail="Le fichier n'est plus dans le dernier scan. Relance un scan.",
         )
+
+    # Tous les plans de la meme oeuvre, pour corriger la serie entiere d'un
+    # coup. Le regroupement se fait sur le titre RETENU, celui qui est faux —
+    # c'est bien lui qui identifie l'ensemble a rectifier.
+    with _lock:
+        if body.whole_series and plan.kind != "movie":
+            targets = [
+                p
+                for p in _plans.values()
+                if p.kind == plan.kind and p.title == plan.title and p.source in by_path
+            ]
+        else:
+            targets = [plan]
 
     store = get_store()
     prefs = store.load()
@@ -378,16 +412,24 @@ async def choose(plan_id: str, body: ChooseRequest) -> dict[str, object]:
         ),
     )
 
+    rebuilt: list[Plan] = []
     try:
-        rebuilt = await pipeline.replan_with(scanned, chosen, plan)
+        for target in targets:
+            # Une copie du candidat par episode : l'enrichissement y ecrit le
+            # titre de l'episode, et un objet partage les ecraserait les uns
+            # apres les autres.
+            per_file = replace(chosen, extra=dict(chosen.extra))
+            rebuilt.append(await pipeline.replan_with(by_path[target.source], per_file, target))
     finally:
         await pipeline.aclose()
 
     with _lock:
-        _plans.pop(plan_id, None)
-        _plans[rebuilt.id] = rebuilt
+        for target in targets:
+            _plans.pop(target.id, None)
+        for plan_out in rebuilt:
+            _plans[plan_out.id] = plan_out
 
-    return {"plan": _plan_out(rebuilt), "queue": _queue()}
+    return {"corrected": len(rebuilt), "queue": _queue()}
 
 
 @router.post("/undo")
