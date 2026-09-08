@@ -1,6 +1,48 @@
 # CHANGELOG
 
 
+## v0.17.0 (2026-09-08)
+
+### Features
+
+- **collection**: Grille de la bibliotheque, episodes manquants, doublons
+  ([`6efd396`](https://github.com/gsoulat/sortilege/commit/6efd3962f034f6a6b8c671a2ae5bd418f8796cf1))
+
+Trois questions, une seule passe de regroupement — elles portent toutes sur la meme structure «
+  quelles oeuvres, quels episodes, quels fichiers ».
+
+Ma collection ------------- Une grille d affiches. Une bibliotheque de 400 fichiers ne se lit pas en
+  liste ; en grille elle se parcourt d un coup d oeil. Les oeuvres incompletes et celles en double
+  portent un marqueur, ce qui evite d avoir a chercher.
+
+Episodes manquants ------------------ Compare ce que le disque a avec ce que la saison compte chez
+  TheMovieDB.
+
+Les episodes NON ENCORE DIFFUSES sont exclus — sans cela, toute serie en cours afficherait des trous
+  impossibles a combler et la liste cesserait d etre lisible, donc utile. Une saison dont le
+  fournisseur ne sait rien n affiche aucun manque : ne rien savoir n est pas manquer.
+
+Doublons -------- Deux fichiers pour le meme episode ou le meme film. Le fichier a garder est
+  designe par la RESOLUTION d abord, la taille ensuite : un 2160p compresse vaut mieux qu un 1080p
+  volumineux.
+
+Deux fichiers sans numero d episode ne sont jamais declares doublons — rien ne prouve qu ils
+  occupent la meme place, et un faux positif couterait un fichier mis en corbeille sans raison.
+
+Le bouton MET EN CORBEILLE, il ne supprime pas. Meme mecanisme que les restes de release : le
+  fichier reste sur le disque, l operation est journalisee, et l annulation la defait. Supprimer 40
+  Go sur une erreur de detection serait irreparable ; le deplacer coute un dossier a vider quand on
+  a verifie.
+
+Les chemins envoyes par le client sont resolus sous la racine et verifies, jamais utilises tels
+  quels.
+
+Sans cle TheMovieDB, la collection et les doublons restent consultables : seuls les manques en
+  dependent. Une fonction en moins plutot qu un ecran vide.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.16.0 (2026-09-08)
 
 ### Features
