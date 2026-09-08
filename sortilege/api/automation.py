@@ -35,7 +35,7 @@ from ..core.watch import Watcher
 from ..providers.anilist import AniListProvider
 from ..providers.tmdb import TMDBProvider
 from . import library, review
-from .deps import get_journal, get_store
+from .deps import get_journal, get_memory, get_store
 
 logger = logging.getLogger(__name__)
 
@@ -125,6 +125,7 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
         ai=review._ai_resolver(),
         ai_batch_size=prefs.ai.batch_size,
         ai_threshold=prefs.ai.threshold,
+        memory=get_memory(),
     )
     try:
         plans = await pipeline.plan_all(result.files)

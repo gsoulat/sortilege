@@ -22,9 +22,11 @@ from ..core.journal import apply_plan, undo_last
 from ..core.pipeline import BATCH_SIZE, Pipeline
 from ..core.planner import Plan
 from ..core.scoring import Decision, Policy
+from ..core.store import Decision as RememberedDecision
+from ..core.store import title_key
 from ..providers.anilist import AniListProvider
 from ..providers.tmdb import TMDBProvider
-from .deps import get_journal, get_store
+from .deps import get_journal, get_memory, get_store
 from .library import last_scan
 
 logger = logging.getLogger(__name__)
@@ -223,6 +225,7 @@ async def build_plans(limit: int = 100, reset: bool = False) -> dict[str, object
         ai=_ai_resolver(),
         ai_batch_size=prefs.ai.batch_size,
         ai_threshold=prefs.ai.threshold,
+        memory=get_memory(),
     )
 
     if _job.running:
@@ -491,13 +494,29 @@ async def choose(plan_id: str, body: ChooseRequest) -> dict[str, object]:
     finally:
         await pipeline.aclose()
 
+    # Le choix est RETENU : la meme question ne sera plus posee au prochain
+    # scan. C'est ce qui fait converger la file au lieu de la voir se remplir
+    # a l'identique a chaque fois.
+    if plan.title:
+        get_memory().remember(
+            RememberedDecision(
+                kind=plan.kind,
+                title_key=title_key(plan.title),
+                provider=chosen.provider,
+                external_id=chosen.external_id,
+                title=chosen.title,
+                year=chosen.year,
+                poster_url=chosen.poster_url,
+            )
+        )
+
     with _lock:
         for target in targets:
             _plans.pop(target.id, None)
         for plan_out in rebuilt:
             _plans[plan_out.id] = plan_out
 
-    return {"corrected": len(rebuilt), "queue": _queue()}
+    return {"corrected": len(rebuilt), "queue": _queue(), "remembered": bool(plan.title)}
 
 
 @router.post("/undo")

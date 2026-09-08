@@ -60,6 +60,7 @@ class Pipeline:
         ai=None,
         ai_batch_size: int = 12,
         ai_threshold: float = 0.80,
+        memory=None,
     ) -> None:
         self._tmdb = tmdb
         self._anilist = anilist
@@ -73,6 +74,7 @@ class Pipeline:
         self._ai = ai
         self._ai_batch_size = max(1, ai_batch_size)
         self._ai_threshold = ai_threshold
+        self._memory = memory
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
     async def aclose(self) -> None:
@@ -155,9 +157,64 @@ class Pipeline:
         # une panne.
         return False
 
+    def _remembered_candidate(self, scanned: ScannedFile):
+        """Decision humaine deja prise pour ce titre, transformee en candidat."""
+        if self._memory is None:
+            return None
+        title = scanned.parsed.title or scanned.probe.nfo_title or ""
+        if not title:
+            return None
+        return self._memory.recall(_kind_key(scanned.parsed.kind), title)
+
+    async def _recall(self, scanned: ScannedFile) -> Plan | None:
+        decision = self._remembered_candidate(scanned)
+        if decision is None:
+            return None
+
+        candidate = Candidate(
+            provider=decision.provider,
+            external_id=decision.external_id,
+            title=decision.title,
+            year=decision.year,
+            poster_url=decision.poster_url,
+            popularity=1.0,
+        )
+        episode_match = await self._enrich(scanned, candidate)
+        signals = build_signals(
+            scanned.parsed, scanned.probe, candidate, [candidate], episode_match=episode_match
+        )
+        match = MatchResult(candidate=candidate, signals=signals, similarity=1.0)
+
+        kind = _kind_key(scanned.parsed.kind)
+        plan = build_plan(
+            scanned,
+            match,
+            template=self._templates.get(kind, ""),
+            destination_root=self._destination_for(kind, scanned.size_bytes),
+            policy=self._policy,
+        )
+        if plan.destination is not None:
+            plan.decision = Decision.AUTO
+            plan.score = 1.0
+            plan.manual = True
+            plan.reasons = [
+                f"identification memorisee : {decision.title}"
+                + (f" ({decision.year})" if decision.year else ""),
+                "tu as deja tranche pour ce titre, la question n'est pas reposee",
+            ]
+            self._memory.note_hit(kind, decision.title_key)
+        return plan
+
     async def plan_one(self, scanned: ScannedFile) -> Plan:
         async with self._semaphore:
             try:
+                # Une decision deja prise court-circuite tout : ni recherche,
+                # ni score, ni arbitrage. C'est ce qui fait qu'une file de
+                # revue converge vers le vide au lieu de reposer eternellement
+                # les memes questions.
+                if (remembered := await self._recall(scanned)) is not None:
+                    return remembered
+
                 candidates = await self._candidates(scanned)
                 match = best_match(scanned.parsed, scanned.probe, candidates)
 

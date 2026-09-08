@@ -32,7 +32,7 @@ from ..core.preferences import (
     Preferences,
 )
 from ..core.probe import ffprobe_available
-from .deps import get_store
+from .deps import get_memory, get_store
 
 router = APIRouter(prefix="/api/settings", tags=["reglages"])
 
@@ -189,6 +189,36 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return read_preferences()
+
+
+@router.get("/decisions")
+def read_decisions() -> dict[str, object]:
+    """Identifications retenues, les plus recentes d'abord."""
+    return {
+        "decisions": [
+            {
+                "kind": d.kind,
+                "title_key": d.title_key,
+                "title": d.title,
+                "year": d.year,
+                "provider": d.provider,
+                "external_id": d.external_id,
+                "poster_url": d.poster_url,
+                "hits": d.hits,
+                "created_at": d.created_at,
+            }
+            for d in get_memory().decisions()
+        ]
+    }
+
+
+@router.delete("/decisions/{kind}/{title_key}")
+def forget_decision(kind: str, title_key: str) -> dict[str, object]:
+    """Oublie un choix : la question sera reposee au prochain scan."""
+    removed = get_memory().forget(kind, title_key)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Aucune decision pour ce titre.")
+    return read_decisions()
 
 
 @router.get("/browse")

@@ -8,6 +8,7 @@ from pathlib import Path
 from ..config import get_settings
 from ..core.journal import Journal
 from ..core.preferences import PreferenceStore
+from ..core.store import Store
 
 DATA_DIR = Path("data")
 
@@ -20,6 +21,16 @@ def get_journal() -> Journal:
     l'application, le seul qui doive survivre a une reconstruction de l'image.
     """
     return Journal(DATA_DIR / "journal.jsonl")
+
+
+@lru_cache
+def get_memory() -> Store:
+    """Base des decisions et de l'etat de travail.
+
+    Dans le meme volume que le journal : c'est l'etat qui doit survivre a une
+    reconstruction de l'image.
+    """
+    return Store(DATA_DIR / "sortilege.db")
 
 
 @lru_cache

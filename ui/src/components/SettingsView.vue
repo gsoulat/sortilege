@@ -4,6 +4,7 @@ import SourcePicker from './SourcePicker.vue'
 import FolderBrowser from './FolderBrowser.vue'
 import AiSettings from './AiSettings.vue'
 import AutomationSettings from './AutomationSettings.vue'
+import DecisionsSettings from './DecisionsSettings.vue'
 
 const KIND_LABELS = { movie: 'Films', episode: 'Séries TV', anime: 'Animes' }
 
@@ -232,6 +233,8 @@ onMounted(load)
     </section>
 
     <!-- ========== Lecture seule : le déploiement ========== -->
+
+    <DecisionsSettings />
 
     <AutomationSettings :automation="prefs.automation" @change="onAutomationChange" />
 
