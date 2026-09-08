@@ -1,6 +1,43 @@
 # CHANGELOG
 
 
+## v0.15.0 (2026-09-08)
+
+### Features
+
+- **auto**: Surveillance, chaine complete, affiches et correction par serie
+  ([`93ccc1b`](https://github.com/gsoulat/sortilege/commit/93ccc1b37cc23fa41a314cebfe39febd95aee98c))
+
+Surveillance et traitement automatique ------------------------------------- Une boucle detecte les
+  nouveaux fichiers, scanne, identifie et remplit la file. Elle enchaine les MEMES etapes que les
+  boutons : aucun chemin parallele, donc aucun risque que l automatique et le manuel divergent.
+
+Le piege d une surveillance de dossier n est pas de reperer un fichier nouveau mais de savoir qu il
+  est FINI — un fichier existe des le premier octet ecrit. Deux conditions cumulatives : la taille n
+  a pas bouge entre deux observations, et la derniere modification remonte a plus de N secondes. La
+  premiere detecte une extraction d archive en cours, pendant laquelle le fichier porte deja son nom
+  definitif ; la seconde rattrape une ecriture lente qui donnerait deux mesures identiques par
+  hasard.
+
+Attendre trop coute un cycle. Traiter trop tot coute un fichier incomplet deplace et un journal d
+  annulation qui pointe vers du vide.
+
+Le deplacement reel reste OPT-IN : par defaut la boucle prepare la file et s arrete la. Ranger sans
+  personne devant est un engagement plus lourd qu identifier. Un cycle ne chevauche jamais le
+  precedent, et les preferences sont relues a chaque tour pour qu activer la surveillance ne demande
+  pas de redemarrage.
+
+Correction par serie -------------------- Choisir la bonne oeuvre corrige desormais TOUS les
+  episodes du groupe. L identification porte sur l oeuvre, pas sur le fichier — corriger episode par
+  episode revenait a repondre douze fois a la meme question. Chaque episode recoit une copie du
+  candidat, sinon l enrichissement ecraserait le titre d episode des precedents.
+
+Affiches dans la file --------------------- La vignette de l oeuvre retenue apparait sur chaque
+  ligne. On reconnait une erreur d identification bien plus vite sur une image que sur un titre.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.14.0 (2026-09-08)
 
 ### Features
