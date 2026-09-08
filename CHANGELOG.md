@@ -1,6 +1,31 @@
 # CHANGELOG
 
 
+## v0.13.1 (2026-09-08)
+
+### Bug Fixes
+
+- Supprimer SORTILEGE_DRY_RUN, les boutons suffisent
+  ([`ec8027b`](https://github.com/gsoulat/sortilege/commit/ec8027b636c6449f7cbd82165a91b4acbce5da5e))
+
+Une configuration qui contredit l interface est un piege, et c est exactement ce qui s est produit :
+  un bouton « Executer ces 88 » bien visible, mais refuse au clic par une variable posee ailleurs. L
+  information arrivait trop tard, et au mauvais endroit.
+
+Depuis que « Simuler » et « Executer » sont deux boutons distincts, le mode est un choix explicite a
+  chaque action — la variable ne faisait que dupliquer cette decision, avec le pouvoir de la
+  contredire.
+
+La seule protection conservee est le DEFAUT de la requete : simuler. Une requete qui omet le champ
+  ne deplace rien. Ce defaut-la ne peut pas se desynchroniser de l interface, puisqu il vit dans le
+  meme appel.
+
+Le badge « verrouille » et le mode affiche dans l entete disparaissent avec elle : ils decrivaient
+  un etat qui n existe plus.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.13.0 (2026-09-08)
 
 ### Features
