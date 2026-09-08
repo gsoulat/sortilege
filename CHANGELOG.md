@@ -1,6 +1,51 @@
 # CHANGELOG
 
 
+## v0.12.0 (2026-09-08)
+
+### Features
+
+- **revue**: Boutons Simuler/Executer, selection par serie, zone explorable elargie
+  ([`efe3564`](https://github.com/gsoulat/sortilege/commit/efe35645ea69e420ed6dfc5a076c07f225f607be))
+
+Simuler et executer deviennent deux boutons ------------------------------------------- Le mode
+  venait de SORTILEGE_DRY_RUN, donc changer d'avis imposait de modifier la stack et de redemarrer le
+  conteneur. Les deux boutons sont maintenant cote a cote : on simule une selection, on lit le
+  resultat, on execute la meme selection.
+
+La variable devient un VERROU qui ne sait que RESTREINDRE : elle peut forcer la simulation, jamais
+  l'autoriser a l'inverse. Sans cette regle, un verrou pose volontairement sur une instance serait
+  contourne par un clic. Quand elle refuse, l'interface le dit au lieu d'annoncer une simulation
+  sans motif.
+
+Le defaut de la requete est la simulation : une requete qui omettrait le champ ne deplace rien. Le
+  defaut d'une operation irreversible doit etre l'inaction.
+
+Une simulation conserve la selection, une execution la vide — pour pouvoir enchainer les deux sur
+  les memes lignes.
+
+Selection par serie ------------------- Cocher episode par episode etait inutilisable : une
+  bibliotheque reelle produit des centaines de lignes pour quelques dizaines de series. La file de
+  revue est donc regroupee par serie, et une case coche toute la serie.
+
+C'est aussi plus juste que pratique : la decision porte sur l'IDENTIFICATION, qui est la meme pour
+  tous les episodes d'une serie. Soit elle est bonne, soit elle ne l'est pas. Les films restent a
+  plat, chacun etant une decision independante.
+
+Une selection partielle affiche un etat indetermine et se COMPLETE au clic plutot que de se vider :
+  une case a moitie cochee signifie qu'on etait en train de composer.
+
+Zone explorable --------------- Nouvelle variable SORTILEGE_ALLOWED_ROOTS. Un NAS monte souvent un
+  volume entier (« /volume1:/storage ») dont seuls quelques dossiers servent de source ; les autres
+  etaient montes mais invisibles dans l'explorateur et impossibles a ajouter. La zone parcourable
+  est desormais declarable independamment des sources par defaut.
+
+Corrige aussi ApplyRequest, qui avait perdu son champ dry_run dans un patch interrompu a mi-chemin :
+  l'endpoint aurait leve une AttributeError des le premier appel.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.11.0 (2026-09-08)
 
 ### Features
