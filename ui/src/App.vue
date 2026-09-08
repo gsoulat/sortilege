@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import LoginView from './components/LoginView.vue'
 import TemplateBuilder from './components/TemplateBuilder.vue'
 import LibraryView from './components/LibraryView.vue'
+import CollectionView from './components/CollectionView.vue'
 import ReviewView from './components/ReviewView.vue'
 import SettingsView from './components/SettingsView.vue'
 
@@ -11,7 +12,8 @@ const health = ref(null)
 const view = ref('library')
 
 const VIEWS = [
-  { id: 'library', label: 'Bibliothèque' },
+  { id: 'library', label: 'À ranger' },
+  { id: 'collection', label: 'Ma collection' },
   { id: 'review', label: 'File de revue' },
   { id: 'templates', label: 'Gabarits' },
   { id: 'settings', label: 'Réglages' },
@@ -100,6 +102,7 @@ onUnmounted(() => {
 
     <main>
       <LibraryView v-if="view === 'library'" />
+      <CollectionView v-else-if="view === 'collection'" />
       <ReviewView v-else-if="view === 'review'" />
       <TemplateBuilder v-else-if="view === 'templates'" />
       <SettingsView v-else-if="view === 'settings'" />
