@@ -44,6 +44,16 @@ avant un `Apply`, et chaque `Apply` écrit un journal qui permet un `Undo`.
 | `Plan` | Calcule la destination via le gabarit, vérifie le confinement |
 | `Apply` | Déplace, écrit le journal d'annulation |
 
+Le scan et les plans sont écrits sur disque et repris au démarrage : un scan de
+mille fichiers coûte plusieurs minutes de ffprobe et des centaines d'appels
+réseau, les reperdre à chaque mise à jour d'image rendrait l'outil pénible. Un
+instantané illisible est ignoré, jamais fatal.
+
+Quand le traitement automatique est activé, un webhook Discord peut rapporter
+ce que chaque cycle a fait — et surtout ce qui a échoué, puisque c'est
+précisément ce que personne ne va voir autrement. Un cycle qui n'a rien trouvé
+n'envoie rien : un message toutes les quinze minutes finirait par être ignoré.
+
 ## Reconnaissance par le fichier lui-même
 
 C'est ce qui sépare Plex d'un outil qui ne lit que les noms. Trois sources
@@ -89,9 +99,20 @@ Deux garde-fous non négociables :
   puissant, et une exécution de code arbitraire sur ton NAS. Ici c'est une
   substitution de jetons restreinte, sans `eval`.
 - **Conteneur non-root**, UID/GID paramétrables.
-- **Mode simulation par défaut** (`SORTILEGE_DRY_RUN=true`) : rien ne bouge tant
-  que tu ne l'as pas désactivé explicitement.
-- Clés d'API par variables d'environnement uniquement.
+- **Rien ne bouge sans un clic.** Deux boutons distincts : « Simuler » vérifie
+  tout le trajet sans toucher au disque, « Exécuter » applique la sélection.
+  Un plan est un objet, pas une action.
+- **Les doublons partent à la corbeille, jamais à la suppression.** Un
+  algorithme qui se trompe sur un doublon fait perdre le seul exemplaire.
+- **Aucun secret ne redescend au navigateur.** Clé d'IA, jeton TMDB, webhook
+  Discord : champs en écriture seule, l'API n'expose qu'un booléen
+  « configuré ». Ces réponses finissent dans le cache du navigateur.
+- **Le jeton TMDB v4 ne passe jamais en paramètre d'URL** — les URL finissent
+  dans les journaux d'accès — mais dans l'en-tête `Authorization`.
+- **L'URL de webhook est contrainte aux domaines Discord.** Elle est saisie
+  depuis le navigateur et c'est le serveur qui va la chercher : sans cette
+  restriction, le champ ferait du conteneur un relais capable d'émettre vers
+  n'importe quelle adresse du réseau domestique.
 
 ## Démarrage
 
