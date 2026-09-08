@@ -11,51 +11,13 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from helpers import FakeTMDB, big_file, cand
 
 from sortilege.core.journal import Journal, apply_plan, undo_last
 from sortilege.core.pipeline import Pipeline
 from sortilege.core.scanner import scan
 from sortilege.core.scoring import Decision, Policy
 from sortilege.core.template import PRESETS
-from sortilege.providers.base import Candidate
-
-BIG = 60 * 1024 * 1024
-
-
-class FakeTMDB:
-    """Repond ce qu'on lui dit de repondre, et compte ses appels."""
-
-    name = "tmdb"
-
-    def __init__(self, movies=None, series=None, episode_titles=None, collections=None):
-        self.movies = movies or {}
-        self.series = series or {}
-        self.episode_titles = episode_titles or {}
-        self.collections = collections or {}
-        self.calls = 0
-
-    async def search_movie(self, title, year):
-        self.calls += 1
-        return self.movies.get(title.lower(), [])
-
-    async def search_series(self, title, year):
-        self.calls += 1
-        return self.series.get(title.lower(), [])
-
-    async def get_episode_title(self, series_id, season, episode):
-        return self.episode_titles.get((series_id, season, episode))
-
-    async def get_collection(self, movie_id):
-        return self.collections.get(movie_id)
-
-    async def aclose(self):
-        pass
-
-
-def cand(**kw) -> Candidate:
-    base = dict(provider="tmdb", external_id="1", title="X", year=2024, popularity=0.8)
-    base.update(kw)
-    return Candidate(**base)
 
 
 @pytest.fixture
@@ -65,14 +27,6 @@ def tree(tmp_path: Path):
     src.mkdir()
     lib.mkdir()
     return src, lib
-
-
-def big_file(path: Path) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("wb") as handle:
-        handle.seek(BIG)
-        handle.write(b"\0")
-    return path
 
 
 async def run(src: Path, lib: Path, tmdb: FakeTMDB):

@@ -45,6 +45,28 @@ class UndoRequest(BaseModel):
     count: int = 1
 
 
+def _ai_resolver():
+    """Construit le resolveur, ou None s'il n'est pas utilisable.
+
+    L'import est tardif : le paquet `anthropic` est une dependance optionnelle,
+    et une installation sans lui doit fonctionner normalement plutot que de
+    planter a l'import du module.
+    """
+    conf = get_settings()
+    if not conf.ai_enabled or not conf.anthropic_api_key:
+        return None
+    try:
+        from ..core.ai_resolver import AIResolver
+
+        return AIResolver(conf.anthropic_api_key, conf.ai_model)
+    except ImportError:
+        logger.warning(
+            "SORTILEGE_AI_ENABLED=true mais le paquet `anthropic` est absent ; "
+            "resolveur IA desactive"
+        )
+        return None
+
+
 def _plan_out(plan: Plan) -> dict[str, object]:
     return {
         "id": plan.id,
@@ -93,6 +115,8 @@ async def build_plans() -> dict[str, object]:
             auto_apply_threshold=conf.auto_apply_threshold,
             reject_threshold=conf.reject_threshold,
         ),
+        ai=_ai_resolver(),
+        ai_batch_size=conf.ai_batch_size,
     )
 
     try:

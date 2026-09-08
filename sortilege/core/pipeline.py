@@ -18,13 +18,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import replace
 from pathlib import Path
 
 from ..providers.anilist import AniListProvider
 from ..providers.base import Candidate
 from ..providers.tmdb import TMDBProvider
+from .ai_resolver import AIProposal, AmbiguousItem
 from .matching import best_match
-from .parser import MediaKind
+from .parser import MediaKind, ParsedName
 from .planner import Plan, build_plan
 from .scanner import ScannedFile
 from .scoring import Decision, Policy
@@ -48,12 +50,16 @@ class Pipeline:
         library_root: Path,
         templates: dict[str, str],
         policy: Policy,
+        ai=None,
+        ai_batch_size: int = 12,
     ) -> None:
         self._tmdb = tmdb
         self._anilist = anilist
         self._library_root = library_root
         self._templates = templates
         self._policy = policy
+        self._ai = ai
+        self._ai_batch_size = max(1, ai_batch_size)
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
     async def aclose(self) -> None:
@@ -184,7 +190,120 @@ class Pipeline:
         dans la file de revue, et des entrees vides au journal d'annulation.
         """
         todo = [f for f in files if not f.in_library and f.skipped_reason is None]
-        return list(await asyncio.gather(*(self.plan_one(f) for f in todo)))
+        plans = list(await asyncio.gather(*(self.plan_one(f) for f in todo)))
+
+        if self._ai is not None:
+            plans = await self._second_pass(todo, plans)
+
+        return plans
+
+    # --- Seconde passe assistee par IA --------------------------------------
+
+    async def _second_pass(self, files: list[ScannedFile], plans: list[Plan]) -> list[Plan]:
+        """Reprend les fichiers que le deterministe n'a pas tranches.
+
+        JAMAIS le tout-venant : le parseur et les fournisseurs traitent la
+        grande majorite des fichiers a cout nul. On ne paie un appel que pour
+        ce qui allait de toute facon demander une intervention humaine.
+        """
+        pending = [
+            (index, f)
+            for index, (f, p) in enumerate(zip(files, plans, strict=True))
+            if p.decision is not Decision.AUTO
+        ]
+        if not pending:
+            return plans
+
+        logger.info("resolveur IA : %s fichier(s) ambigus", len(pending))
+        updated = list(plans)
+
+        for start in range(0, len(pending), self._ai_batch_size):
+            chunk = pending[start : start + self._ai_batch_size]
+            items = [
+                AmbiguousItem(
+                    index=index,
+                    filename=f.path.name,
+                    parent_folder=f.path.parent.name,
+                    parsed=f.parsed,
+                    candidates=[],
+                )
+                for index, f in chunk
+            ]
+
+            try:
+                # Le SDK Anthropic est synchrone : l'appeler directement
+                # bloquerait la boucle d'evenements et figerait tout le scan.
+                proposals = await asyncio.to_thread(self._ai.resolve, items)
+            except Exception:
+                logger.exception("resolveur IA indisponible ; lot laisse en l'etat")
+                continue
+
+            for index, scanned in chunk:
+                proposal = proposals.get(index)
+                if proposal is None or not proposal.title:
+                    continue
+                better = await self._replan_with(scanned, proposal)
+                # On ne remplace que si la seconde passe fait MIEUX : une
+                # proposition moins bonne que la lecture deterministe ne doit
+                # pas degrader un resultat deja acquis.
+                if better is not None and better.score > updated[index].score:
+                    updated[index] = better
+
+        return updated
+
+    async def _replan_with(self, scanned: ScannedFile, proposal: AIProposal) -> Plan | None:
+        """Rejoue l'identification avec le titre propose par le modele.
+
+        Le modele ne fournit pas la reponse : il fournit une meilleure REQUETE.
+        Les candidats viennent toujours des fournisseurs, et sa confiance entre
+        dans le scoring comme un plafond — voir ``compute_score``.
+        """
+        corrected = ParsedName(
+            raw=scanned.parsed.raw,
+            title=proposal.title,
+            kind=_kind_from(proposal.kind, scanned.parsed.kind),
+            year=proposal.year or scanned.parsed.year,
+            season=proposal.season if proposal.season is not None else scanned.parsed.season,
+            episode=proposal.episode if proposal.episode is not None else scanned.parsed.episode,
+            absolute_episode=(
+                proposal.absolute_episode
+                if proposal.absolute_episode is not None
+                else scanned.parsed.absolute_episode
+            ),
+            resolution=scanned.parsed.resolution,
+            source=scanned.parsed.source,
+            codec=scanned.parsed.codec,
+            language=scanned.parsed.language,
+            fansub_group=scanned.parsed.fansub_group,
+            quality=scanned.parsed.quality,
+            signals=[*scanned.parsed.signals, "titre propose par le resolveur IA"],
+        )
+
+        rescanned = replace(scanned, parsed=corrected)
+
+        async with self._semaphore:
+            candidates = await self._candidates(rescanned)
+
+        match = best_match(corrected, rescanned.probe, candidates)
+        if match is None:
+            return None
+
+        match.signals.ai_confidence = proposal.confidence
+
+        return build_plan(
+            rescanned,
+            match,
+            template=self._templates.get(_kind_key(corrected.kind), ""),
+            library_root=self._library_root,
+            policy=self._policy,
+        )
+
+
+def _kind_from(value: str, fallback: MediaKind) -> MediaKind:
+    try:
+        return MediaKind(value)
+    except ValueError:
+        return fallback
 
 
 def _kind_key(kind: MediaKind) -> str:
