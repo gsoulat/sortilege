@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .companions import find_companions, find_leftovers
 from .matching import MatchResult
 from .parser import MediaKind
 from .safety import PathConfinementError, resolve_within
@@ -46,6 +47,16 @@ class Plan:
     provider: str = ""
     external_id: str = ""
     error: str | None = None
+
+    companions: list[tuple[Path, Path]] = field(default_factory=list)
+    """Fichiers a emporter avec la video, sous forme (source, destination).
+
+    Sous-titres surtout : ne pas les deplacer est une perte de donnees
+    silencieuse, personne ne s'en apercoit avant de lancer la lecture."""
+
+    leftovers: list[Path] = field(default_factory=list)
+    """Dechets de release evacuables vers la corbeille une fois la video
+    partie. Jamais supprimes."""
 
     @property
     def is_noop(self) -> bool:
@@ -99,6 +110,8 @@ def build_plan(
     template: str,
     library_root: Path,
     policy: Policy,
+    with_artwork: bool = True,
+    with_cleanup: bool = True,
 ) -> Plan:
     """Calcule destination et verdict pour un fichier.
 
@@ -153,6 +166,9 @@ def build_plan(
     # chemin, pas un format de conteneur.
     destination = destination.with_suffix(scanned.path.suffix)
 
+    companions = find_companions(scanned.path, artwork=with_artwork)
+    leftovers = find_leftovers(scanned.path, companions) if with_cleanup else []
+
     return Plan(
         id=plan_id,
         source=scanned.path,
@@ -165,4 +181,6 @@ def build_plan(
         year=match.candidate.year,
         provider=match.candidate.provider,
         external_id=match.candidate.external_id,
+        companions=[(c.path, c.destination_for(destination)) for c in companions],
+        leftovers=leftovers,
     )

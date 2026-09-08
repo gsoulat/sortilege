@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..config import get_settings
+from ..core.companions import TRASH_DIRNAME
 from ..core.journal import apply_plan, undo_last
 from ..core.pipeline import Pipeline
 from ..core.planner import Plan
@@ -200,7 +201,14 @@ def apply(body: ApplyRequest) -> dict[str, object]:
                 allowed.add(Decision.REVIEW)
             selected = [p for p in _plans.values() if p.decision in allowed]
 
-    results = [apply_plan(p, journal, dry_run=conf.dry_run) for p in selected]
+    # La corbeille vit sous la racine de bibliotheque : elle doit etre sur le
+    # meme volume que les fichiers evacues, sinon chaque reste serait recopie
+    # au lieu d'etre deplace.
+    trash_root = conf.library_root / TRASH_DIRNAME
+
+    results = [
+        apply_plan(p, journal, dry_run=conf.dry_run, trash_root=trash_root) for p in selected
+    ]
 
     # Un plan applique quitte la file : le laisser inviterait a le rejouer, et
     # sa source n'existe plus.

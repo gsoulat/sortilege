@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import SourcePicker from './SourcePicker.vue'
+import FolderBrowser from './FolderBrowser.vue'
 
 const KIND_LABELS = { movie: 'Films', episode: 'Séries TV', anime: 'Animes' }
 
@@ -24,6 +25,40 @@ function onSourceChange(patch) {
 function setDestination(kind, value) {
   prefs.value.destinations[kind] = value
   dirty.value = true
+}
+
+// Quel type de média est en cours de sélection dans l'explorateur.
+const browsingKind = ref(null)
+
+/**
+ * L'explorateur rend un chemin absolu ; la destination se stocke RELATIVE à la
+ * racine de bibliothèque. C'est cette racine qui garantit le confinement : une
+ * destination absolue pourrait désigner n'importe où sur le NAS.
+ */
+function onPick(kind, absolute) {
+  const root = prefs.value.library_root.replace(/\/+$/, '')
+  let relative = absolute
+
+  if (absolute === root) {
+    relative = '.'
+  } else if (absolute.startsWith(root + '/')) {
+    relative = absolute.slice(root.length + 1)
+  } else {
+    saveError.value =
+      `« ${absolute} » est hors de la racine de bibliothèque (${root}). ` +
+      'Choisis un dossier situé dessous.'
+    return
+  }
+
+  if (relative === '.') {
+    saveError.value = 'La racine elle-même ne peut pas servir de destination : ' +
+      'choisis un sous-dossier, sinon les trois types se mélangeraient.'
+    return
+  }
+
+  saveError.value = null
+  setDestination(kind, relative)
+  browsingKind.value = null
 }
 
 async function load() {
@@ -91,15 +126,28 @@ onMounted(load)
         racine : c'est ce qui empêche l'interface d'écrire ailleurs sur le NAS.
       </p>
       <div class="dest">
-        <div v-for="(label, kind) in KIND_LABELS" :key="kind" class="dest-row">
-          <label :for="`d-${kind}`">{{ label }}</label>
-          <input
-            :id="`d-${kind}`"
-            :value="prefs.destinations[kind]"
-            spellcheck="false"
-            @input="setDestination(kind, $event.target.value)"
-          />
+        <div v-for="(label, kind) in KIND_LABELS" :key="kind" class="dest-block">
+          <div class="dest-row">
+            <label :for="`d-${kind}`">{{ label }}</label>
+            <input
+              :id="`d-${kind}`"
+              :value="prefs.destinations[kind]"
+              spellcheck="false"
+              @input="setDestination(kind, $event.target.value)"
+            />
+            <button
+              class="browse"
+              @click="browsingKind = browsingKind === kind ? null : kind"
+            >{{ browsingKind === kind ? 'Fermer' : 'Parcourir…' }}</button>
+          </div>
           <code class="resolved">{{ prefs.resolved_destinations[kind] }}</code>
+          <FolderBrowser
+            v-if="browsingKind === kind"
+            :start="prefs.library_root"
+            :pick-label="`Ranger les ${label.toLowerCase()} ici`"
+            @pick="onPick(kind, $event)"
+            @close="browsingKind = null"
+          />
         </div>
       </div>
 
@@ -215,12 +263,17 @@ code {
 /* --- Destinations --- */
 .dest { display: flex; flex-direction: column; gap: 9px; }
 .dest-row { display: grid; grid-template-columns: 90px 1fr auto; gap: 11px; align-items: center; }
+.dest-block .resolved { margin-left: 101px; }
 .dest-row label { font-size: 13px; color: var(--text-dim); }
 .dest-row input { font-family: var(--mono); font-size: 12.5px; padding: 6px 10px; }
 .resolved { font-size: 10.5px; color: var(--text-faint); }
 @media (max-width: 700px) {
   .dest-row { grid-template-columns: 1fr; gap: 4px; }
 }
+
+.dest-block { display: flex; flex-direction: column; gap: 5px; }
+.dest-block + .dest-block { margin-top: 4px; }
+.browse { font-size: 11.5px; padding: 4px 10px; white-space: nowrap; }
 
 .actions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
 button.primary {

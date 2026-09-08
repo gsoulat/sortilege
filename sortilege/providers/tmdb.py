@@ -10,6 +10,8 @@ s'effondre alors que l'identification est correcte.
 
 from __future__ import annotations
 
+import asyncio
+
 from .base import BaseHTTPProvider, Candidate
 
 API = "https://api.themoviedb.org/3"
@@ -26,6 +28,12 @@ class TMDBProvider(BaseHTTPProvider):
     def __init__(self, api_key: str, **kwargs) -> None:
         super().__init__(**kwargs)
         self._api_key = api_key
+        # Cache dedie : le cache generique stocke des listes de candidats, pas
+        # des tables d'episodes.
+        self._seasons: dict[tuple[str, int], dict[int, str] | None] = {}
+        self._season_lock = asyncio.Lock()
+        self._collections: dict[str, str | None] = {}
+        self._collection_lock = asyncio.Lock()
 
     @property
     def available(self) -> bool:
@@ -43,43 +51,37 @@ class TMDBProvider(BaseHTTPProvider):
         if not self.available or not title:
             return []
 
-        key = f"movie:{title.lower()}:{year}"
-        if (hit := await self._cache.get(key)) is not None:
-            return hit
-
-        data = await self._get_json(
-            f"{API}/search/movie", params=self._params(query=title, year=year)
-        )
-        results = self._to_candidates(data, kind="movie")
-
-        # Un filtre sur l'annee peut vider la reponse alors que l'oeuvre existe
-        # (annee de ressortie, erreur de release). On retente sans.
-        if not results and year is not None:
-            data = await self._get_json(f"{API}/search/movie", params=self._params(query=title))
+        async def fetch():
+            data = await self._get_json(
+                f"{API}/search/movie", params=self._params(query=title, year=year)
+            )
             results = self._to_candidates(data, kind="movie")
 
-        await self._cache.set(key, results)
-        return results
+            # Un filtre sur l'annee peut vider la reponse alors que l'oeuvre
+            # existe (ressortie, erreur de release). On retente sans.
+            if not results and year is not None:
+                data = await self._get_json(f"{API}/search/movie", params=self._params(query=title))
+                results = self._to_candidates(data, kind="movie")
+            return results
+
+        return await self.cached(f"movie:{title.lower()}:{year}", fetch)
 
     async def search_series(self, title: str, year: int | None) -> list[Candidate]:
         if not self.available or not title:
             return []
 
-        key = f"series:{title.lower()}:{year}"
-        if (hit := await self._cache.get(key)) is not None:
-            return hit
-
-        data = await self._get_json(
-            f"{API}/search/tv", params=self._params(query=title, first_air_date_year=year)
-        )
-        results = self._to_candidates(data, kind="episode")
-
-        if not results and year is not None:
-            data = await self._get_json(f"{API}/search/tv", params=self._params(query=title))
+        async def fetch():
+            data = await self._get_json(
+                f"{API}/search/tv", params=self._params(query=title, first_air_date_year=year)
+            )
             results = self._to_candidates(data, kind="episode")
 
-        await self._cache.set(key, results)
-        return results
+            if not results and year is not None:
+                data = await self._get_json(f"{API}/search/tv", params=self._params(query=title))
+                results = self._to_candidates(data, kind="episode")
+            return results
+
+        return await self.cached(f"series:{title.lower()}:{year}", fetch)
 
     async def get_collection(self, movie_id: str) -> str | None:
         """Nom de la saga a laquelle appartient le film, s'il y en a une.
@@ -91,27 +93,70 @@ class TMDBProvider(BaseHTTPProvider):
         ``belongs_to_collection``, seul le detail du film le porte. D'ou le
         cache — sur une bibliotheque, beaucoup de films partagent une saga.
         """
-        data = await self._get_json(f"{API}/movie/{movie_id}", params=self._params())
-        if not data:
-            return None
-        collection = data.get("belongs_to_collection")
-        if not isinstance(collection, dict):
-            return None
-        return collection.get("name") or None
+        async with self._collection_lock:
+            if movie_id in self._collections:
+                return self._collections[movie_id]
+
+        async def fetch():
+            data = await self._get_json(f"{API}/movie/{movie_id}", params=self._params())
+            name: str | None = None
+            if data:
+                collection = data.get("belongs_to_collection")
+                if isinstance(collection, dict):
+                    name = collection.get("name") or None
+            async with self._collection_lock:
+                self._collections[movie_id] = name
+            return name
+
+        return await self._flight.do(f"collection:{movie_id}", fetch)
+
+    async def get_season(self, series_id: str, season: int) -> dict[int, str] | None:
+        """Tous les titres d'episodes d'une saison, en UNE requete.
+
+        C'est le point qui decide du volume total d'appels. Interroger chaque
+        episode separement demande une requete par fichier : sur une
+        bibliotheque de 400 episodes cela fait 400 requetes la ou 60 suffisent,
+        et place le scan dans la zone ou TMDB commence a limiter.
+
+        Le resultat est mis en cache : les 12 episodes d'une saison partagent
+        la meme reponse.
+        """
+        key = (series_id, season)
+        async with self._season_lock:
+            if key in self._seasons:
+                return self._seasons[key]
+
+        async def fetch():
+            data = await self._get_json(
+                f"{API}/tv/{series_id}/season/{season}", params=self._params()
+            )
+            titles: dict[int, str] | None = None
+            if data and isinstance(data.get("episodes"), list):
+                titles = {
+                    int(ep["episode_number"]): ep.get("name") or ""
+                    for ep in data["episodes"]
+                    if ep.get("episode_number") is not None
+                }
+            async with self._season_lock:
+                # Un None est memorise aussi : une saison inexistante ne doit
+                # pas etre redemandee pour chacun de ses pretendus episodes.
+                self._seasons[key] = titles
+            return titles
+
+        return await self._flight.do(f"season:{series_id}:{season}", fetch)
 
     async def get_episode_title(self, series_id: str, season: int, episode: int) -> str | None:
-        """Titre d'un episode precis.
+        """Titre d'un episode precis, servi depuis la saison mise en cache.
 
         Sert deux buts : alimenter le jeton {episode_title}, et fournir le
-        signal ``episode_match`` — un 404 signifie que la saison ou l'episode
-        n'existe pas chez ce candidat, donc que l'identification est douteuse.
+        signal ``episode_match`` — une absence signifie que la saison ou
+        l'episode n'existe pas chez ce candidat, donc que l'identification est
+        douteuse.
         """
-        data = await self._get_json(
-            f"{API}/tv/{series_id}/season/{season}/episode/{episode}", params=self._params()
-        )
-        if not data:
+        titles = await self.get_season(series_id, season)
+        if not titles:
             return None
-        return data.get("name") or None
+        return titles.get(episode) or None
 
     def _to_candidates(self, data: dict | None, kind: str) -> list[Candidate]:
         if not data or not isinstance(data.get("results"), list):

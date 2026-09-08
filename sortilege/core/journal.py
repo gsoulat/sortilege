@@ -25,6 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
 
+from .companions import directory_now_empty, trash_destination
 from .planner import Plan
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,12 @@ class MoveRecord:
     destination: str
     method: str
     """« rename » (instantane) ou « copy » (traversee de systemes de fichiers)."""
+
+    kind: str = "video"
+    """« video », « companion » ou « trash ». Valeur par defaut volontaire :
+    sans elle, les entrees ecrites avant l'ajout de ce champ deviendraient
+    illisibles et seraient silencieusement ignorees a la relecture — on
+    perdrait la possibilite d'annuler d'anciens deplacements."""
 
 
 @dataclass(slots=True)
@@ -118,7 +125,13 @@ def _move(source: Path, destination: Path) -> str:
         return "copy"
 
 
-def apply_plan(plan: Plan, journal: Journal, *, dry_run: bool = True) -> ApplyResult:
+def apply_plan(
+    plan: Plan,
+    journal: Journal,
+    *,
+    dry_run: bool = True,
+    trash_root: Path | None = None,
+) -> ApplyResult:
     """Execute un plan. En simulation, verifie tout sans rien deplacer."""
     if plan.destination is None:
         return ApplyResult(plan.id, False, str(plan.source), None, "aucune destination")
@@ -175,23 +188,85 @@ def apply_plan(plan: Plan, journal: Journal, *, dry_run: bool = True) -> ApplyRe
             f"deplacement impossible : {exc}",
         )
 
+    _record(journal, plan.id, plan.source, plan.destination, method, "video")
+
+    # Les compagnons suivent la video. Chacun est journalise separement : une
+    # annulation doit pouvoir tout defaire, y compris un sous-titre.
+    moved_companions = 0
+    for source, target in plan.companions:
+        if not source.is_file() or target.exists():
+            continue
+        try:
+            how = _move(source, target)
+        except OSError as exc:
+            logger.warning("compagnon non deplace (%s) : %s", source.name, exc)
+            continue
+        _record(journal, plan.id, source, target, how, "companion")
+        moved_companions += 1
+
+    trashed = _evacuate(plan, journal, trash_root)
+
+    detail = f"deplace ({method})"
+    if moved_companions:
+        detail += f", {moved_companions} fichier(s) associe(s)"
+    if trashed:
+        detail += f", {trashed} reste(s) en corbeille"
+
+    return ApplyResult(plan.id, True, str(plan.source), str(plan.destination), detail)
+
+
+def _record(
+    journal: Journal, plan_id: str, source: Path, destination: Path, method: str, kind: str
+) -> None:
     journal.append(
         MoveRecord(
             timestamp=datetime.now(UTC).isoformat(),
-            plan_id=plan.id,
-            source=str(plan.source),
-            destination=str(plan.destination),
+            plan_id=plan_id,
+            source=str(source),
+            destination=str(destination),
             method=method,
+            kind=kind,
         )
     )
 
-    return ApplyResult(
-        plan.id,
-        True,
-        str(plan.source),
-        str(plan.destination),
-        f"deplace ({method})",
-    )
+
+def _evacuate(plan: Plan, journal: Journal, trash_root: Path | None) -> int:
+    """Deplace les restes vers la corbeille. Ne supprime jamais rien.
+
+    Sans racine de corbeille configuree, on ne fait rien : mieux vaut laisser
+    du desordre que d'inventer une destination.
+    """
+    if trash_root is None or not plan.leftovers:
+        return 0
+
+    batch = datetime.now(UTC).strftime("%Y-%m-%d")
+    moved = 0
+
+    for leftover in plan.leftovers:
+        if not leftover.is_file():
+            continue
+        target = trash_destination(trash_root, batch, leftover)
+        if target.exists():
+            continue
+        try:
+            how = _move(leftover, target)
+        except OSError as exc:
+            logger.warning("reste non evacue (%s) : %s", leftover.name, exc)
+            continue
+        _record(journal, plan.id, leftover, target, how, "trash")
+        moved += 1
+
+    # Le dossier d'origine, une fois vide, n'a plus de raison d'exister. Il est
+    # SUPPRIME et non mis en corbeille : un dossier vide ne contient rien a
+    # recuperer, et l'annulation le recreera au besoin.
+    parent = plan.source.parent
+    if directory_now_empty(parent):
+        try:
+            parent.rmdir()
+        except OSError:
+            pass
+
+    return moved
 
 
 def undo_last(journal: Journal, count: int = 1) -> list[ApplyResult]:

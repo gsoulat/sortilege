@@ -220,6 +220,17 @@ def _clean_title(raw: str, cut_at: int | None) -> str:
     return title
 
 
+def _strip_trailing_year(title: str, year: int) -> str:
+    """Retire l'annee finale d'un titre, sauf si elle EST le titre.
+
+    « Avatar The Last Airbender 2024 » devient « Avatar The Last Airbender ».
+    Mais « 2012 » reste « 2012 » : un titre reduit a une chaine vide serait
+    bien pire que l'annee de trop.
+    """
+    stripped = re.sub(rf"[\s._-]*{year}\s*$", "", title).strip(" -_")
+    return stripped or title
+
+
 def _title_from_folder(name: str) -> str:
     """Titre porte par un nom de dossier, ampute de son annee.
 
@@ -309,6 +320,13 @@ def parse(path: Path, ancestors: list[str] | None = None) -> ParsedName:
     language = _find_language(lowered)
 
     title = _clean_title(stem, cut_at)
+
+    # Pour un episode le titre est coupe au motif SxxExx, donc une annee placee
+    # AVANT reste collee : « Avatar The Last Airbender 2024 ». Elle est deja
+    # extraite a part, la laisser dans le titre fait echouer la recherche chez
+    # le fournisseur.
+    if year is not None and kind is not MediaKind.MOVIE:
+        title = _strip_trailing_year(title, year)
 
     # Le nom de fichier n'a rien donne (« film.mkv », « 00001.m2ts »,
     # « ep07.mkv ») : on remonte la chaine des dossiers, du plus proche au plus
