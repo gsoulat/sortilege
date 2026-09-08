@@ -1,6 +1,43 @@
 # CHANGELOG
 
 
+## v0.13.0 (2026-09-08)
+
+### Features
+
+- **revue**: Choisir la bonne oeuvre parmi les candidats, avec les jaquettes
+  ([`ce284a8`](https://github.com/gsoulat/sortilege/commit/ce284a8bfc327fed9369dd91fa31149f2615e421))
+
+Le cas qui a motive ce travail : « Dark Matter » 2015 et « Dark Matter » 2024 sont deux series
+  reelles, meme titre, meme type. AUCUN signal automatique ne les separe — ni l'annee (absente du
+  nom), ni la notoriete, ni l'accord des fournisseurs. Le score avait raison de ne pas trancher ; ce
+  qui manquait, c'etait le moyen de trancher a la main.
+
+Les candidats etaient calcules puis JETES : seul le gagnant survivait. C'est exactement a l'inverse
+  de ce dont on a besoin, puisqu'un score bas signifie « plusieurs possibilites » et que ces
+  possibilites etaient perdues au moment ou elles devenaient utiles.
+
+Le plan garde donc jusqu'a huit alternatives, avec leur jaquette. Au-dela, une grille d'affiches
+  cesse d'aider a decider et redevient une liste a lire.
+
+Les jaquettes ne sont pas decoratives : entre deux oeuvres homonymes, une affiche tranche en une
+  seconde la ou une date demande de reflechir. C'est le seul endroit de l'application ou une image a
+  une valeur fonctionnelle.
+
+POST /api/review/{id}/choose impose un candidat et recalcule la destination. Le score n'est PAS
+  recalcule : un choix humain explicite n'est pas une hypothese a evaluer, et sur un cas d'homonymie
+  le calcul avait deja montre qu'il ne savait pas. Le plan est marque `manual` et passe en
+  application automatique.
+
+L'ancien candidat rejoint les alternatives : changer d'avis ne doit pas imposer de relancer un scan.
+
+Cote interface, un bouton « Ce n'est pas ca » ouvre la grille. Sur une serie il porte sur l'ensemble
+  : l'identification est la meme pour tous les episodes, la corriger episode par episode reviendrait
+  a repondre douze fois a la meme question.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.12.0 (2026-09-08)
 
 ### Features
