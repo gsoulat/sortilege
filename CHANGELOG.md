@@ -1,6 +1,47 @@
 # CHANGELOG
 
 
+## v0.9.0 (2026-09-08)
+
+### Features
+
+- **ai**: Brancher le resolveur en seconde passe sur les cas ambigus
+  ([`79fe337`](https://github.com/gsoulat/sortilege/commit/79fe3374ec9820db1717d55a024227c294649e67))
+
+Le module existait, teste, mais aucun code ne l'appelait. Il est desormais integre au pipeline, avec
+  une place volontairement etroite.
+
+Quand il est appele ------------------- JAMAIS sur le tout-venant. Une premiere passe deterministe
+  traite la bibliotheque a cout nul ; seuls les fichiers qui n'ont PAS obtenu une application
+  automatique sont soumis au modele. On ne paie donc un appel que pour ce qui allait de toute facon
+  demander une intervention humaine. Les appels sont groupes par lot : un appel par fichier
+  couterait dix fois le prix.
+
+Ce qu'on fait de sa reponse --------------------------- Le modele ne fournit pas la reponse, il
+  fournit une meilleure REQUETE. Son titre relance une recherche chez les fournisseurs, et les
+  candidats continuent de venir d'eux. Sa confiance entre dans le scoring comme un PLAFOND, pas
+  comme un terme additif : elle dit « je crois reconnaitre cette oeuvre », pas « les donnees
+  concordent ».
+
+Ce qu'on lui refuse ------------------- - Une proposition ne remplace le resultat deterministe que
+  si elle score MIEUX. Sans cette regle, un modele qui se trompe ferait perdre une identification
+  deja correcte. - Un titre vide ne declenche rien : le modele qui avoue ne pas savoir est respecte,
+  pas contourne. - Une panne du resolveur laisse le lot exactement dans l'etat ou la premiere passe
+  l'a mis. C'est un bonus, jamais une dependance.
+
+Le SDK Anthropic etant synchrone, l'appel passe par asyncio.to_thread : l'invoquer directement
+  figerait la boucle d'evenements et donc tout le scan.
+
+L'import d'`anthropic` reste tardif et son absence est rattrapee proprement — une installation sans
+  l'extra « ai » doit fonctionner normalement plutot que de planter au chargement du module.
+
+Les utilitaires de test partages sont sortis dans tests/helpers.py : importer un fichier de test
+  depuis un autre creait un couplage ou renommer l'un cassait l'autre, et `tests/` n'etant pas un
+  paquet l'import relatif echouait de toute facon.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.8.0 (2026-09-07)
 
 ### Features
