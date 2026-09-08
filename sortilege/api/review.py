@@ -22,6 +22,7 @@ from ..core.journal import apply_plan, undo_last
 from ..core.pipeline import BATCH_SIZE, Pipeline
 from ..core.planner import Plan
 from ..core.scoring import Decision, Policy
+from ..core.snapshot import PLANS_KEY, SnapshotError, plans_in, plans_out
 from ..core.store import Decision as RememberedDecision
 from ..core.store import title_key
 from ..providers.anilist import AniListProvider
@@ -79,17 +80,60 @@ def _ai_resolver():
     return build_resolver(ai.provider, ai.api_key, ai.model, ai.base_url)
 
 
+def _persist_plans() -> None:
+    """Ecrit la file de plans sur disque. Ne leve jamais.
+
+    Chaque plan represente des appels reseau deja payes. Sur mille fichiers,
+    les refaire apres un redemarrage coute plusieurs minutes et une part du
+    quota TMDB — pour un resultat identique.
+
+    Ce qui est enregistre reste une VUE : un plan relu est verifie a
+    l'application comme n'importe quel plan frais. La reprise economise du
+    calcul, elle ne court-circuite aucun controle.
+    """
+    try:
+        with _lock:
+            payload = plans_out(list(_plans.values()))
+            done = sorted(_job.done_paths)
+        get_memory().save_blob(PLANS_KEY, {**payload, "done_paths": done})
+    except Exception:
+        logger.exception("enregistrement des plans impossible")
+
+
+def restore_plans() -> bool:
+    """Relit la file enregistree. Vrai si quelque chose a ete repris."""
+    raw = get_memory().load_blob(PLANS_KEY)
+    if raw is None:
+        return False
+    try:
+        plans = plans_in(raw)
+    except SnapshotError as exc:
+        logger.warning("plans enregistres ignores : %s", exc)
+        return False
+
+    with _lock:
+        _plans.clear()
+        _plans.update({p.id: p for p in plans})
+        # Sans les chemins deja traites, « Traiter les 100 suivants »
+        # recalculerait le premier lot au lieu d'avancer.
+        _job.done_paths = set(raw.get("done_paths") or [])
+    logger.info("file reprise depuis le disque : %s plans", len(plans))
+    return True
+
+
 def adopt_plans(plans: list[Plan]) -> None:
     """Remplace la file par un lot calcule ailleurs (cycle automatique)."""
     with _lock:
         _plans.clear()
         _plans.update({p.id: p for p in plans})
+    _persist_plans()
 
 
 def drop_applied(plan_ids: list[str]) -> None:
     with _lock:
         for pid in plan_ids:
             _plans.pop(pid, None)
+    _persist_plans()
 
 
 def _plan_out(plan: Plan) -> dict[str, object]:
@@ -243,6 +287,7 @@ async def build_plans(limit: int = 100, reset: bool = False) -> dict[str, object
         _job.done_paths.clear()
         with _lock:
             _plans.clear()
+        _persist_plans()
         pending = eligible
 
     if not pending:
@@ -283,6 +328,7 @@ async def build_plans(limit: int = 100, reset: bool = False) -> dict[str, object
             # perdrait le travail deja fait.
             _plans.update({p.id: p for p in plans})
         _job.done_paths.update(str(f.path) for f in batch)
+        _persist_plans()
         logger.info("lot planifie : %s plans", len(plans))
 
     global _plan_task
@@ -387,6 +433,7 @@ def apply(body: ApplyRequest) -> dict[str, object]:
             for r in results:
                 if r.ok:
                     _plans.pop(r.plan_id, None)
+        _persist_plans()
 
     return {
         "dry_run": simulate,
@@ -515,6 +562,7 @@ async def choose(plan_id: str, body: ChooseRequest) -> dict[str, object]:
             _plans.pop(target.id, None)
         for plan_out in rebuilt:
             _plans[plan_out.id] = plan_out
+    _persist_plans()
 
     return {"corrected": len(rebuilt), "queue": _queue(), "remembered": bool(plan.title)}
 

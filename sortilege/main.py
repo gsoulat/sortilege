@@ -46,6 +46,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     if not ffprobe_available():
         logger.warning("ffprobe absent : duree et tags des conteneurs non lisibles")
 
+    # Reprise de l'etat de travail. Un scan de mille fichiers coute plusieurs
+    # minutes de disque et les plans qui en decoulent des centaines d'appels
+    # reseau : les refaire a chaque mise a jour d'image rendrait l'outil
+    # penible. Un instantane illisible est ignore, pas fatal.
+    if library.restore_scan():
+        review.restore_plans()
+
     # La boucle tourne toujours ; elle consulte les preferences a chaque tour
     # et ne fait rien tant que l'automatisation est desactivee. La demarrer
     # conditionnellement obligerait a redemarrer le conteneur pour l'activer.

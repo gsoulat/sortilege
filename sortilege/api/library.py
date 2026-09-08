@@ -22,7 +22,8 @@ from fastapi import APIRouter, HTTPException
 
 from ..config import get_settings
 from ..core.scanner import ScanResult, scan
-from .deps import get_store
+from ..core.snapshot import SCAN_KEY, SnapshotError, scan_in, scan_out
+from .deps import get_memory, get_store
 from .schemas import ScanOut, scan_to_out
 
 logger = logging.getLogger(__name__)
@@ -71,7 +72,44 @@ class ScanJob:
 _job = ScanJob()
 
 
-def adopt_scan(result: ScanResult, *, deep: bool) -> None:
+def _persist_scan() -> None:
+    """Ecrit le scan courant sur disque. Ne leve jamais.
+
+    Un scan de mille fichiers coute plusieurs minutes de disque ; le reperdre
+    a chaque redemarrage du conteneur — donc a chaque mise a jour d'image —
+    suffit a rendre l'outil penible. Un echec d'ecriture, lui, ne justifie
+    pas de perdre le scan qu'on vient tout juste de terminer.
+    """
+    if _job.result is None:
+        return
+    try:
+        get_memory().save_blob(SCAN_KEY, scan_out(_job.result, deep=_job.deep))
+    except Exception:
+        logger.exception("enregistrement du scan impossible")
+
+
+def restore_scan() -> bool:
+    """Relit le dernier scan enregistre. Vrai si quelque chose a ete repris.
+
+    Appele au demarrage. Un instantane illisible — schema d'une version
+    anterieure, champ disparu — ramene simplement a « pas de scan » : perdre
+    une reprise est un desagrement, ne pas demarrer est une panne.
+    """
+    raw = get_memory().load_blob(SCAN_KEY)
+    if raw is None:
+        return False
+    try:
+        result, deep = scan_in(raw)
+    except SnapshotError as exc:
+        logger.warning("scan enregistre ignore : %s", exc)
+        return False
+
+    adopt_scan(result, deep=deep, persist=False)
+    logger.info("scan repris depuis le disque : %s fichiers", result.total)
+    return True
+
+
+def adopt_scan(result: ScanResult, *, deep: bool, persist: bool = True) -> None:
     """Enregistre un scan produit hors de l'endpoint.
 
     Le cycle automatique passe par ici plutot que d'appeler l'API : l'interface
@@ -83,6 +121,8 @@ def adopt_scan(result: ScanResult, *, deep: bool) -> None:
     _job.total = result.total
     _job.finished_at = time.monotonic()
     _job.phase = "termine"
+    if persist:
+        _persist_scan()
 
 
 def last_scan() -> ScanResult | None:
@@ -114,6 +154,7 @@ def _run(roots, deep: bool, limit: int | None, library_root) -> None:
         )
         _job.result = result
         _job.error = None
+        _persist_scan()
         logger.info(
             "scan termine : %s fichiers, %s ignores, %s erreurs",
             result.total,
