@@ -1,6 +1,30 @@
 # CHANGELOG
 
 
+## v0.11.0 (2026-09-08)
+
+### Features
+
+- **tmdb**: Accepter la cle d' API comme le jeton d' acces en lecture
+  ([`fb9b942`](https://github.com/gsoulat/sortilege/commit/fb9b9420de5b39350fb4150bd645039a0eb93dfe))
+
+TMDB propose les deux cote a cote dans les parametres du compte : une « Cle d API » (32 caracteres
+  hexa, authentification v3, en parametre d URL) et un « Jeton d acces en lecture » (JWT v4, en
+  en-tete Authorization). Ils ne sont pas interchangeables et se tromper donne un 401 sans la
+  moindre explication.
+
+Le format est desormais reconnu a la forme du secret et achemine correctement.
+
+Un appel avait ete oublie au passage — la relance de recherche sans annee, qui ne portait pas les
+  en-tetes. Avec un jeton v4 elle aurait echoue en 401 precisement dans le cas ou le premier essai n
+  a rien donne, donc sur les fichiers les plus difficiles. Un test couvre chaque route.
+
+Le jeton ne part jamais dans l URL : les URL finissent dans les journaux d accces et les en-tetes de
+  referent.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.10.0 (2026-09-08)
 
 ### Features
