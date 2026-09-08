@@ -38,8 +38,16 @@ class ApplyRequest(BaseModel):
 
     include_review: bool = False
     """Applique aussi les plans en attente d'arbitrage. Reserve a un clic
-    explicite « tout appliquer » : c'est exactement ce que l'outil s'interdit
+    explicite sur une selection : c'est exactement ce que l'outil s'interdit
     de faire seul."""
+
+    dry_run: bool = True
+    """Simuler plutot que deplacer.
+
+    Par defaut a True : une requete qui omettrait ce champ simule, elle ne
+    deplace pas. Le defaut d'une operation irreversible doit etre l'inaction.
+
+    SORTILEGE_DRY_RUN peut forcer la simulation mais jamais l'inverse."""
 
 
 class UndoRequest(BaseModel):
@@ -151,7 +159,7 @@ def _queue() -> dict[str, object]:
         "auto": [_plan_out(p) for p in by_decision[Decision.AUTO]],
         "items": [_plan_out(p) for p in by_decision[Decision.REVIEW]],
         "rejected": [_plan_out(p) for p in by_decision[Decision.REJECT]],
-        "dry_run": conf.dry_run,
+        "dry_run_locked": conf.dry_run,
         "policy": {
             "auto_apply_threshold": conf.auto_apply_threshold,
             "reject_threshold": conf.reject_threshold,
@@ -206,20 +214,27 @@ def apply(body: ApplyRequest) -> dict[str, object]:
     # au lieu d'etre deplace.
     trash_root = conf.library_root / TRASH_DIRNAME
 
-    results = [
-        apply_plan(p, journal, dry_run=conf.dry_run, trash_root=trash_root) for p in selected
-    ]
+    # La variable d'environnement ne peut que RENFORCER la simulation, jamais
+    # l'inverse : un verrou pose volontairement sur une instance ne doit pas
+    # etre contournable par un clic dans l'interface.
+    simulate = body.dry_run or conf.dry_run
+
+    results = [apply_plan(p, journal, dry_run=simulate, trash_root=trash_root) for p in selected]
 
     # Un plan applique quitte la file : le laisser inviterait a le rejouer, et
     # sa source n'existe plus.
-    if not conf.dry_run:
+    if not simulate:
         with _lock:
             for r in results:
                 if r.ok:
                     _plans.pop(r.plan_id, None)
 
     return {
-        "dry_run": conf.dry_run,
+        "dry_run": simulate,
+        # L'utilisateur a demande une execution mais la configuration l'a
+        # refusee : sans ce drapeau, l'interface annoncerait une simulation
+        # sans dire pourquoi.
+        "locked": conf.dry_run and not body.dry_run,
         "applied": sum(1 for r in results if r.ok),
         "failed": sum(1 for r in results if not r.ok),
         "results": [

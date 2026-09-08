@@ -41,21 +41,35 @@ async function plan() {
   }
 }
 
-async function apply(ids = null, includeReview = false) {
+/**
+ * `dryRun` vient du bouton cliqué, plus d'une variable d'environnement : on
+ * simule puis on exécute la même sélection sans redémarrer le conteneur.
+ * SORTILEGE_DRY_RUN reste un verrou côté serveur, qui ne peut que refuser.
+ */
+async function apply(ids, { includeReview = false, dryRun = true } = {}) {
   applying.value = true
   try {
     const out = await call('/api/review/apply', {
       plan_ids: ids,
       include_review: includeReview,
+      dry_run: dryRun,
     })
-    if (out) {
-      results.value = out
-      message.value = out.dry_run
-        ? `Simulation : ${out.applied} déplacement(s) possible(s), ${out.failed} bloqué(s).`
-        : `${out.applied} fichier(s) rangé(s), ${out.failed} en échec.`
-      selected.value = new Set()
-      await load()
+    if (!out) return
+
+    results.value = out
+    if (out.locked) {
+      message.value =
+        `Exécution refusée : SORTILEGE_DRY_RUN=true verrouille cette instance. ` +
+        `Résultat de la simulation : ${out.applied} déplacement(s) possible(s).`
+    } else if (out.dry_run) {
+      message.value = `Simulation : ${out.applied} déplacement(s) possible(s), ${out.failed} bloqué(s).`
+    } else {
+      message.value = `${out.applied} fichier(s) rangé(s), ${out.failed} en échec.`
     }
+    // Une exécution vide la sélection ; une simulation la garde, pour qu'on
+    // puisse enchaîner sur l'exécution des mêmes lignes.
+    if (!out.dry_run) selected.value = new Set()
+    await load()
   } finally {
     applying.value = false
   }
@@ -76,6 +90,51 @@ function toggle(id) {
   selected.value = next
 }
 
+/**
+ * Les épisodes sont regroupés par série. Sur une bibliothèque réelle la file
+ * contient des centaines de lignes pour quelques dizaines de séries : cocher
+ * une par une serait inutilisable, et surtout la décision est la même pour
+ * toute la série — soit l'identification est bonne, soit elle ne l'est pas.
+ */
+const reviewGroups = computed(() => {
+  const movies = []
+  const shows = new Map()
+
+  for (const p of data.value?.items ?? []) {
+    if (p.kind === 'movie') {
+      movies.push(p)
+      continue
+    }
+    const key = p.title || '(titre non identifié)'
+    if (!shows.has(key)) shows.set(key, [])
+    shows.get(key).push(p)
+  }
+
+  return {
+    movies,
+    shows: [...shows.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([title, plans]) => ({ title, plans, year: plans[0].year })),
+  }
+})
+
+function groupState(plans) {
+  const picked = plans.filter((p) => selected.value.has(p.id)).length
+  if (picked === 0) return 'none'
+  return picked === plans.length ? 'all' : 'some'
+}
+
+function toggleGroup(plans) {
+  const next = new Set(selected.value)
+  // Tout décocher seulement si TOUT était coché : une sélection partielle
+  // signifie qu'on était en train de composer, on la complète.
+  const complete = groupState(plans) === 'all'
+  for (const p of plans) {
+    complete ? next.delete(p.id) : next.add(p.id)
+  }
+  selected.value = next
+}
+
 const shortPath = (p) => (p ? p.split('/').slice(-3).join('/') : '—')
 
 onMounted(load)
@@ -87,7 +146,9 @@ onMounted(load)
       <button class="primary" :disabled="planning" @click="plan">
         {{ planning ? 'Identification en cours…' : 'Calculer les plans' }}
       </button>
-      <span v-if="data.dry_run" class="badge warn">simulation — rien ne sera déplacé</span>
+      <span v-if="data.dry_run_locked" class="badge warn" title="SORTILEGE_DRY_RUN=true">
+        verrouillé — l'exécution est refusée par la configuration
+      </span>
       <button
         v-if="data.journal_size"
         class="undo"
@@ -118,8 +179,11 @@ onMounted(load)
         <div class="group-head">
           <h3>Assez sûr pour être appliqué seul</h3>
           <span class="count">{{ data.auto.length }}</span>
-          <button class="primary" :disabled="applying" @click="apply(null, false)">
-            {{ data.dry_run ? 'Simuler' : 'Appliquer' }} ces {{ data.auto.length }}
+          <button :disabled="applying" @click="apply(null, { dryRun: true })">
+            Simuler
+          </button>
+          <button class="primary" :disabled="applying" @click="apply(null, { dryRun: false })">
+            Exécuter ces {{ data.auto.length }}
           </button>
         </div>
         <ul class="plans">
@@ -142,14 +206,46 @@ onMounted(load)
         <div class="group-head">
           <h3>En attente de ton arbitrage</h3>
           <span class="count">{{ data.items.length }}</span>
-          <button
-            v-if="selected.size"
-            :disabled="applying"
-            @click="apply([...selected])"
-          >{{ data.dry_run ? 'Simuler' : 'Appliquer' }} la sélection ({{ selected.size }})</button>
+          <template v-if="selected.size">
+            <button :disabled="applying" @click="apply([...selected], { dryRun: true })">
+              Simuler ({{ selected.size }})
+            </button>
+            <button class="primary" :disabled="applying" @click="apply([...selected], { dryRun: false })">
+              Exécuter ({{ selected.size }})
+            </button>
+          </template>
         </div>
-        <ul class="plans">
-          <li v-for="p in data.items" :key="p.id" :class="{ picked: selected.has(p.id) }">
+        <!-- Séries : une case coche toute la série -->
+        <div v-for="show in reviewGroups.shows" :key="show.title" class="show">
+          <label class="show-head">
+            <input
+              type="checkbox"
+              :checked="groupState(show.plans) === 'all'"
+              :indeterminate.prop="groupState(show.plans) === 'some'"
+              @change="toggleGroup(show.plans)"
+            />
+            <span class="show-title">{{ show.title }}</span>
+            <span v-if="show.year" class="year">({{ show.year }})</span>
+            <span class="count">{{ show.plans.length }} épisode{{ show.plans.length > 1 ? 's' : '' }}</span>
+          </label>
+
+          <ul class="plans nested">
+            <li v-for="p in show.plans" :key="p.id" :class="{ picked: selected.has(p.id) }">
+              <label class="line">
+                <input type="checkbox" :checked="selected.has(p.id)" @change="toggle(p.id)" />
+                <span class="score mid">{{ (p.score * 100).toFixed(0) }}</span>
+                <code class="to">{{ shortPath(p.destination) }}</code>
+              </label>
+              <ul class="reasons">
+                <li v-for="(r, i) in p.reasons" :key="i">{{ r }}</li>
+              </ul>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Films : à plat, chaque décision est indépendante -->
+        <ul v-if="reviewGroups.movies.length" class="plans">
+          <li v-for="p in reviewGroups.movies" :key="p.id" :class="{ picked: selected.has(p.id) }">
             <label class="line">
               <input type="checkbox" :checked="selected.has(p.id)" @change="toggle(p.id)" />
               <span class="score mid">{{ (p.score * 100).toFixed(0) }}</span>
@@ -234,7 +330,21 @@ button.primary {
 .group-head { display: flex; align-items: center; gap: 11px; margin-bottom: 12px; }
 h3 { margin: 0; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim); }
 .count { font-size: 11px; color: var(--text-faint); }
-.group-head button { margin-left: auto; font-size: 12px; }
+.group-head button { font-size: 12px; }
+.group-head button:nth-of-type(1) { margin-left: auto; }
+.group-head template + button { margin-left: 0; }
+
+/* --- Séries groupées dans la file --- */
+.show { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; overflow: hidden; }
+.show-head {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 12px; background: var(--surface-2); cursor: pointer;
+}
+.show-head input { width: auto; }
+.show-title { font-weight: 500; font-size: 13.5px; }
+.show-head .count { margin-left: auto; font-size: 11px; color: var(--text-faint); }
+.plans.nested { padding: 6px 12px 9px 32px; }
+.plans.nested > li { border-top: none; padding: 3px 0; }
 
 .plans { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
 .plans > li { padding: 8px 0; border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }

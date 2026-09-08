@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     source_roots: Annotated[list[Path], NoDecode] = Field(default_factory=list)
     library_root: Path = Path("/storage/media")
 
+    allowed_roots: Annotated[list[Path], NoDecode] = Field(default_factory=list)
+    """Zones que l'interface peut PARCOURIR, au-dela des sources declarees.
+
+    Distinct des sources a dessein : un NAS monte souvent un volume entier
+    (« /volume1:/storage ») dont seuls quelques dossiers servent de source.
+    Sans cette variable, un dossier comme « /storage/Video » serait pourtant
+    monte mais invisible dans l'explorateur, et impossible a ajouter.
+
+    Vide = les sources et la bibliotheque, comme avant."""
+
     # --- Fournisseurs (hors prefixe SORTILEGE_) ---
     tmdb_api_key: str = Field(default="", alias="TMDB_API_KEY")
     tvdb_api_key: str = Field(default="", alias="TVDB_API_KEY")
@@ -52,7 +62,7 @@ class Settings(BaseSettings):
 
     database_url: str = "sqlite:///data/sortilege.db"
 
-    @field_validator("source_roots", mode="before")
+    @field_validator("source_roots", "allowed_roots", mode="before")
     @classmethod
     def _split_roots(cls, v: object) -> object:
         """Accepte 'a:b:c' depuis l'environnement."""

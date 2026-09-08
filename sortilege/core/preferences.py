@@ -81,10 +81,17 @@ class PreferenceStore:
     n'apporterait rien et il faudrait la migrer.
     """
 
-    def __init__(self, path: Path, library_root: Path, source_roots: list[Path]) -> None:
+    def __init__(
+        self,
+        path: Path,
+        library_root: Path,
+        source_roots: list[Path],
+        extra_roots: list[Path] | None = None,
+    ) -> None:
         self._path = path
         self._library_root = library_root
         self._source_roots = source_roots
+        self._extra_roots = extra_roots or []
         self._lock = Lock()
         self._cache: Preferences | None = None
 
@@ -145,6 +152,8 @@ class PreferenceStore:
         """
         areas: dict[str, Path] = {str(p): p for p in self._source_roots}
         areas.setdefault(str(self._library_root), self._library_root)
+        for extra in self._extra_roots:
+            areas.setdefault(str(extra), extra)
         return list(areas.values())
 
     def _assert_under_a_root(self, raw: str) -> Path:
@@ -172,8 +181,8 @@ class PreferenceStore:
         allowed = ", ".join(str(p) for p in self.allowed_areas) or "(aucune)"
         raise PreferenceError(
             f"« {raw} » est hors des zones montees. Zones autorisees : {allowed}. "
-            "Pour en ouvrir une autre, ajoute un volume au conteneur et declare-la "
-            "dans SORTILEGE_SOURCE_ROOTS."
+            "Pour en ouvrir une autre, declare-la dans SORTILEGE_ALLOWED_ROOTS "
+            "(le volume doit deja etre monte dans le conteneur)."
         )
 
     def validate(self, prefs: Preferences) -> None:

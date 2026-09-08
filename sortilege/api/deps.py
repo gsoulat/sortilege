@@ -34,4 +34,5 @@ def get_store() -> PreferenceStore:
         path=DATA_DIR / "preferences.json",
         library_root=conf.library_root,
         source_roots=list(conf.source_roots),
+        extra_roots=list(conf.allowed_roots),
     )
