@@ -3,7 +3,13 @@ import { ref, onMounted } from 'vue'
 
 const props = defineProps({
   mediaServer: { type: Object, required: true },
+  // Les trois blocs d'entretien n'ont rien a faire ensemble du point de vue de
+  // l'utilisateur : le serveur multimedia releve de l'automatisation, la
+  // corbeille du systeme, la remise en conformite de la bibliotheque. Ils
+  // partagent ce composant par commodite de code, pas par parente.
+  section: { type: String, default: 'tout' },
 })
+const montre = (nom) => props.section === 'tout' || props.section === nom
 const emit = defineEmits(['change'])
 
 // --- Serveur multimédia ----------------------------------------------------
@@ -124,7 +130,7 @@ onMounted(loadTrash)
 </script>
 
 <template>
-  <section>
+  <section v-if="montre('serveur')">
     <h3>Serveur multimédia</h3>
     <p class="note">
       Après chaque rangement, Sortilège demande à Jellyfin de relire sa bibliothèque.
@@ -184,7 +190,7 @@ onMounted(loadTrash)
     </div>
   </section>
 
-  <section>
+  <section v-if="montre('corbeille')">
     <h3>Corbeille</h3>
     <p class="note">
       Sortilège ne supprime jamais : restes de release, doublons et copies déjà rangées
@@ -237,7 +243,7 @@ onMounted(loadTrash)
     </template>
   </section>
 
-  <section>
+  <section v-if="montre('renommage')">
     <h3>Remettre la bibliothèque en conformité</h3>
     <p class="note">
       Quand un gabarit change, ce qui est déjà rangé garde des noms produits par une

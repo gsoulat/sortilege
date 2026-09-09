@@ -351,3 +351,42 @@ def test_le_compte_des_lourds_remonte_dans_les_totaux() -> None:
     counts = summarize(entries)
     assert counts["heavy"] == 1
     assert counts["total_bytes"] == int(52 * GB)
+
+
+# --- Le compteur doit descendre ---------------------------------------------
+#
+# Bug constate a l'usage : « À traiter » restait fige a plusieurs milliers quoi
+# qu'on range. La cause etait subtile — les fichiers deja planifies etaient
+# reconnus a partir des plans VIVANTS, or un plan applique quitte la file. Son
+# fichier retombait donc dans « pas encore planifie », et le compte ne bougeait
+# pas d'un pouce.
+
+
+def test_un_fichier_planifie_ne_compte_plus_comme_en_attente() -> None:
+    """C'est build() qui recoit deja la liste filtree, mais la propriete se
+    verifie ici : ce qui a un plan n'est pas aussi « en attente »."""
+    p = plan("Severance", source="/dl/e1.mkv")
+    entries = build([], [p], [])
+
+    assert summarize(entries)["unplanned"] == 0
+    assert summarize(entries)["ready"] == 1
+
+
+def test_un_fichier_sans_plan_reste_en_attente() -> None:
+    entries = build([], [], [pending("Autre.Chose.2020.mkv")])
+    assert summarize(entries)["unplanned"] == 1
+
+
+def test_ranger_fait_baisser_le_total_a_traiter() -> None:
+    """Trois plans prets, un applique : le total doit passer de 3 a 2. Avec
+    l'ancien calcul, le fichier applique revenait en « non planifie » et le
+    total restait a 3."""
+    plans = [plan("S", source=f"/dl/e{i}.mkv") for i in range(3)]
+    avant = summarize(build([], plans, []))
+
+    # Application : le plan quitte la file, son fichier n'est PAS remis en
+    # attente — c'est ce que garantit le suivi des chemins deja planifies.
+    apres = summarize(build([], plans[1:], []))
+
+    assert avant["ready"] + avant["unplanned"] == 3
+    assert apres["ready"] + apres["unplanned"] == 2

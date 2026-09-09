@@ -127,7 +127,10 @@ def read_workspace(limit: int = 200) -> dict[str, object]:
     """
     scan = library.last_scan()
     plans = list(review.current_plans())
-    planned = {str(p.source) for p in plans}
+    # Les chemins DEJA PASSES par le calcul, et non ceux des plans vivants : un
+    # plan applique quitte la file, et s'y fier ferait retomber son fichier
+    # dans « pas encore planifie ». Le compteur ne descendait jamais.
+    planned = review.planned_paths() | {str(p.source) for p in plans}
 
     pending = (
         []
@@ -135,7 +138,13 @@ def read_workspace(limit: int = 200) -> dict[str, object]:
         else [
             f
             for f in scan.files
-            if not f.in_library and f.skipped_reason is None and str(f.path) not in planned
+            if not f.in_library
+            and f.skipped_reason is None
+            and str(f.path) not in planned
+            # Le scan est un instantane : un fichier range ou evacue depuis
+            # figure encore dedans. L'annoncer « en attente » ferait promettre
+            # un travail qui n'aura pas lieu.
+            and f.path.exists()
         ]
     )
 

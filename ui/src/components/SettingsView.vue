@@ -143,12 +143,37 @@ async function save(extra = {}) {
 }
 
 onMounted(load)
+
+// Les reglages tenaient sur une seule page de plus de trois cents lignes, ou
+// la liste des identifications retenues — souvent plusieurs dizaines
+// d'entrees — s'installait au milieu et enterrait tout ce qui suivait.
+//
+// Le decoupage suit ce qu'on vient FAIRE, pas la structure du code : « ou
+// vont mes fichiers », « que fait l'outil tout seul », « comment il
+// identifie », « l'etat du deploiement ». Un reglage se cherche par son
+// intention.
+const ONGLETS = [
+  { id: 'bibliotheque', label: 'Bibliothèque' },
+  { id: 'automatisation', label: 'Automatisation' },
+  { id: 'identification', label: 'Identification' },
+  { id: 'systeme', label: 'Système' },
+]
+const onglet = ref('bibliotheque')
 </script>
 
 <template>
   <div v-if="s && prefs" class="settings">
-    <!-- ========== Modifiable : les choix d'usage ========== -->
+    <nav class="onglets">
+      <button
+        v-for="o in ONGLETS"
+        :key="o.id"
+        :class="{ actif: onglet === o.id }"
+        @click="onglet = o.id"
+      >{{ o.label }}</button>
+    </nav>
 
+    <!-- ===== Bibliothèque : d'où viennent les fichiers, où ils vont ===== -->
+    <template v-if="onglet === 'bibliotheque'">
     <section>
       <h3>Sources à scanner</h3>
       <p class="note top">
@@ -244,17 +269,40 @@ onMounted(load)
       </div>
     </section>
 
-    <!-- ========== Lecture seule : le déploiement ========== -->
+    <MaintenanceSettings
+      section="renommage"
+      :media-server="prefs.media_server"
+      @change="onMediaServerChange"
+    />
+    </template>
 
-    <DecisionsSettings />
-
+    <!-- ===== Automatisation : ce que l'outil fait sans personne devant ===== -->
+    <template v-if="onglet === 'automatisation'">
     <AutomationSettings :automation="prefs.automation" @change="onAutomationChange" />
 
     <NotificationSettings :notifications="prefs.notifications" @change="onNotificationsChange" />
 
-    <MaintenanceSettings :media-server="prefs.media_server" @change="onMediaServerChange" />
+    <MaintenanceSettings
+      section="serveur"
+      :media-server="prefs.media_server"
+      @change="onMediaServerChange"
+    />
+    </template>
 
+    <!-- ===== Identification : comment une œuvre est reconnue ===== -->
+    <template v-if="onglet === 'identification'">
     <AiSettings :ai="prefs.ai" :providers="prefs.ai_providers" @change="onAiChange" />
+
+    <DecisionsSettings />
+    </template>
+
+    <!-- ===== Système : le déploiement, en lecture seule ===== -->
+    <template v-if="onglet === 'systeme'">
+    <MaintenanceSettings
+      section="corbeille"
+      :media-server="prefs.media_server"
+      @change="onMediaServerChange"
+    />
 
     <p class="lead">
       Ce qui suit décrit le <strong>déploiement</strong> et vient de l'environnement.
@@ -304,11 +352,16 @@ onMounted(load)
         </li>
       </ul>
     </section>
+    </template>
   </div>
 </template>
 
 <style scoped>
 .settings { display: flex; flex-direction: column; gap: 18px; }
+
+.onglets { display: flex; gap: 6px; flex-wrap: wrap; }
+.onglets button { font-size: 12.5px; padding: 5px 14px; color: var(--text-dim); }
+.onglets button.actif { border-color: var(--accent); color: var(--text); background: var(--surface); }
 
 .lead { margin: 8px 0 0; font-size: 12.5px; color: var(--text-faint); line-height: 1.65; max-width: 720px; }
 

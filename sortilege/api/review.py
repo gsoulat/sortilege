@@ -269,6 +269,17 @@ def _plan_status() -> dict[str, object]:
     }
 
 
+def planned_paths() -> set[str]:
+    """Fichiers deja passes par le calcul, meme si leur plan n'existe plus.
+
+    Distinct des plans VIVANTS : un plan applique quitte la file, et se fier a
+    la file ferait retomber son fichier dans « pas encore planifie ». Le
+    compteur ne descendrait jamais, et le fichier serait repropose au calcul
+    suivant alors qu'il a deja ete range.
+    """
+    return set(_job.done_paths)
+
+
 def plan_status() -> dict[str, object]:
     """Etat du calcul, pour la vue unifiee. Appelee dans le processus."""
     return _plan_status()
