@@ -21,11 +21,13 @@ from __future__ import annotations
 import logging
 import mimetypes
 import re
+import shutil
+import subprocess
 from collections.abc import Iterator
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from . import review
 
@@ -105,3 +107,148 @@ def stream_plan(plan_id: str, request: Request) -> StreamingResponse:
         media_type=media_type,
         headers=headers,
     )
+
+
+# --- Vignettes --------------------------------------------------------------
+#
+# Le lecteur ne suffit pas, et pas par manque de soin : aucun navigateur
+# courant ne lit le MKV, qui est le format majoritaire des bibliotheques
+# constituees. Un lecteur noir sur neuf fichiers sur dix ne repond pas a la
+# question posee — « est-ce le bon fichier ? ».
+#
+# Quelques images extraites y repondent mieux, et pour bien moins cher qu'un
+# transcodage : elles marchent sur tout ce que ffmpeg sait ouvrir, elles
+# montrent l'oeuvre d'un coup d'oeil, et une image noire ou figee en fin de
+# fichier revele un telechargement incomplet — ce qu'une lecture du debut ne
+# montrerait jamais.
+
+THUMB_TIMEOUT = 20.0
+"""Un fichier pathologique ne doit pas retenir un worker indefiniment."""
+
+THUMB_WIDTH = 480
+DEFAULT_POSITIONS = (0.10, 0.30, 0.50, 0.70, 0.90)
+"""Reparties sur toute la duree, la fin comprise : c'est la fin qui trahit un
+telechargement interrompu."""
+
+
+def _ffmpeg_available() -> bool:
+    return shutil.which("ffmpeg") is not None
+
+
+def _duration_seconds(path: Path) -> float | None:
+    # Chemin absolu resolu ici, comme dans core/probe.py : lancer « ffprobe »
+    # tel quel dependrait du PATH du processus, qui n'est pas le notre.
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe is None:
+        return None
+    try:
+        out = subprocess.run(  # noqa: S603 - argv fixe, pas de shell
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=THUMB_TIMEOUT,
+            check=False,
+        )
+        return float(out.stdout.strip())
+    except (ValueError, OSError, subprocess.SubprocessError):
+        return None
+
+
+def _grab_frame(path: Path, at_seconds: float) -> bytes | None:
+    """Extrait une image unique. Renvoie None plutot que de lever.
+
+    ``-ss`` AVANT ``-i`` : le positionnement se fait alors sur les images cles
+    sans decoder tout ce qui precede. Sur un fichier de trois gigaoctets, la
+    difference est d'un ordre de grandeur.
+    """
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        return None
+    try:
+        out = subprocess.run(  # noqa: S603 - argv fixe, pas de shell
+            [
+                ffmpeg,
+                "-nostdin",
+                "-v",
+                "error",
+                "-ss",
+                f"{max(0.0, at_seconds):.3f}",
+                "-i",
+                str(path),
+                "-frames:v",
+                "1",
+                "-vf",
+                f"scale={THUMB_WIDTH}:-2",
+                "-f",
+                "image2",
+                "-c:v",
+                "mjpeg",
+                "pipe:1",
+            ],
+            capture_output=True,
+            timeout=THUMB_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.warning("extraction d'image impossible pour %s : %s", path.name, exc)
+        return None
+    return out.stdout or None
+
+
+@router.get("/plan/{plan_id}/thumb")
+def thumbnail(plan_id: str, at: float = 0.5) -> Response:
+    """Une image du fichier, prise a ``at`` (fraction de la duree).
+
+    Une fraction et non des secondes : l'appelant n'a pas a connaitre la duree,
+    et « au milieu » veut dire la meme chose pour un episode de vingt minutes
+    et pour un film de trois heures.
+    """
+    plan = next((p for p in review.current_plans() if p.id == plan_id), None)
+    if plan is None or not plan.source.is_file():
+        raise HTTPException(status_code=404, detail="Fichier introuvable.")
+    if not _ffmpeg_available():
+        raise HTTPException(status_code=503, detail="ffmpeg absent de l'image.")
+
+    duration = _duration_seconds(plan.source)
+    if not duration or duration <= 0:
+        raise HTTPException(status_code=422, detail="Duree illisible : fichier corrompu ?")
+
+    frame = _grab_frame(plan.source, duration * min(max(at, 0.0), 0.99))
+    if frame is None:
+        raise HTTPException(status_code=422, detail="Aucune image lisible a cet endroit.")
+
+    return Response(
+        content=frame,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.get("/plan/{plan_id}/positions")
+def thumb_positions(plan_id: str) -> dict[str, object]:
+    """Ou placer les vignettes, et si l'on peut en produire.
+
+    Repondre AVANT d'extraire evite a l'interface d'afficher cinq images
+    cassees quand ffmpeg manque ou que le fichier est illisible.
+    """
+    plan = next((p for p in review.current_plans() if p.id == plan_id), None)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Plan inconnu.")
+
+    available = _ffmpeg_available() and plan.source.is_file()
+    duration = _duration_seconds(plan.source) if available else None
+    return {
+        "available": bool(available and duration),
+        "duration": duration,
+        "positions": list(DEFAULT_POSITIONS) if available and duration else [],
+        "playable_in_browser": plan.source.suffix.lower() in BROWSER_FRIENDLY,
+    }

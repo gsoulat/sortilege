@@ -326,18 +326,34 @@ async function confirm(plan) {
   }
 }
 
-// Quel fichier a son lecteur ouvert. Un seul à la fois : deux vidéos qui
-// chargent en parallèle sur un NAS saturent la liaison pour rien.
+// Quel fichier a son aperçu ouvert. Un seul à la fois : plusieurs extractions
+// en parallèle sur un NAS saturent le processeur pour rien.
 const playing = ref(null)
-const PLAYABLE = ['.mp4', '.m4v', '.webm', '.mov']
+const preview = ref(null)
 
-/** Le MKV n'est lu nativement par aucun navigateur courant. Le dire vaut mieux
- *  que d'afficher un lecteur noir sans explication. */
-const likelyPlayable = (source) =>
-  PLAYABLE.some((ext) => (source ?? '').toLowerCase().endsWith(ext))
-
-function togglePlayer(id) {
-  playing.value = playing.value === id ? null : id
+/**
+ * Aucun navigateur courant ne lit le MKV, qui est le format majoritaire d'une
+ * bibliothèque constituée. Un lecteur noir sur neuf fichiers sur dix ne répond
+ * pas à la question posée — « est-ce le bon fichier ? ».
+ *
+ * Le serveur dit donc d'abord ce qu'il peut faire : lecture directe quand le
+ * format s'y prête, sinon des images extraites par ffmpeg, qui marchent sur
+ * tout. Une image noire ou figée en fin de fichier révèle en prime un
+ * téléchargement incomplet, ce qu'une lecture du début ne montrerait jamais.
+ */
+async function togglePlayer(id) {
+  if (playing.value === id) {
+    playing.value = null
+    preview.value = null
+    return
+  }
+  playing.value = id
+  preview.value = null
+  try {
+    preview.value = await (await fetch(`/api/media/plan/${id}/positions`)).json()
+  } catch {
+    preview.value = { available: false, playable_in_browser: false }
+  }
 }
 
 function toggle(key) {
@@ -515,11 +531,28 @@ onUnmounted(() => clearInterval(poller))
                   </button>
                 </li>
                 <li v-if="playing === p.id" class="player">
-                  <video controls preload="metadata" :src="`/api/media/plan/${p.id}`"></video>
-                  <p v-if="!likelyPlayable(p.source)" class="format-warn">
-                    Ce fichier est un {{ (p.source ?? '').split('.').pop().toUpperCase() }} :
-                    la plupart des navigateurs ne savent pas le lire.
+                  <template v-if="preview?.playable_in_browser">
+                    <video controls preload="metadata" :src="`/api/media/plan/${p.id}`"></video>
+                  </template>
+                  <template v-else-if="preview?.available">
+                    <div class="thumbs">
+                      <img
+                        v-for="pos in preview.positions"
+                        :key="pos"
+                        :src="`/api/media/plan/${p.id}/thumb?at=${pos}`"
+                        :alt="`à ${Math.round(pos * 100)} %`"
+                        loading="lazy"
+                      />
+                    </div>
+                    <p class="thumb-note">
+                      Images prises tout au long du fichier — la dernière est à 90 %, une image
+                      noire ou figée à cet endroit trahit un téléchargement incomplet.
+                    </p>
+                  </template>
+                  <p v-else-if="preview" class="format-warn">
+                    Aperçu impossible : ffmpeg absent, ou fichier illisible.
                   </p>
+                  <p v-else class="thumb-note">Chargement de l'aperçu…</p>
                 </li>
               </template>
             </ul>
@@ -545,12 +578,28 @@ onUnmounted(() => clearInterval(poller))
                   </button>
                 </li>
                 <li v-if="playing === p.id" class="player">
-                  <video controls preload="metadata" :src="`/api/media/plan/${p.id}`"></video>
-                  <p v-if="!likelyPlayable(p.source)" class="format-warn">
-                    Ce fichier est un {{ (p.source ?? '').split('.').pop().toUpperCase() }} :
-                    la plupart des navigateurs ne savent pas le lire. Si l'image reste noire,
-                    c'est le format, pas le fichier.
+                  <template v-if="preview?.playable_in_browser">
+                    <video controls preload="metadata" :src="`/api/media/plan/${p.id}`"></video>
+                  </template>
+                  <template v-else-if="preview?.available">
+                    <div class="thumbs">
+                      <img
+                        v-for="pos in preview.positions"
+                        :key="pos"
+                        :src="`/api/media/plan/${p.id}/thumb?at=${pos}`"
+                        :alt="`à ${Math.round(pos * 100)} %`"
+                        loading="lazy"
+                      />
+                    </div>
+                    <p class="thumb-note">
+                      Images prises tout au long du fichier — la dernière est à 90 %, une image
+                      noire ou figée à cet endroit trahit un téléchargement incomplet.
+                    </p>
+                  </template>
+                  <p v-else-if="preview" class="format-warn">
+                    Aperçu impossible : ffmpeg absent, ou fichier illisible.
                   </p>
+                  <p v-else class="thumb-note">Chargement de l'aperçu…</p>
                 </li>
               </template>
             </ul>
@@ -721,6 +770,9 @@ button.small.play { color: var(--text-faint); }
 .files li.player { display: block; margin: 6px 0 10px; }
 .files li.player video { width: 100%; max-width: 620px; border-radius: 6px; background: #000; display: block; }
 .format-warn { margin: 6px 0 0; font-size: 11.5px; color: var(--warn); max-width: 620px; line-height: 1.5; }
+.thumbs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+.thumbs img { height: 118px; width: auto; border-radius: 4px; background: #000; flex: none; }
+.thumb-note { margin: 7px 0 0; font-size: 11.5px; color: var(--text-faint); max-width: 680px; line-height: 1.5; }
 
 .seasons { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
 .seasons li { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
