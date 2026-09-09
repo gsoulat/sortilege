@@ -1,7 +1,132 @@
 # CHANGELOG
 
 
+## v0.30.0 (2026-09-09)
+
+### Chores
+
+- Recuperer le commit de version v0.29.0 laisse par la CI
+  ([`1b077d4`](https://github.com/gsoulat/sortilege/commit/1b077d4ab7441cb985c906899702b8ad44ee11fc))
+
+La poussee du runner a envoye le TAG sans la branche : GitHub a accepte refs/tags/v0.29.0 puis
+  refuse refs/heads/main. Le depot s'est retrouve avec un tag pointant hors de toute branche, et
+  semantic-release, voyant « 0.29.0 deja publiee », a cesse de publier — en vert, ce qui est le pire
+  des echecs.
+
+Le commit de version est ramene dans l'historique. Le tag reste ou il est : son arbre correspond
+  exactement a l'image 0.29.0 deja sur GHCR.
+
+### Continuous Integration
+
+- **release**: Donner une identite git au runner avant le rebase
+  ([`2df86df`](https://github.com/gsoulat/sortilege/commit/2df86df0f7db5fd7765ee0b9a993ff0dab7196ae))
+
+Trois releases d'affilee ont echoue a pousser leurs refs. Le motif soupconne — une erreur serveur
+  intermittente — n'etait pas le bon. Le journal le dit clairement :
+
+! [rejected] HEAD -> main (fetch first) Committer identity unknown fatal: empty ident name
+  Everything up-to-date
+
+Deux causes enchainees, toutes deux locales.
+
+La poussee est d'abord refusee parce que la branche a bouge pendant la release — un commit pousse a
+  la main alors que le job tournait. C'est normal et prevu : le rattrapage rejoue par-dessus.
+
+Mais ce rattrapage echoue sur « empty ident name » : semantic-release configure une identite pour
+  SON commit, pas pour le shell du job. Les trois tentatives deviennent alors inutiles, et pire, le
+  rebase avorte laisse le depot dans un etat ou le push suivant annonce « Everything up-to-date »
+  sans rien faire — un succes apparent sur une operation qui n'a rien pousse.
+
+L'identite est donc posee avant toute chose, et un rebase impossible est proprement avorte plutot
+  que laisse en plan. Le delai entre tentatives passe de quinze a cinq secondes : le probleme
+  n'etant pas transitoire, attendre plus longtemps n'a jamais aide.
+
+A noter pour la suite : --atomic, ajoute au commit precedent, a bien fait son travail. Ni tag ni
+  branche ne sont partis, la ou la fois d'avant le tag etait parti seul et avait fige toutes les
+  releases suivantes.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+### Features
+
+- **corbeille**: Bouton de vidage definitif, et poussee atomique des refs
+  ([`f6be944`](https://github.com/gsoulat/sortilege/commit/f6be9441b261ac3e46834665f1b8e65be7858f72))
+
+Deux choses sans rapport, corrigees ensemble parce qu'elles bloquaient toutes deux la meme
+  livraison.
+
+**Le vidage.** Un detour par la corbeille du NAS (#Recycle) a ete envisage puis ecarte : il ne
+  libere aucun espace non plus, il donne juste deux corbeilles a vider au lieu d'une. La suppression
+  est donc reelle, et un bouton « Tout vider » supprime sans condition d'age.
+
+Le plancher d'un jour est retire. Un plancher silencieux laisserait en place ce qu'on vient de
+  demander de supprimer, sans le dire — le pire des comportements pour une action destructrice. La
+  protection est deplacee la ou elle se voit : le serveur exige une confirmation explicite pour un
+  vidage integral, et l'interface demande un second clic en annoncant le volume concerne.
+
+**La poussee des refs devient atomique.** C'est la cause d'une panne silencieuse : GitHub a accepte
+  refs/tags/v0.29.0 puis refuse refs/heads/main. Le depot s'est retrouve avec un tag pointant hors
+  de toute branche, et semantic-release, voyant « 0.29.0 deja publiee », a cesse de publier — en
+  VERT. Un run qui ne fait rien en annoncant un succes est bien pire qu'un run qui echoue : personne
+  ne va le voir.
+
+Avec --atomic, les deux refs partent ensemble ou aucune ne part. Le commit de version orphelin a par
+  ailleurs ete ramene dans l'historique ; le tag reste ou il est, son arbre correspondant exactement
+  a l'image 0.29.0 deja publiee.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+- **revue**: Bouton de confirmation, lecteur video, et diagnostic des echecs
+  ([`0d689e2`](https://github.com/gsoulat/sortilege/commit/0d689e27fc36e0e376322e187cca75fc4bfec0db))
+
+Trois manques dans la vue unifiee, dont un que j'y avais laisse en la creant.
+
+**Il manquait le geste symetrique de « Ce n'est pas ca ».** On pouvait refuser une identification,
+  jamais l'accepter. Or un plan a 78 % est tres souvent correct : le score dit l'incertitude de la
+  MACHINE, pas celle de la personne qui regarde l'ecran. La seule facon d'accepter etait de cocher
+  puis d'executer, ce qui melange deux decisions distinctes — « c'est la bonne oeuvre » et «
+  range-le maintenant ». Le bouton « C'est bon » ne fait que la premiere, vaut pour toute la serie,
+  et le choix est retenu pour que le scan suivant ne repose pas la question.
+
+**Un lecteur video sur chaque ligne.** Un titre et une affiche ne disent pas si le fichier est le
+  bon ; quelques secondes de video tranchent la ou aucun score ne le peut. Aucun chemin ne transite
+  par le navigateur : on designe un PLAN, et le serveur sait seul quel fichier cela vise — servir un
+  chemin fourni par le client donnerait la lecture de tout ce qui est monte dans le conteneur. Les
+  requetes par plage sont gerees, sans quoi deplacer le curseur d'une video de trois gigaoctets
+  imposerait de la telecharger depuis le debut. Le MKV n'etant lu nativement par aucun navigateur
+  courant, l'interface le dit plutot que d'afficher un lecteur noir sans explication.
+
+**Le diagnostic des echecs manquait dans la nouvelle vue.** Je l'avais bati dans l'ancienne et pas
+  repris ici : « 340 en echec » s'affichait sans la cause ni le bouton d'evacuation, alors que ce
+  sont precisement eux qui rendent le message exploitable. La cause dominante est desormais nommee
+  dans la banniere, et l'encadre porte le compte, la marche a suivre et l'action.
+
+10 tests sur la lecture, dont les requetes par plage et ce que l'endpoint refuse de servir.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.29.0 (2026-09-09)
+
+### Bug Fixes
+
+- **evacuation**: Suivre l avancement au lieu d un bouton fige
+  ([`0b6a474`](https://github.com/gsoulat/sortilege/commit/0b6a47433698220ba52b5d976e0fd8144636e418))
+
+La mise en corbeille traitait trois cents fichiers dans une seule requete synchrone, sans le moindre
+  retour : le bouton affichait « Évacuation… » et plus rien ne bougeait. Impossible de savoir si
+  l'outil travaillait, s'il etait bloque, ou s'il avait fini.
+
+Pire que l'inconfort : une requete aussi longue finit par expirer cote navigateur, et le resultat
+  est alors perdu alors que le serveur, lui, a termine son travail. C'est exactement le motif deja
+  corrige pour le scan et le calcul des plans — il n'avait pas ete reproduit ici.
+
+L'evacuation part donc en tache de fond et rend la main tout de suite. Une barre montre
+  l'avancement, le nombre deja mis en corbeille, les refus et le fichier en cours. Les deplacements
+  etant bloquants, ils tournent dans un thread : les laisser sur la boucle d'evenements figerait
+  toute l'application pendant plusieurs minutes.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 
 ### Features
 
