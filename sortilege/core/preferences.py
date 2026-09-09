@@ -23,6 +23,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from threading import Lock
 
+from .mediaserver import MediaServerError, validate_server_url
 from .notify import WebhookError, validate_webhook
 from .safety import PathConfinementError, resolve_within
 from .template import PRESETS, TemplateError, validate
@@ -125,6 +126,20 @@ class NotificationSettings:
 
 
 @dataclass
+class MediaServerSettings:
+    """Serveur multimedia a prevenir apres un rangement.
+
+    Sans cela, un film range n'apparait dans Jellyfin qu'au prochain scan
+    planifie — souvent plusieurs heures. La cle vit ici et non dans
+    l'environnement, et n'est JAMAIS renvoyee au navigateur.
+    """
+
+    enabled: bool = False
+    base_url: str = ""
+    api_key: str = ""
+
+
+@dataclass
 class Preferences:
     """Ce que l'utilisateur choisit, par opposition a ce que l'admin deploie."""
 
@@ -153,6 +168,7 @@ class Preferences:
     automation: AutomationSettings = field(default_factory=AutomationSettings)
     oversize: OversizeSettings = field(default_factory=OversizeSettings)
     notifications: NotificationSettings = field(default_factory=NotificationSettings)
+    media_server: MediaServerSettings = field(default_factory=MediaServerSettings)
 
     def template_for(self, kind: str) -> str:
         return self.templates.get(kind) or PRESETS["jellyfin"].get(kind, "")
@@ -215,6 +231,9 @@ class PreferenceStore:
                 ),
                 notifications=NotificationSettings(
                     **{**asdict(NotificationSettings()), **(raw.get("notifications") or {})}
+                ),
+                media_server=MediaServerSettings(
+                    **{**asdict(MediaServerSettings()), **(raw.get("media_server") or {})}
                 ),
             )
             return self._cache
@@ -342,6 +361,16 @@ class PreferenceStore:
             if not prefs.notifications.webhook_url.strip():
                 raise PreferenceError(
                     "Renseigne l'URL du webhook Discord avant d'activer les notifications."
+                )
+
+        if prefs.media_server.enabled:
+            try:
+                validate_server_url(prefs.media_server.base_url)
+            except MediaServerError as exc:
+                raise PreferenceError(str(exc)) from exc
+            if not prefs.media_server.base_url.strip():
+                raise PreferenceError(
+                    "Renseigne l'adresse du serveur avant d'activer le rafraichissement."
                 )
 
         if prefs.automation.quiet_seconds < 0:

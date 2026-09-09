@@ -16,6 +16,12 @@ constituee est l'operation la plus risquee de l'application :
    deja de lui-meme. Reinterroger un fournisseur ferait courir le risque qu'une
    mauvaise reponse renomme des fichiers corrects — le scenario exact que la
    validation par score existe pour eviter.
+
+   Consequence a connaitre : ce mode corrige la STRUCTURE, pas l'identite. Un
+   fichier range sous « severance.s01e01 » ressortira « severance - S01E01 »,
+   avec sa minuscule : seul le fournisseur connait la casse officielle, et on
+   ne l'interroge pas. Pour corriger une identite, il faut repasser par la file
+   de revue.
 2. **Ce qui ne change pas n'est pas propose.** La liste ne contient que de
    vraies differences, sinon elle serait illisible et personne ne la relirait.
 3. **C'est un plan comme un autre.** Meme journal, meme annulation, meme refus

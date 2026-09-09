@@ -23,11 +23,13 @@ from pydantic import BaseModel, Field
 
 from ..config import get_settings
 from ..core.ai import PROVIDERS
+from ..core.mediaserver import refresh_library
 from ..core.notify import Notification, send
 from ..core.preferences import (
     KINDS,
     AISettings,
     AutomationSettings,
+    MediaServerSettings,
     NotificationSettings,
     OversizeSettings,
     PreferenceError,
@@ -70,6 +72,14 @@ class NotificationsIn(BaseModel):
     ressaisir. Une chaine « - » vide explicitement le champ."""
 
 
+class MediaServerIn(BaseModel):
+    enabled: bool | None = None
+    base_url: str | None = None
+
+    api_key: str | None = None
+    """Ecriture seule, comme les autres cles. « - » vide explicitement."""
+
+
 class OversizeIn(BaseModel):
     enabled: bool | None = None
     threshold_gb: float | None = None
@@ -85,6 +95,7 @@ class PreferencesIn(BaseModel):
     automation: AutomationIn | None = None
     oversize: OversizeIn | None = None
     notifications: NotificationsIn | None = None
+    media_server: MediaServerIn | None = None
 
 
 @router.get("/preferences")
@@ -125,6 +136,12 @@ def read_preferences() -> dict[str, object]:
             "api_key_set": bool(prefs.ai.api_key),
         },
         "automation": asdict(prefs.automation),
+        "media_server": {
+            "enabled": prefs.media_server.enabled,
+            "base_url": prefs.media_server.base_url,
+            # La cle ne sort jamais : elle donne acces au serveur multimedia.
+            "api_key_set": bool(prefs.media_server.api_key),
+        },
         "notifications": {
             "enabled": prefs.notifications.enabled,
             "on_failure": prefs.notifications.on_failure,
@@ -198,6 +215,16 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
             patch["webhook_url"] = url
         notif = NotificationSettings(**{**asdict(current.notifications), **patch})
 
+    server = current.media_server
+    if body.media_server is not None:
+        patch = body.media_server.model_dump(exclude_none=True)
+        key = patch.pop("api_key", "").strip()
+        if key == "-":
+            patch["api_key"] = ""
+        elif key:
+            patch["api_key"] = key
+        server = MediaServerSettings(**{**asdict(current.media_server), **patch})
+
     merged = Preferences(
         custom_sources=(
             current.custom_sources if body.custom_sources is None else body.custom_sources
@@ -211,6 +238,7 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
         automation=auto,
         oversize=over,
         notifications=notif,
+        media_server=server,
     )
 
     try:
@@ -247,6 +275,24 @@ async def test_notification() -> dict[str, object]:
             detail="Discord n'a pas accepte le message. Verifie que le webhook existe toujours.",
         )
     return {"sent": True}
+
+
+@router.post("/media-server/test")
+async def test_media_server() -> dict[str, object]:
+    """Demande un rafraichissement d'essai. Rapporte l'echec au lieu de l'avaler."""
+    prefs = get_store().load().media_server
+    if not prefs.base_url or not prefs.api_key:
+        raise HTTPException(status_code=400, detail="Adresse ou cle d'API manquante.")
+
+    if not await refresh_library(prefs.base_url, prefs.api_key):
+        raise HTTPException(
+            status_code=502,
+            detail=(
+                "Le serveur n'a pas repondu. Verifie l'adresse, la cle d'API, "
+                "et que le serveur est bien sur le reseau local."
+            ),
+        )
+    return {"refreshed": True}
 
 
 @router.get("/decisions")

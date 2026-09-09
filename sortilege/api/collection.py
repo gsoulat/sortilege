@@ -22,6 +22,7 @@ from ..core.companions import TRASH_DIRNAME, trash_destination
 from ..core.journal import MoveRecord, _move
 from ..core.matching import title_similarity
 from ..core.scanner import scan
+from ..core.trash import MIN_AGE_DAYS, inventory, purge, total_bytes
 from ..providers.tmdb import TMDBProvider
 from .deps import get_journal
 
@@ -293,6 +294,57 @@ def trash_duplicates(body: TrashRequest) -> dict[str, object]:
         "trashed": sum(1 for m in moved if m["ok"]),
         "failed": sum(1 for m in moved if not m["ok"]),
         "results": moved,
+    }
+
+
+class PurgeRequest(BaseModel):
+    older_than_days: int = 30
+    """Age minimal d'un lot pour etre supprime. Le delai EST la protection :
+    c'est la fenetre pendant laquelle on peut encore s'apercevoir qu'un fichier
+    a ete evacue a tort."""
+
+
+@router.get("/trash")
+def read_trash() -> dict[str, object]:
+    """Ce que contient la corbeille, lot par lot.
+
+    Sortilege ne supprime jamais : restes de release, doublons et copies deja
+    rangees s'y accumulent. C'est la bonne regle, mais elle a une consequence
+    que rien ne traitait — la corbeille ne se vide pas toute seule.
+    """
+    conf = get_settings()
+    batches = inventory(conf.library_root / TRASH_DIRNAME)
+    return {
+        "min_age_days": MIN_AGE_DAYS,
+        "total_bytes": total_bytes(batches),
+        "total_files": sum(b.files for b in batches),
+        "batches": [
+            {
+                "day": b.day.isoformat(),
+                "age_days": b.age_days,
+                "files": b.files,
+                "bytes": b.bytes,
+            }
+            for b in batches
+        ],
+    }
+
+
+@router.post("/trash/purge")
+def purge_trash(body: PurgeRequest) -> dict[str, object]:
+    """Supprime DEFINITIVEMENT les lots plus vieux que le delai donne.
+
+    Le seul endroit de l'application qui supprime reellement, et il ne
+    s'execute que sur demande explicite.
+    """
+    conf = get_settings()
+    result = purge(conf.library_root / TRASH_DIRNAME, body.older_than_days)
+    return {
+        "removed_batches": result.removed_batches,
+        "removed_files": result.removed_files,
+        "freed_bytes": result.freed_bytes,
+        "errors": result.errors,
+        **read_trash(),
     }
 
 

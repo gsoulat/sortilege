@@ -26,8 +26,12 @@ from ..core.journal import (
     undo_plans,
     undo_work,
 )
+from ..core.mediaserver import refresh_library
 from ..core.pipeline import BATCH_SIZE, Pipeline
 from ..core.planner import Plan
+from ..core.renaming import rename_plans
+from ..core.renaming import summarize as rename_summary
+from ..core.scanner import scan
 from ..core.scoring import Decision, Policy
 from ..core.snapshot import PLANS_KEY, SnapshotError, plans_in, plans_out
 from ..core.store import Decision as RememberedDecision
@@ -457,8 +461,23 @@ def _blockers() -> list[dict[str, str]]:
     return blockers
 
 
+async def _tell_media_server() -> None:
+    """Demande au serveur multimedia de relire sa bibliotheque. Ne leve jamais.
+
+    Le fichier est deja a sa place : ne pas avoir prevenu est un desagrement,
+    pas une perte. Le rangement ne doit donc rien risquer sur cet appel.
+    """
+    prefs = get_store().load().media_server
+    if not prefs.enabled or not prefs.base_url or not prefs.api_key:
+        return
+    try:
+        await refresh_library(prefs.base_url, prefs.api_key)
+    except Exception:
+        logger.exception("rafraichissement du serveur multimedia impossible")
+
+
 @router.post("/apply")
-def apply(body: ApplyRequest) -> dict[str, object]:
+async def apply(body: ApplyRequest) -> dict[str, object]:
     """Applique des plans. En mode simulation, verifie sans rien deplacer."""
     conf = get_settings()
     journal = get_journal()
@@ -489,6 +508,8 @@ def apply(body: ApplyRequest) -> dict[str, object]:
                 if r.ok:
                     _plans.pop(r.plan_id, None)
         _persist_plans()
+        if any(r.ok for r in results):
+            await _tell_media_server()
 
     return {
         "dry_run": simulate,
@@ -565,6 +586,49 @@ def evacuate(body: EvacuateRequest) -> dict[str, object]:
         ],
         "queue": _queue(),
     }
+
+
+@router.post("/rename-library")
+async def rename_library() -> dict[str, object]:
+    """Propose de remettre la bibliotheque en conformite avec le gabarit.
+
+    Ne deplace RIEN : les plans rejoignent la file d'arbitrage, ou ils se
+    valident comme les autres. Un renommage de masse sur une bibliotheque
+    constituee est l'operation la plus risquee de l'application ; elle ne doit
+    pas se declencher d'un seul clic.
+
+    Aucune identification n'est refaite : on repart de ce que le fichier dit
+    deja de lui-meme. Reinterroger un fournisseur ferait courir le risque
+    qu'une mauvaise reponse renomme des fichiers corrects.
+    """
+    conf = get_settings()
+    store = get_store()
+    prefs = store.load()
+
+    result = scan([conf.library_root], deep=False, library_root=conf.library_root)
+    plans: list[Plan] = []
+    for kind in ("movie", "episode", "anime"):
+        subset = [f for f in result.files if _kind_of(f) == kind]
+        plans.extend(
+            rename_plans(
+                subset,
+                template=prefs.template_for(kind),
+                destination_root=store.destination_root(kind),
+            )
+        )
+
+    with _lock:
+        for plan in plans:
+            _plans[plan.id] = plan
+    _persist_plans()
+
+    return {"proposed": len(plans), **rename_summary(plans), **_queue()}
+
+
+def _kind_of(scanned) -> str:
+    from ..core.parser import MediaKind
+
+    return {MediaKind.MOVIE: "movie", MediaKind.ANIME: "anime"}.get(scanned.parsed.kind, "episode")
 
 
 class ChooseRequest(BaseModel):

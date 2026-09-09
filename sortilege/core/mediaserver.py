@@ -60,6 +60,11 @@ def _is_local(host: str) -> bool:
         # Un nom d'hote quelconque : on ne resout pas — la resolution pourrait
         # changer entre la verification et l'appel.
         return False
+    if address.is_link_local:
+        # 169.254.0.0/16 est « prive » au sens de Python, mais c'est aussi
+        # l'adresse des metadonnees d'instance chez les hebergeurs — une cible
+        # classique. Aucun serveur multimedia n'y vit.
+        return False
     return address.is_private or address.is_loopback
 
 
