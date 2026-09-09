@@ -1,6 +1,38 @@
 # CHANGELOG
 
 
+## v0.37.0 (2026-09-09)
+
+### Features
+
+- **entretien**: Balayer les dossiers vides restes des rangements anterieurs
+  ([`c025992`](https://github.com/gsoulat/sortilege/commit/c0259924475f1ac3c142030e0f283d78a2858cbf))
+
+Le nettoyage a la volee ne rattrape que ce qu'il vient lui-meme de vider. Une bibliotheque
+  constituee garde donc les carcasses de tout ce qui a ete range avant qu'il existe — deux cent
+  soixante-sept dossiers dans le cas qui m'a ete montre — et le client de telechargement en cree de
+  son cote : liens abandonnes, extractions ratees.
+
+Le balayage se fait en DEUX temps, et ce n'est pas de la prudence de facade : un passage destructeur
+  sur des centaines de dossiers ne doit pas partir du meme geste que celui qui sert a le regarder.
+  On liste, on lit, puis on supprime.
+
+Le parcours est REMONTANT, les feuilles avant les branches. Un dossier qui ne contient que des
+  dossiers vides est vide lui aussi, et ne serait jamais vu autrement : « Serie/Serie S01E01/ »
+  compte pour deux, et ne traiter que le niveau profond laisserait une carcasse par serie. L'ordre
+  du resultat suit la profondeur, qui est celui dans lequel il faut supprimer.
+
+Deux exclusions : les fichiers systeme du NAS ne rendent pas un dossier occupe — sinon aucun ne
+  serait jamais considere vide — et une racine source n'est jamais proposee, la supprimer ferait
+  echouer le scan suivant sur un dossier absent.
+
+Aucun fichier n'est touche, a aucun moment.
+
+7 tests, dont le parent qui devient vide par ses enfants et la racine epargnee.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.36.0 (2026-09-09)
 
 ### Features
