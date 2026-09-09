@@ -1,6 +1,34 @@
 # CHANGELOG
 
 
+## v0.36.0 (2026-09-09)
+
+### Features
+
+- **interface**: Agrandir une jaquette au clic, avec trois facons d en sortir
+  ([`02510e8`](https://github.com/gsoulat/sortilege/commit/02510e865e47555424352a468e69fc0ed9124b9e))
+
+Une jaquette de trente pixels de large ne permet ni de distinguer deux saisons d'une meme serie, ni
+  de lire un titre imprime sur l'affiche. C'est pourtant sur elle qu'on tranche entre deux oeuvres
+  homonymes — c'est meme la raison pour laquelle elle est affichee.
+
+Le clic agrandit donc : la jaquette d'une oeuvre, et les images extraites du fichier, qui gagnent le
+  plus a l'agrandissement puisqu'on y cherche un detail de scene ou une image noire de fin de
+  telechargement.
+
+**Le zoom est SEPARE du choix dans le selecteur**, et ce n'est pas un detail de mise en page. Y
+  cliquer retient l'oeuvre ; agrandir au meme endroit rendrait le geste imprevisible, et on
+  validerait une identification en croyant seulement regarder l'affiche. Une loupe distincte
+  apparait donc au survol.
+
+Le dezoom compte autant que le zoom : une surimpression sans issue evidente est un piege. Echap est
+  le reflexe, le clic a cote le geste naturel, et le bouton reste pour qui ne connait ni l'un ni
+  l'autre. Le fond cesse de defiler pendant l'affichage — sinon on croit agir sur l'image et c'est
+  la liste qui bouge.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.35.1 (2026-09-09)
 
 ### Bug Fixes
