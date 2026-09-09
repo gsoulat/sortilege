@@ -73,6 +73,48 @@ class ScanJob:
 _job = ScanJob()
 
 
+class ResetRequest(BaseModel):
+    confirm: bool = False
+
+
+@router.post("/reset")
+def reset_workspace(body: ResetRequest) -> dict[str, object]:
+    """Efface l'etat de travail pour repartir d'un scan neuf.
+
+    Ce qui part est RECONSTRUCTIBLE : l'instantane du scan, les plans calcules,
+    l'avancement des lots, les apercus en cache. Un scan les refait.
+
+    Ce qui reste ne se refait pas, et c'est la distinction qui compte :
+
+    - **le journal d'annulation**, seul chemin de retour pour tout ce qui a
+      deja ete deplace — l'effacer condamnerait des milliers de fichiers a
+      rester ou ils sont ;
+    - **les identifications retenues**, tranchees une a une a la main ;
+    - **les preferences** : sources, destinations, gabarits.
+
+    Une purge qui emporterait le journal serait une catastrophe silencieuse.
+    """
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="La remise a zero doit etre confirmee.")
+
+    from . import collection, media, review
+
+    plans = review.forget_everything()
+
+    _job.result = None
+    _job.error = None
+    _job.processed = 0
+    _job.total = 0
+    _job.phase = "termine"
+    get_memory().save_blob(SCAN_KEY, None)
+
+    collection.forget_index()
+    vignettes = media.purge_thumbnails()
+
+    logger.info("etat de travail efface : %s plan(s), %s vignette(s)", plans, vignettes)
+    return {"cleared_plans": plans, "cleared_thumbnails": vignettes, **_status()}
+
+
 class PruneRequest(BaseModel):
     confirm: bool = False
     """Obligatoire. La liste se consulte d'abord : un balayage destructeur sur

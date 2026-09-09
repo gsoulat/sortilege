@@ -129,3 +129,73 @@ def test_vider_un_cache_absent_ne_leve_pas(tmp_path: Path, monkeypatch) -> None:
 
     monkeypatch.setattr(media, "CACHE_DIR", tmp_path / "jamais-cree")
     assert media.purge_thumbnails() == 0
+
+
+# --- Remise a zero ----------------------------------------------------------
+#
+# Ce qui part est reconstructible : un scan le refait. Ce qui reste ne se refait
+# pas — et c'est cette distinction qui fait toute la valeur de la fonction. Une
+# purge qui emporterait le journal condamnerait des milliers de fichiers a
+# rester ou ils sont.
+
+
+def test_la_remise_a_zero_vide_la_file(file_de_revue) -> None:
+    review._plans["a"] = plan("a", "/dl/a.mkv")
+    review._job.done_paths = {"/dl/a.mkv", "/dl/b.mkv"}
+
+    combien = review.forget_everything()
+
+    assert combien == 1
+    assert not review._plans
+    assert not review._job.done_paths
+
+
+def test_le_journal_d_annulation_survit(tmp_path: Path, file_de_revue) -> None:
+    """LA propriete a preserver. Le journal est le seul chemin de retour pour
+    tout ce qui a deja ete deplace."""
+    from sortilege.core.journal import Journal, MoveRecord
+
+    journal = Journal(tmp_path / "j.jsonl")
+    journal.append(
+        MoveRecord(
+            timestamp="2026-09-09T12:00:00",
+            plan_id="p1",
+            source="/dl/film.mkv",
+            destination="/lib/film.mkv",
+            method="rename",
+            kind="video",
+        )
+    )
+
+    review._plans["a"] = plan("a", "/dl/a.mkv")
+    review.forget_everything()
+
+    assert len(journal.read_all()) == 1, "le journal n'a pas ete touche"
+
+
+def test_les_identifications_retenues_survivent(tmp_path: Path, file_de_revue) -> None:
+    """Elles ont ete tranchees une a une a la main : les perdre reposerait
+    toutes les questions au scan suivant."""
+    from sortilege.core.store import Decision as Retenue
+    from sortilege.core.store import Store, title_key
+
+    memoire = Store(tmp_path / "m.db")
+    memoire.remember(
+        Retenue(
+            kind="episode",
+            title_key=title_key("Dark Matter"),
+            provider="tmdb",
+            external_id="196322",
+            title="Dark Matter",
+            year=2024,
+        )
+    )
+
+    review._plans["a"] = plan("a", "/dl/a.mkv")
+    review.forget_everything()
+
+    assert memoire.recall("episode", "Dark Matter") is not None
+
+
+def test_une_file_deja_vide_ne_leve_pas(file_de_revue) -> None:
+    assert review.forget_everything() == 0

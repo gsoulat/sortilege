@@ -455,6 +455,32 @@ function agrandir(src, legende) {
   if (src) zoom.value = { src, legende }
 }
 
+// Remise a zero de l'etat de travail. En deux clics : ce qui part est
+// reconstructible, mais recalculer six mille plans coute des heures d'appels.
+const confirmReset = ref(false)
+
+async function remiseAZero() {
+  if (!confirmReset.value) {
+    confirmReset.value = true
+    return
+  }
+  confirmReset.value = false
+  busy.value = 'reset'
+  failures.value = []
+  try {
+    const out = await call('/api/library/reset', { confirm: true })
+    if (out) {
+      message.value =
+        `Liste effacée : ${out.cleared_plans} plan(s) et ${out.cleared_thumbnails} aperçu(s). ` +
+        'Lance « Analyser les sources » pour repartir.'
+      charge.value = PALIER
+      await load()
+    }
+  } finally {
+    busy.value = null
+  }
+}
+
 function toggle(key) {
   const next = new Set(open.value)
   next.has(key) ? next.delete(key) : next.add(key)
@@ -508,10 +534,24 @@ onUnmounted(() => clearInterval(poller))
         v-if="counts.unplanned === 0 && counts.works"
         class="ghost"
         :disabled="busy || working"
-        title="Vide la file et repart du premier fichier"
+        title="Vide la file de plans et repart du premier fichier"
         @click="plan({ reset: true })"
       >Recommencer</button>
+      <button
+        v-if="counts.works"
+        class="ghost danger"
+        :disabled="busy || working"
+        title="Efface la liste entière — le journal d'annulation et les identifications retenues sont conservés"
+        @click="remiseAZero"
+      >{{ confirmReset ? 'Confirmer : tout effacer' : 'Tout effacer' }}</button>
     </div>
+
+    <p v-if="confirmReset" class="reset-avert">
+      La liste entière est effacée pour repartir d'un scan neuf : plans, avancement,
+      aperçus. <strong>Ton journal d'annulation ({{ data.journal_size }}) et tes
+      identifications retenues sont conservés</strong> — aucun fichier n'est déplacé
+      ni supprimé.
+    </p>
 
     <!-- Ce qui a été rangé, par œuvre, avec une annulation par ligne -->
     <section v-if="showUndo" class="undo-panel">
@@ -902,6 +942,9 @@ onUnmounted(() => clearInterval(poller))
 .toolbar .spacer { flex: 1; }
 .toolbar .ghost { color: var(--text-faint); }
 .toolbar .ghost.active { border-color: var(--accent); color: var(--text); }
+.toolbar .ghost.danger:hover:not(:disabled) { color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, transparent); }
+.reset-avert { margin: 0; font-size: 12px; color: var(--warn); line-height: 1.6; max-width: 720px; }
+.reset-avert strong { color: var(--ok); }
 
 .undo-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
 .undo-panel .head { display: flex; align-items: center; gap: 12px; }

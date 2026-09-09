@@ -279,6 +279,23 @@ def _plan_status() -> dict[str, object]:
     }
 
 
+def forget_everything() -> int:
+    """Vide la file et l'avancement. Ne touche NI au journal NI aux decisions.
+
+    La distinction est tout l'interet de cette fonction. Ce qui part est
+    reconstructible en relancant un scan : plans, chemins deja traites,
+    instantane. Ce qui reste est du travail qu'on ne refait pas — le journal
+    d'annulation, seul chemin de retour pour des milliers de deplacements, et
+    les identifications tranchees a la main.
+    """
+    with _lock:
+        combien = len(_plans)
+        _plans.clear()
+        _job.done_paths.clear()
+    _persist_plans()
+    return combien
+
+
 def reconcile_with_scan(present: set[str]) -> dict[str, int]:
     """Remet la file en accord avec ce qu'un nouveau scan a reellement trouve.
 

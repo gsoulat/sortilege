@@ -52,6 +52,12 @@ class TrashRequest(BaseModel):
     expose. Un chemin absolu venu du client serait une porte ouverte."""
 
 
+def forget_index() -> None:
+    """Oublie l'index de bibliotheque. « Relire la bibliotheque » le refait."""
+    _job.works = []
+    _job.built_at = 0.0
+
+
 def current_works() -> list[Work]:
     """Index courant de la bibliotheque, tel que la derniere construction l'a
     laisse. Vide tant qu'aucune n'a eu lieu."""
