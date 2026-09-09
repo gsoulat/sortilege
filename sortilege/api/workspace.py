@@ -129,12 +129,17 @@ def _entry_out(entry: WorkspaceEntry) -> dict[str, object]:
 
 
 @router.get("")
-def read_workspace(limit: int = 1000) -> dict[str, object]:
+def read_workspace(limit: int = 200, offset: int = 0) -> dict[str, object]:
     """Etat courant de la mediatheque, oeuvre par oeuvre.
 
-    ``limit`` borne les lignes RENVOYEES, jamais celles comptees : les
-    compteurs de la barre d'action portent sur la totalite, sans quoi
-    « Executer 42 prets » mentirait des que la liste depasse la page.
+    ``limit`` et ``offset`` bornent les lignes RENVOYEES, jamais celles
+    comptees : les compteurs de la barre d'action portent sur la totalite, sans
+    quoi « Executer 42 prets » mentirait des que la liste depasse la page.
+
+    La pagination est necessaire moins pour le nombre d'oeuvres que pour ce que
+    chacune traine : plans, saisons, doublons. Tout envoyer a chaque
+    rafraichissement — toutes les deux secondes — coutait des megaoctets pour
+    des lignes hors de l'ecran.
     """
     scan = library.last_scan()
     plans = list(review.current_plans())
@@ -162,14 +167,20 @@ def read_workspace(limit: int = 1000) -> dict[str, object]:
     entries = build(collection.current_works(), plans, pending)
     counts = summarize(entries)
 
+    page = entries[offset : offset + max(1, limit)]
+
     return {
         "counts": counts,
+        "offset": offset,
+        "limit": limit,
+        "total": len(entries),
+        "has_more": offset + len(page) < len(entries),
         "heavy_ratio": HEAVY_RATIO,
         # Ce que l'on peut encore defaire. La vue en a besoin pour proposer
         # l'annulation sans imposer un second appel a chaque rafraichissement.
         "journal_size": len(get_journal().read_all()),
-        "shown": min(limit, len(entries)),
-        "works": [_entry_out(e) for e in entries[:limit]],
+        "shown": len(page),
+        "works": [_entry_out(e) for e in page],
         # Les trois travaux qui alimentent la vue. L'interface s'en sert pour
         # savoir s'il faut continuer a interroger — et pour dire ce qui tourne.
         "jobs": {

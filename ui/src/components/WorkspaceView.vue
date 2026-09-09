@@ -78,13 +78,24 @@ function progress(job) {
   return { processed: job.processed, total: job.total, pct, current: job.current }
 }
 
+// Nombre d'œuvres chargées. Croît par paliers plutôt que par pages : on
+// parcourt une médiathèque en déroulant, pas en tournant des pages, et perdre
+// les lignes précédentes obligerait à revenir en arrière pour comparer.
+const PALIER = 200
+const charge = ref(PALIER)
+
 async function load() {
   try {
-    data.value = await (await fetch('/api/workspace')).json()
+    data.value = await (await fetch(`/api/workspace?limit=${charge.value}`)).json()
     error.value = null
   } catch {
     error.value = 'Serveur injoignable.'
   }
+}
+
+async function chargerPlus() {
+  charge.value += PALIER
+  await load()
 }
 
 async function call(url, body = null) {
@@ -837,10 +848,12 @@ onUnmounted(() => clearInterval(poller))
       </li>
     </ul>
 
-    <p v-if="data.shown < counts.works" class="truncated">
-      {{ data.shown }} œuvres chargées sur {{ counts.works }} — affine avec les filtres
-      pour atteindre les suivantes.
-    </p>
+    <div v-if="data.has_more" class="plus">
+      <button :disabled="busy" @click="chargerPlus">
+        Charger {{ Math.min(PALIER, data.total - data.shown) }} œuvres de plus
+      </button>
+      <span class="compte">{{ data.shown }} sur {{ data.total }}</span>
+    </div>
   </div>
 </template>
 
@@ -991,5 +1004,6 @@ button.small.play { color: var(--text-faint); }
 .dupes li { display: flex; gap: 9px; align-items: baseline; flex-wrap: wrap; }
 .dupes .wasted { color: var(--err); }
 
-.truncated { margin: 0; font-size: 11.5px; color: var(--text-faint); font-style: italic; }
+.plus { display: flex; align-items: center; gap: 12px; justify-content: center; padding: 4px 0 8px; }
+.plus .compte { font-size: 11.5px; color: var(--text-faint); }
 </style>

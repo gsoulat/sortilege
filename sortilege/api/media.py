@@ -18,6 +18,7 @@ progression tant que le serveur n'annonce pas les accepter.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import mimetypes
 import re
@@ -30,6 +31,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
 from . import review
+from .deps import DATA_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -131,6 +133,66 @@ DEFAULT_POSITIONS = (0.10, 0.30, 0.50, 0.70, 0.90)
 telechargement interrompu."""
 
 
+CACHE_DIR = DATA_DIR / "vignettes"
+CACHE_MAX = 2000
+"""Environ trente megaoctets a quarante image. Au-dela, on evince les plus
+anciennes : une bibliotheque parcourue longuement remplirait sinon le volume de
+donnees, qui contient aussi le journal d'annulation — la seule chose vraiment
+precieuse ici."""
+
+
+def _cache_key(path: Path, at: float) -> str:
+    """Identifie une image de facon a ce qu'un fichier MODIFIE n'en herite pas.
+
+    La taille et la date de modification entrent dans la cle : un fichier
+    remplace par un autre encodage sous le meme nom produit une cle differente,
+    et l'ancienne vignette n'est jamais servie a sa place.
+    """
+    try:
+        info = path.stat()
+        empreinte = f"{path}|{info.st_size}|{info.st_mtime_ns}|{at:.3f}"
+    except OSError:
+        empreinte = f"{path}|{at:.3f}"
+    return hashlib.blake2s(empreinte.encode("utf-8"), digest_size=16).hexdigest()
+
+
+def _cache_read(cle: str) -> bytes | None:
+    fichier = CACHE_DIR / f"{cle}.jpg"
+    try:
+        return fichier.read_bytes()
+    except OSError:
+        return None
+
+
+def _cache_write(cle: str, image: bytes) -> None:
+    """Enregistre une vignette. Un echec est sans consequence : on recalculera.
+
+    L'ecriture passe par un fichier temporaire puis un renommage : une lecture
+    concurrente ne doit jamais tomber sur une image a moitie ecrite.
+    """
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        provisoire = CACHE_DIR / f".{cle}.part"
+        provisoire.write_bytes(image)
+        provisoire.replace(CACHE_DIR / f"{cle}.jpg")
+        _cache_evict()
+    except OSError as exc:
+        logger.debug("vignette non mise en cache : %s", exc)
+
+
+def _cache_evict() -> None:
+    """Retire les plus anciennes au-dela du plafond."""
+    try:
+        fichiers = sorted(CACHE_DIR.glob("*.jpg"), key=lambda f: f.stat().st_mtime)
+    except OSError:
+        return
+    for vieux in fichiers[: max(0, len(fichiers) - CACHE_MAX)]:
+        try:
+            vieux.unlink()
+        except OSError:
+            continue
+
+
 def _ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
 
@@ -222,13 +284,20 @@ def thumbnail(plan_id: str, at: float = 0.5) -> Response:
     if not duration or duration <= 0:
         raise HTTPException(status_code=422, detail="Duree illisible : fichier corrompu ?")
 
-    frame = _grab_frame(plan.source, duration * min(max(at, 0.0), 0.99))
-    if frame is None:
-        raise HTTPException(status_code=422, detail="Aucune image lisible a cet endroit.")
+    cle = _cache_key(plan.source, at)
+    if (frame := _cache_read(cle)) is None:
+        frame = _grab_frame(plan.source, duration * min(max(at, 0.0), 0.99))
+        if frame is None:
+            raise HTTPException(status_code=422, detail="Aucune image lisible a cet endroit.")
+        _cache_write(cle, frame)
 
     return Response(
         content=frame,
         media_type="image/jpeg",
+        # Pas de cache NAVIGATEUR : l'URL ne change pas quand le fichier
+        # change, il servirait donc une image perimee sans moyen de le savoir.
+        # Le cache disque, lui, est indexe sur la taille et la date du fichier
+        # — c'est lui qui evite de relancer ffmpeg, et il suffit.
         headers={"Cache-Control": "no-store"},
     )
 

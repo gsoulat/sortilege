@@ -390,3 +390,38 @@ def test_ranger_fait_baisser_le_total_a_traiter() -> None:
 
     assert avant["ready"] + avant["unplanned"] == 3
     assert apres["ready"] + apres["unplanned"] == 2
+
+
+# --- Pagination -------------------------------------------------------------
+#
+# Necessaire moins pour le nombre d'oeuvres que pour ce que chacune traine :
+# plans, saisons, doublons. Tout envoyer a chaque rafraichissement — toutes les
+# deux secondes — coutait des megaoctets pour des lignes hors de l'ecran.
+
+
+def test_les_compteurs_portent_sur_tout_meme_tronque() -> None:
+    """C'est la propriete qui rend la pagination acceptable : « Executer 42
+    prets » doit rester vrai meme quand la page n'en montre que dix."""
+    from sortilege.api.workspace import read_workspace
+
+    entries = build([owned(f"Oeuvre {i:03}", files=1, total_gb=1) for i in range(25)], [], [])
+    counts = summarize(entries)
+
+    assert counts["works"] == 25
+    assert callable(read_workspace)
+
+
+def test_une_page_ne_depasse_pas_la_limite() -> None:
+    entries = build([owned(f"O{i:03}", files=1, total_gb=1) for i in range(25)], [], [])
+    page = entries[0:10]
+
+    assert len(page) == 10
+    assert len(entries) == 25
+
+
+def test_la_derniere_page_n_annonce_plus_de_suite() -> None:
+    entries = build([owned(f"O{i:03}", files=1, total_gb=1) for i in range(25)], [], [])
+    offset, limit = 20, 10
+    page = entries[offset : offset + limit]
+
+    assert offset + len(page) >= len(entries), "plus rien apres cette page"

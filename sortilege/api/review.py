@@ -512,6 +512,7 @@ async def apply(body: ApplyRequest) -> dict[str, object]:
     # meme volume que les fichiers evacues, sinon chaque reste serait recopie
     # au lieu d'etre deplace.
     trash_root = conf.library_root / TRASH_DIRNAME
+    racines = get_store().resolved_sources()
 
     simulate = body.dry_run
 
@@ -522,7 +523,19 @@ async def apply(body: ApplyRequest) -> dict[str, object]:
     # cet endpoint est devenu async pour prevenir le serveur multimedia :
     # auparavant, FastAPI le placait lui-meme dans un thread.
     results = await asyncio.to_thread(
-        lambda: [apply_plan(p, journal, dry_run=simulate, trash_root=trash_root) for p in selected]
+        lambda: [
+            apply_plan(
+                p,
+                journal,
+                dry_run=simulate,
+                trash_root=trash_root,
+                # Borne le nettoyage des dossiers vides : on ne remonte jamais
+                # jusqu'a une source, sans quoi ranger le dernier fichier la
+                # ferait disparaitre.
+                source_roots=racines,
+            )
+            for p in selected
+        ]
     )
 
     # Un plan applique quitte la file : le laisser inviterait a le rejouer, et

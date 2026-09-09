@@ -168,6 +168,7 @@ def apply_plan(
     *,
     dry_run: bool = True,
     trash_root: Path | None = None,
+    source_roots: list[Path] | None = None,
 ) -> ApplyResult:
     """Execute un plan. En simulation, verifie tout sans rien deplacer."""
     if plan.destination is None:
@@ -210,6 +211,20 @@ def apply_plan(
         )
 
     if dry_run:
+        # Les DROITS sont verifies ici, et c'est tout l'interet de simuler.
+        # Sans cela, la simulation annoncait « possible » sur des fichiers que
+        # l'execution refusait ensuite un par un : trois cents echecs decouverts
+        # apres coup, la ou un controle prealable les nommait d'avance.
+        if refus := _why_not_writable(plan):
+            return ApplyResult(
+                plan.id,
+                False,
+                str(plan.source),
+                str(plan.destination),
+                refus,
+                simulated=True,
+                reason="permission_denied",
+            )
         return ApplyResult(
             plan.id,
             True,
@@ -251,13 +266,45 @@ def apply_plan(
 
     trashed = _evacuate(plan, journal, trash_root)
 
+    # APRES l'evacuation des restes, et hors de celle-ci : le nettoyage y etait
+    # enferme, or elle rend la main aussitot quand un plan n'a aucun reste —
+    # ce qui est le cas le plus courant. Le dossier de release restait alors
+    # derriere, vide, a chaque fichier range.
+    emptied = prune_empty_dirs(plan.source.parent, source_roots or []) if source_roots else 0
+
     detail = f"deplace ({method})"
     if moved_companions:
         detail += f", {moved_companions} fichier(s) associe(s)"
     if trashed:
         detail += f", {trashed} reste(s) en corbeille"
+    if emptied:
+        detail += f", {emptied} dossier(s) vide(s) supprime(s)"
 
     return ApplyResult(plan.id, True, str(plan.source), str(plan.destination), detail, reason="ok")
+
+
+def _why_not_writable(plan: Plan) -> str | None:
+    """Ce qui empechera le deplacement, avant de l'avoir tente.
+
+    Deux droits sont necessaires et aucun ne porte sur le fichier lui-meme :
+    ecrire dans le dossier qui le CONTIENT (pour l'en retirer) et dans celui
+    qui l'accueillera (pour l'y poser). C'est la confusion la plus courante, et
+    celle qui envoie chercher au mauvais endroit.
+
+    Le premier dossier existant en remontant est teste cote destination :
+    l'arborescence sera creee, mais elle le sera sous un parent qui, lui,
+    existe deja et doit etre inscriptible.
+    """
+    if not os.access(plan.source.parent, os.W_OK):
+        return "dossier source en lecture seule" + _permission_hint(plan.source)
+
+    if plan.destination is not None:
+        cible = plan.destination.parent
+        while not cible.exists() and cible != cible.parent:
+            cible = cible.parent
+        if not os.access(cible, os.W_OK):
+            return f"impossible d'ecrire dans « {cible} »" + _permission_hint(cible / "x")
+    return None
 
 
 def _permission_hint(path: Path) -> str:
@@ -556,17 +603,52 @@ def _evacuate(plan: Plan, journal: Journal, trash_root: Path | None) -> int:
         _record(journal, plan, leftover, target, how, "trash")
         moved += 1
 
-    # Le dossier d'origine, une fois vide, n'a plus de raison d'exister. Il est
-    # SUPPRIME et non mis en corbeille : un dossier vide ne contient rien a
-    # recuperer, et l'annulation le recreera au besoin.
-    parent = plan.source.parent
-    if directory_now_empty(parent):
-        try:
-            parent.rmdir()
-        except OSError:
-            pass
-
     return moved
+
+
+def prune_empty_dirs(start: Path, keep_roots: list[Path]) -> int:
+    """Supprime les dossiers devenus vides, en remontant.
+
+    Une release occupe souvent deux niveaux — « Serie/Serie S01E01 GROUPE/ » —
+    et vider le second laisse le premier derriere. Ne remonter que d'un cran
+    laissait donc une carcasse par episode.
+
+    Deux garde-fous, et le second est le plus important :
+
+    1. Un dossier n'est supprime que s'il est vide au sens de
+       ``directory_now_empty`` — les fichiers systeme du NAS ne comptent pas.
+    2. On ne remonte JAMAIS jusqu'a une racine declaree, ni au-dessus. Sans
+       cette borne, ranger le dernier fichier d'une source supprimerait la
+       source elle-meme, et le scan suivant echouerait sur un dossier disparu.
+
+    Rien n'est journalise : un dossier vide ne contient rien a recuperer, et
+    une annulation le recree de toute facon en y reposant le fichier.
+    """
+    interdits = {r.resolve() for r in keep_roots}
+    supprimes = 0
+    courant = start
+
+    while True:
+        try:
+            resolu = courant.resolve()
+        except OSError:
+            break
+        if resolu in interdits or courant == courant.parent:
+            break
+        # Une racine est aussi protegee par ce qu'elle contient : on refuse de
+        # sortir de l'arborescence surveillee.
+        if not any(resolu.is_relative_to(r) for r in interdits):
+            break
+        if not directory_now_empty(courant):
+            break
+        try:
+            courant.rmdir()
+        except OSError:
+            break
+        supprimes += 1
+        courant = courant.parent
+
+    return supprimes
 
 
 def work_key(record: MoveRecord) -> str:

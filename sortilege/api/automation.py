@@ -174,7 +174,19 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
 
     journal = get_journal()
     trash_root = conf.library_root / TRASH_DIRNAME
-    results = [apply_plan(p, journal, dry_run=False, trash_root=trash_root) for p in confident]
+    results = [
+        apply_plan(
+            p,
+            journal,
+            dry_run=False,
+            trash_root=trash_root,
+            # Borne le nettoyage des dossiers vides : on ne remonte jamais
+            # jusqu'a une source, sans quoi ranger le dernier fichier la
+            # ferait disparaitre.
+            source_roots=roots,
+        )
+        for p in confident
+    ]
     report.applied = sum(1 for r in results if r.ok)
 
     review.drop_applied([r.plan_id for r in results if r.ok])

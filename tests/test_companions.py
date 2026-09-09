@@ -208,9 +208,54 @@ def test_le_dossier_vide_disparait(tmp_path: Path, release: Path) -> None:
         find_leftovers(video, companions),
     )
 
-    apply_plan(plan, Journal(tmp_path / "j.jsonl"), dry_run=False, trash_root=lib / ".corbeille")
+    apply_plan(
+        plan,
+        Journal(tmp_path / "j.jsonl"),
+        dry_run=False,
+        trash_root=lib / ".corbeille",
+        source_roots=[tmp_path],
+    )
 
     assert not release.exists()
+
+
+def test_une_racine_source_n_est_jamais_supprimee(tmp_path: Path) -> None:
+    """Un fichier pose directement dans une source : la vider ne doit pas la
+    faire disparaitre. Sans cette borne, le scan suivant echouerait sur un
+    dossier absent — et l'ancien code n'en avait aucune."""
+    from sortilege.core.journal import prune_empty_dirs
+
+    source = tmp_path / "Download"
+    source.mkdir()
+
+    assert prune_empty_dirs(source, [source]) == 0
+    assert source.is_dir()
+
+
+def test_le_nettoyage_remonte_plusieurs_niveaux(tmp_path: Path) -> None:
+    """Une release occupe souvent deux niveaux ; ne remonter que d'un cran
+    laissait une carcasse par episode."""
+    from sortilege.core.journal import prune_empty_dirs
+
+    source = tmp_path / "Download"
+    profond = source / "Serie" / "Serie S01E01 GROUPE"
+    profond.mkdir(parents=True)
+
+    assert prune_empty_dirs(profond, [source]) == 2
+    assert not (source / "Serie").exists()
+    assert source.is_dir(), "la source elle-meme est intacte"
+
+
+def test_un_dossier_non_vide_arrete_la_remontee(tmp_path: Path) -> None:
+    from sortilege.core.journal import prune_empty_dirs
+
+    source = tmp_path / "Download"
+    profond = source / "Serie" / "Serie S01E01"
+    profond.mkdir(parents=True)
+    (source / "Serie" / "S01E02.mkv").write_text("autre episode", encoding="utf-8")
+
+    assert prune_empty_dirs(profond, [source]) == 1
+    assert (source / "Serie").is_dir()
 
 
 def test_l_annulation_ramene_aussi_les_compagnons(tmp_path: Path, release: Path) -> None:
