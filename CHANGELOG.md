@@ -1,6 +1,52 @@
 # CHANGELOG
 
 
+## v0.34.0 (2026-09-09)
+
+### Features
+
+- Nettoyer les dossiers vides, mettre en cache les vignettes, paginer
+  ([`56a75cc`](https://github.com/gsoulat/sortilege/commit/56a75cc6c00d3e36a972cf9805dd71f92de0fde1))
+
+**Les dossiers de release restaient derriere.** Le nettoyage existait, mais enferme dans
+  l'evacuation des restes — laquelle rend la main aussitot quand un plan n'en a aucun, ce qui est le
+  cas courant : une release ne contient souvent que son .mkv. Le dossier vide survivait donc a
+  chaque fichier range.
+
+Il est sorti de la, et il remonte desormais plusieurs niveaux. Une release occupe souvent deux
+  etages — « Serie/Serie S01E01 GROUPE/ » — et ne defaire que le second laissait une carcasse par
+  episode.
+
+Un garde-fou est ajoute au passage, qui manquait : la remontee s'arrete AVANT toute racine declaree.
+  L'ancien code supprimait le dossier parent sans borne ; un fichier pose directement dans une
+  source aurait donc fait disparaitre la source elle-meme, et le scan suivant aurait echoue sur un
+  dossier absent.
+
+**« Simuler » ne verifiait pas les droits.** Il annoncait « deplacement possible » sur des fichiers
+  que l'execution refusait ensuite un par un — trois cents echecs decouverts apres coup, la ou un
+  controle prealable les nommait d'avance. C'est pourtant exactement ce a quoi sert une simulation.
+
+Les deux droits necessaires sont verifies, et aucun ne porte sur le fichier : ecrire dans le dossier
+  qui le contient pour l'en retirer, et dans celui qui l'accueillera pour l'y poser. Plutot qu'un
+  nouveau bouton, le controle rejoint celui qui existait deja pour cela.
+
+**Les vignettes relancaient ffmpeg a chaque ouverture.** Elles sont mises en cache sur disque,
+  indexees sur la taille ET la date du fichier : un encodage remplace sous le meme nom produit une
+  cle differente, et l'ancienne image n'est jamais servie a sa place. Plafond a deux mille, les plus
+  anciennes evincees — le volume de donnees contient aussi le journal d'annulation, qui lui est
+  precieux.
+
+Pas de cache navigateur en revanche : l'URL ne change pas quand le fichier change, il servirait donc
+  une image perimee sans moyen de le savoir.
+
+**La mediatheque se charge par paliers de deux cents.** Non pour le nombre d'oeuvres, mais pour ce
+  que chacune traine — plans, saisons, doublons — envoye toutes les deux secondes y compris pour des
+  lignes hors de l'ecran. Par paliers et non par pages : on parcourt une mediatheque en deroulant,
+  et perdre les lignes precedentes obligerait a revenir en arriere pour comparer.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.33.2 (2026-09-09)
 
 ### Bug Fixes
