@@ -1,6 +1,39 @@
 # CHANGELOG
 
 
+## v0.31.0 (2026-09-09)
+
+### Features
+
+- **apercu**: Des vignettes la ou le navigateur ne sait pas lire
+  ([`1035bce`](https://github.com/gsoulat/sortilege/commit/1035bce29fee12855695f8121d4022330f0d85bb))
+
+Le lecteur video livre juste avant ne repond pas a la question posee sur la plupart des fichiers :
+  aucun navigateur courant ne lit le MKV, qui est le format majoritaire d'une bibliotheque
+  constituee. Un lecteur noir sur neuf fichiers sur dix n'aide pas a decider si le fichier est le
+  bon.
+
+Le serveur annonce donc d'abord ce qu'il peut faire, avant que l'interface ne tente quoi que ce soit
+  : lecture directe quand le conteneur s'y prete, sinon des images extraites par ffmpeg — qui marche
+  sur tout ce qu'il sait ouvrir. Repondre avant d'extraire evite d'afficher cinq images cassees
+  quand ffmpeg manque ou que le fichier est illisible.
+
+Cinq images reparties sur toute la duree, la derniere a 90 %. Ce n'est pas un detail de mise en page
+  : c'est la FIN qui trahit un telechargement interrompu, et une lecture du debut ne le montrerait
+  jamais. Un episode qui s'arrete a la moitie se repere ici en une seconde.
+
+Le positionnement se fait avec « -ss » AVANT « -i », donc sur les images cles sans decoder ce qui
+  precede — sur un fichier de trois gigaoctets la difference est d'un ordre de grandeur. Un delai
+  borne empeche un fichier pathologique de retenir un worker, et les chemins de ffmpeg et ffprobe
+  sont resolus plutot que laisses au PATH du processus, qui n'est pas le notre.
+
+Un transcodage a la volee aurait aussi marche. Il coute un ordre de grandeur de plus en processeur
+  sur un NAS, pour repondre moins bien : cinq images montrent l'oeuvre ET son integrite d'un coup
+  d'oeil, la ou une lecture demande de chercher.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.30.0 (2026-09-09)
 
 ### Chores
