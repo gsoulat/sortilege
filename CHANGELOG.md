@@ -1,6 +1,50 @@
 # CHANGELOG
 
 
+## v0.27.0 (2026-09-09)
+
+### Features
+
+- **mediatheque**: Evacuer les copies deja rangees, et socle de la vue unique
+  ([`6ed9063`](https://github.com/gsoulat/sortilege/commit/6ed90634f0db4c4e0532430516f0b7455a20703b))
+
+Trois cent quarante fichiers echouaient avec « la destination existe deja ». Ils avaient bien ete
+  ranges lors d'un passage precedent ; seule une copie subsistait dans les telechargements, occupant
+  la place et revenant a chaque scan.
+
+La demande naturelle est « supprime l'ancien ». Ce n'est pas tout a fait ce qui est fait, et l'ecart
+  est deliberé. Trois conditions doivent tenir :
+
+1. Le fichier doit REELLEMENT etre a destination. Sans ce controle, on supprimerait une source qui
+  n'existe nulle part ailleurs. 2. Les deux doivent avoir la MEME TAILLE. Deux encodages d'un meme
+  episode visent le meme nom sans etre le meme fichier ; les confondre ferait perdre un exemplaire
+  distinct. Un doute sur l'identite se tranche par un refus, pas par un pari. 3. La copie part en
+  CORBEILLE et l'operation est journalisee, donc annulable. Une suppression n'est jamais rattrapable
+  — c'est exactement ce qu'un outil de rangement ne doit pas se permettre.
+
+Deux changements de fond viennent avec, qui preparent la vue unique :
+
+**Les plans apparaissent au fil du calcul** au lieu d'attendre la fin d'un lot de cent. Sur un
+  millier de fichiers, c'etaient plusieurs minutes d'ecran vide alors que les premiers resultats
+  etaient exploitables depuis longtemps.
+
+**L'identifiant d'un plan derive de sa source** au lieu d'etre tire au hasard. C'est ce qui rend la
+  publication progressive possible : la seconde passe IA remplace un plan par un meilleur, et sans
+  identifiant stable elle en aurait cree un second — deux lignes pour un fichier, et deux tentatives
+  de le deplacer. Effet de bord bienvenu : une selection cochee survit a un recalcul.
+
+Enfin le socle de la vue unique : un module qui rapproche les deux etats d'une meme oeuvre — ce
+  qu'on possede et ce qui attend — et l'endpoint qui l'expose. Le point delicat est le rapprochement
+  : une meme serie s'ecrit « Avatar Le dernier maitre de l'air » sur le disque, « Avatar The Last
+  Airbender » dans la release, et « Avatar : Le dernier maitre de l'air » chez le fournisseur. Trois
+  ecritures qui doivent tomber sur une seule ligne, sans quoi la vue unique serait pire que les
+  trois ecrans qu'elle remplace.
+
+26 tests de plus.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.26.0 (2026-09-09)
 
 ### Features
