@@ -51,6 +51,12 @@ class TrashRequest(BaseModel):
     expose. Un chemin absolu venu du client serait une porte ouverte."""
 
 
+def current_works() -> list[Work]:
+    """Index courant de la bibliotheque, tel que la derniere construction l'a
+    laisse. Vide tant qu'aucune n'a eu lieu."""
+    return list(_job.works)
+
+
 def _work_out(work: Work) -> dict[str, object]:
     return {
         "key": work.key,

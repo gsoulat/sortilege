@@ -1,0 +1,151 @@
+"""Vue unique de la mediatheque.
+
+Un seul endpoint agrege ce que trois ecrans montraient separement : la
+collection rangee, les fichiers en attente, et les plans calcules. Il ne
+declenche RIEN — le scan, l'indexation et le calcul restent des actions
+explicites, avec leurs propres endpoints. Celui-ci se contente de dire ou en
+sont les choses a l'instant ou on le demande.
+
+C'est ce qui rend l'affichage progressif possible sans machinerie : l'interface
+interroge cette route pendant qu'un travail tourne, et voit la liste se remplir.
+Pas de flux a maintenir ouvert, pas d'etat partage entre le client et le
+serveur — le serveur repond ce qu'il sait, et il en sait un peu plus a chaque
+appel.
+"""
+
+from __future__ import annotations
+
+import logging
+
+from fastapi import APIRouter
+
+from ..core.planner import Plan
+from ..core.workspace import WorkspaceEntry, build, summarize
+from . import collection, library, review
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/workspace", tags=["mediatheque"])
+
+MAX_UNPLANNED_SHOWN = 20
+"""Au-dela, une liste de fichiers non identifies cesse d'informer.
+
+Le compte total reste exact ; seuls les exemples sont tronques. Renvoyer six
+mille chemins ferait peser plusieurs megaoctets sur chaque rafraichissement,
+pour une information que personne ne lit ligne a ligne."""
+
+
+def _plan_out(plan: Plan) -> dict[str, object]:
+    return {
+        "id": plan.id,
+        "source": str(plan.source),
+        "destination": str(plan.destination) if plan.destination else None,
+        "score": plan.score,
+        "decision": str(plan.decision),
+        "title": plan.title,
+        "year": plan.year,
+        "poster_url": plan.poster_url,
+        "reasons": plan.reasons,
+        "error": plan.error,
+        "manual": plan.manual,
+        "alternatives": [
+            {
+                "provider": c.provider,
+                "external_id": c.external_id,
+                "title": c.title,
+                "year": c.year,
+                "poster_url": c.poster_url,
+                "overview": c.overview,
+            }
+            for c in plan.alternatives
+        ],
+    }
+
+
+def _entry_out(entry: WorkspaceEntry) -> dict[str, object]:
+    owned = entry.owned
+    return {
+        "key": entry.key,
+        "title": entry.title,
+        "kind": entry.kind,
+        "year": entry.year,
+        "poster_url": entry.poster_url or (owned.poster_url if owned else ""),
+        "is_new": entry.is_new,
+        "owned": None
+        if owned is None
+        else {
+            "file_count": owned.file_count,
+            "total_bytes": owned.total_bytes,
+            "owned_count": owned.owned_count,
+            "missing_count": owned.missing_count,
+            "identified": owned.identified,
+            "seasons": [
+                {
+                    "number": s.number,
+                    "owned": sorted(s.owned),
+                    "missing": s.missing,
+                    "complete": s.complete,
+                }
+                for s in sorted(owned.seasons.values(), key=lambda s: s.number)
+            ],
+            "duplicates": [
+                {
+                    "label": g.label,
+                    "wasted_bytes": g.wasted_bytes,
+                    "keep": g.best.relative_path,
+                    "redundant": [f.relative_path for f in g.redundant],
+                }
+                for g in owned.duplicates
+            ],
+        },
+        "pending": {
+            "ready": [_plan_out(p) for p in entry.pending.ready],
+            "review": [_plan_out(p) for p in entry.pending.review],
+            "rejected": [_plan_out(p) for p in entry.pending.rejected],
+            "unplanned_count": len(entry.pending.unplanned),
+            "unplanned": [
+                f.relative_path or f.path.name
+                for f in entry.pending.unplanned[:MAX_UNPLANNED_SHOWN]
+            ],
+            "total": entry.pending.total,
+        },
+    }
+
+
+@router.get("")
+def read_workspace(limit: int = 200) -> dict[str, object]:
+    """Etat courant de la mediatheque, oeuvre par oeuvre.
+
+    ``limit`` borne les lignes RENVOYEES, jamais celles comptees : les
+    compteurs de la barre d'action portent sur la totalite, sans quoi
+    « Executer 42 prets » mentirait des que la liste depasse la page.
+    """
+    scan = library.last_scan()
+    plans = list(review.current_plans())
+    planned = {str(p.source) for p in plans}
+
+    pending = (
+        []
+        if scan is None
+        else [
+            f
+            for f in scan.files
+            if not f.in_library and f.skipped_reason is None and str(f.path) not in planned
+        ]
+    )
+
+    entries = build(collection.current_works(), plans, pending)
+    counts = summarize(entries)
+
+    return {
+        "counts": counts,
+        "shown": min(limit, len(entries)),
+        "works": [_entry_out(e) for e in entries[:limit]],
+        # Les trois travaux qui alimentent la vue. L'interface s'en sert pour
+        # savoir s'il faut continuer a interroger — et pour dire ce qui tourne.
+        "jobs": {
+            "scan": library.scan_status(),
+            "plan": review.plan_status(),
+            "index": collection.status(),
+        },
+    }

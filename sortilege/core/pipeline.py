@@ -339,11 +339,19 @@ class Pipeline:
         self,
         files: list[ScannedFile],
         on_progress: Callable[[int, int, str], None] | None = None,
+        on_plan: Callable[[Plan], None] | None = None,
     ) -> list[Plan]:
         """Planifie un lot. Les fichiers deja ranges sont ignores.
 
         Les rescanner produirait des plans « deplacer X vers X » : du bruit
         dans la file de revue, et des entrees vides au journal d'annulation.
+
+        ``on_plan`` recoit chaque plan des qu'il est pret, sans attendre la fin
+        du lot. Sur un millier de fichiers, attendre la fin signifiait plusieurs
+        minutes d'ecran vide alors que les premiers resultats etaient
+        exploitables depuis longtemps. Le plan est publie deux fois quand la
+        seconde passe l'ameliore : l'identifiant etant derive de la source, le
+        second remplace le premier au lieu de s'y ajouter.
         """
         todo = [f for f in files if not f.in_library and f.skipped_reason is None]
         total = len(todo)
@@ -353,6 +361,8 @@ class Pipeline:
             nonlocal done
             plan = await self.plan_one(scanned)
             done += 1
+            if on_plan:
+                on_plan(plan)
             if on_progress:
                 # Le nom du fichier TERMINE, pas celui en cours : avec six
                 # taches en parallele, « en cours » n'aurait pas de sens unique.
@@ -376,7 +386,12 @@ class Pipeline:
             # appels groupes. On annonce la phase plutot que de figer la barre.
             if on_progress:
                 on_progress(done, total, "seconde passe IA…")
-            plans = await self._second_pass(todo, plans)
+            improved = await self._second_pass(todo, plans)
+            if on_plan:
+                for before, after in zip(plans, improved, strict=True):
+                    if after is not before:
+                        on_plan(after)
+            plans = improved
 
         return plans
 

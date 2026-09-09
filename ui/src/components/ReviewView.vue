@@ -288,7 +288,8 @@ const shortPath = (p) => (p ? p.split('/').slice(-3).join('/') : '—')
 const REASONS = {
   destination_exists: {
     label: 'La destination existe déjà',
-    fix: "Un fichier porte déjà ce nom à l'arrivée. Rien n'a été écrasé — c'est volontaire. Regarde l'onglet « Ma collection » : ce sont probablement des doublons d'un rangement précédent.",
+    fix: "Ces fichiers sont déjà rangés : seule une copie traîne encore dans les téléchargements. Rien n'a été écrasé — c'est volontaire. Tu peux évacuer ces copies vers la corbeille ; celles dont la taille diffère du fichier rangé seront refusées, car ce n'est alors pas le même fichier.",
+    action: 'evacuate',
   },
   source_missing: {
     label: 'Fichier source introuvable',
@@ -322,6 +323,7 @@ const failureGroups = computed(() => {
       key,
       label: REASONS[key]?.label ?? 'Échec',
       fix: REASONS[key]?.fix ?? '',
+      action: REASONS[key]?.action ?? null,
       items,
       // Le message complet du premier : il porte le détail système (errno,
       // chemin) que le libellé générique ne peut pas donner.
@@ -331,6 +333,28 @@ const failureGroups = computed(() => {
 })
 
 const openReason = ref(null)
+const evacuating = ref(false)
+
+/**
+ * Met en corbeille les copies dont le fichier est déjà rangé. Jamais une
+ * suppression : l'opération est journalisée, donc annulable, et une source de
+ * taille différente est refusée plutôt que confondue avec un doublon.
+ */
+async function evacuate(group) {
+  evacuating.value = true
+  try {
+    const out = await call('/api/review/evacuate', { plan_ids: group.items.map((r) => r.plan_id) })
+    if (out) {
+      message.value =
+        `${out.evacuated} copie(s) mise(s) en corbeille` +
+        (out.failed ? `, ${out.failed} refusée(s) — taille différente ou fichier absent.` : '.')
+      results.value = out.failed ? { ...out, results: out.results.filter((r) => !r.ok) } : null
+      await Promise.all([load(), loadJournal()])
+    }
+  } finally {
+    evacuating.value = false
+  }
+}
 
 // --- Annulation ciblée ---------------------------------------------------
 //
@@ -485,6 +509,12 @@ onMounted(load)
             <span class="label">{{ g.label }}</span>
           </button>
           <p class="fix">{{ g.fix }}</p>
+          <button
+            v-if="g.action === 'evacuate'"
+            class="act"
+            :disabled="evacuating"
+            @click="evacuate(g)"
+          >{{ evacuating ? 'Évacuation…' : `Mettre ces ${g.items.length} copies en corbeille` }}</button>
           <code class="sample">{{ g.sample }}</code>
           <ul v-if="openReason === g.key" class="files">
             <li v-for="(r, i) in g.items.slice(0, 50)" :key="i">
@@ -851,6 +881,8 @@ code {
   background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err);
 }
 .failures .fix { margin: 6px 0 0 28px; font-size: 12px; color: var(--text-dim); line-height: 1.6; max-width: 680px; }
+.failures .act { margin: 9px 0 0 28px; font-size: 12px; padding: 4px 12px; }
+.failures .act:hover:not(:disabled) { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
 .failures .sample {
   display: block; margin: 6px 0 0 28px; font-family: var(--mono);
   font-size: 11px; color: var(--text-faint);

@@ -246,6 +246,109 @@ def apply_plan(
     return ApplyResult(plan.id, True, str(plan.source), str(plan.destination), detail, reason="ok")
 
 
+def evacuate_ranged_source(plan: Plan, journal: Journal, trash_root: Path | None) -> ApplyResult:
+    """Evacue une source dont le fichier est DEJA a destination.
+
+    Le cas est frequent apres un rangement interrompu ou rejoue : le fichier a
+    bien ete range, mais une copie subsiste dans les telechargements. Elle
+    occupe la place et sera reproposee a chaque scan.
+
+    Trois garde-fous, dans cet ordre :
+
+    1. **Le fichier doit reellement etre a destination.** Sans ce controle,
+       cette fonction supprimerait une source qui n'a jamais ete rangee.
+    2. **Les deux doivent avoir la MEME TAILLE.** Deux encodages d'un meme
+       episode portent le meme nom de destination sans etre le meme fichier —
+       evacuer la source ferait alors perdre un exemplaire distinct. Un doute
+       sur l'identite se tranche par un refus, pas par un pari.
+    3. **Rien n'est supprime.** Le fichier part a la corbeille et l'operation
+       est journalisee, donc annulable comme n'importe quel deplacement. Une
+       suppression vraie n'est jamais rattrapable, et c'est exactement ce qu'un
+       outil de rangement ne doit pas se permettre.
+    """
+    if plan.destination is None:
+        return ApplyResult(plan.id, False, str(plan.source), None, "aucune destination")
+
+    if not plan.source.is_file():
+        return ApplyResult(
+            plan.id,
+            False,
+            str(plan.source),
+            str(plan.destination),
+            "source deja absente",
+            reason="source_missing",
+        )
+
+    if not plan.destination.is_file():
+        return ApplyResult(
+            plan.id,
+            False,
+            str(plan.source),
+            str(plan.destination),
+            "le fichier n'est pas a destination — il n'a pas ete range",
+            reason="not_ranged",
+        )
+
+    source_size = plan.source.stat().st_size
+    target_size = plan.destination.stat().st_size
+    if source_size != target_size:
+        return ApplyResult(
+            plan.id,
+            False,
+            str(plan.source),
+            str(plan.destination),
+            (
+                f"tailles differentes ({source_size} vs {target_size} octets) : "
+                "ce n'est pas le meme fichier, rien n'a ete touche"
+            ),
+            reason="size_mismatch",
+        )
+
+    if trash_root is None:
+        return ApplyResult(
+            plan.id,
+            False,
+            str(plan.source),
+            str(plan.destination),
+            "aucune corbeille configuree",
+            reason="no_trash",
+        )
+
+    batch = datetime.now(UTC).strftime("%Y-%m-%d")
+    target = trash_destination(trash_root, batch, plan.source)
+    if target.exists():
+        return ApplyResult(
+            plan.id,
+            False,
+            str(plan.source),
+            str(target),
+            "un fichier du meme nom occupe deja la corbeille",
+            reason="destination_exists",
+        )
+
+    try:
+        how = _move(plan.source, target)
+    except OSError as exc:
+        return ApplyResult(
+            plan.id,
+            False,
+            str(plan.source),
+            str(target),
+            f"evacuation impossible : {exc}",
+            reason="permission_denied" if isinstance(exc, PermissionError) else "move_failed",
+        )
+
+    _record(journal, plan, plan.source, target, how, "trash")
+    return ApplyResult(
+        plan.id,
+        True,
+        str(plan.source),
+        str(target),
+        "copie en double mise en corbeille",
+        reason="ok",
+    )
+
+
 def _record(
     journal: Journal, plan: Plan, source: Path, destination: Path, method: str, kind: str
 ) -> None:

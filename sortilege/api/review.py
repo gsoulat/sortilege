@@ -18,7 +18,14 @@ from pydantic import BaseModel
 
 from ..config import get_settings
 from ..core.companions import TRASH_DIRNAME
-from ..core.journal import apply_plan, group_by_work, undo_last, undo_plans, undo_work
+from ..core.journal import (
+    apply_plan,
+    evacuate_ranged_source,
+    group_by_work,
+    undo_last,
+    undo_plans,
+    undo_work,
+)
 from ..core.pipeline import BATCH_SIZE, Pipeline
 from ..core.planner import Plan
 from ..core.scoring import Decision, Policy
@@ -131,6 +138,17 @@ def restore_plans() -> bool:
         _job.done_paths = set(raw.get("done_paths") or [])
     logger.info("file reprise depuis le disque : %s plans", len(plans))
     return True
+
+
+def current_plans() -> list[Plan]:
+    """Instantane de la file. Une copie, pas la structure vivante.
+
+    Le calcul tourne en tache de fond et publie au fil de l'eau : rendre le
+    dictionnaire lui-meme exposerait l'appelant a une modification en cours
+    d'iteration.
+    """
+    with _lock:
+        return list(_plans.values())
 
 
 def adopt_plans(plans: list[Plan]) -> None:
@@ -320,9 +338,20 @@ async def build_plans(limit: int = 100, reset: bool = False) -> dict[str, object
     _job.started_at = time.monotonic()
     _job.finished_at = 0.0
 
+    def publish(plan: Plan) -> None:
+        """Rend un plan visible des qu'il est pret.
+
+        Sans cela, mille fichiers signifiaient plusieurs minutes d'ecran vide
+        alors que les premiers resultats etaient exploitables tout de suite.
+        L'identifiant etant derive de la source, republier un plan ameliore le
+        remplace au lieu de le dupliquer.
+        """
+        with _lock:
+            _plans[plan.id] = plan
+
     async def work() -> None:
         try:
-            plans = await pipeline.plan_all(batch, on_progress=progress)
+            plans = await pipeline.plan_all(batch, on_progress=progress, on_plan=publish)
         except Exception as exc:
             # Une tache de fond qui leve mourrait en silence : sans cette
             # capture, l'interface attendrait indefiniment un calcul disparu.
@@ -463,6 +492,64 @@ def apply(body: ApplyRequest) -> dict[str, object]:
             }
             for r in results
         ],
+    }
+
+
+class EvacuateRequest(BaseModel):
+    plan_ids: list[str] | None = None
+    """Plans concernes. Absent = tous ceux dont la destination est deja
+    occupee par un fichier identique."""
+
+
+@router.post("/evacuate")
+def evacuate(body: EvacuateRequest) -> dict[str, object]:
+    """Met en corbeille les sources dont le fichier est deja range.
+
+    Apres un rangement rejoue, une copie subsiste dans les telechargements :
+    elle occupe la place et revient a chaque scan. Elle part en CORBEILLE, pas
+    a la poubelle — l'operation est journalisee, donc annulable, et une source
+    de taille differente est refusee plutot que confondue avec un doublon.
+    """
+    conf = get_settings()
+    journal = get_journal()
+    trash_root = conf.library_root / TRASH_DIRNAME
+
+    with _lock:
+        if body.plan_ids is not None:
+            selected = [_plans[pid] for pid in body.plan_ids if pid in _plans]
+        else:
+            selected = [
+                p
+                for p in _plans.values()
+                if p.destination is not None and p.destination.exists() and p.source.is_file()
+            ]
+
+    results = [evacuate_ranged_source(p, journal, trash_root) for p in selected]
+
+    # Un plan dont la source est partie n'a plus lieu d'etre : le garder le
+    # ferait reproposer a chaque affichage, avec le meme echec.
+    done = [r.plan_id for r in results if r.ok]
+    if done:
+        with _lock:
+            for pid in done:
+                _plans.pop(pid, None)
+        _persist_plans()
+
+    return {
+        "evacuated": sum(1 for r in results if r.ok),
+        "failed": sum(1 for r in results if not r.ok),
+        "results": [
+            {
+                "plan_id": r.plan_id,
+                "ok": r.ok,
+                "source": r.source,
+                "destination": r.destination,
+                "message": r.message,
+                "reason": r.reason,
+            }
+            for r in results
+        ],
+        "queue": _queue(),
     }
 
 

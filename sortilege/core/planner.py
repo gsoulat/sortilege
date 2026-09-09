@@ -9,7 +9,7 @@ Ce module ne deplace rien. Il calcule une destination et un verdict.
 
 from __future__ import annotations
 
-import uuid
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -84,6 +84,21 @@ class Plan:
         vides, le rendant inutilisable le jour ou l'on veut vraiment revenir en
         arriere."""
         return self.destination is not None and self.source == self.destination
+
+
+def plan_id_for(source: Path) -> str:
+    """Identifiant DERIVE du fichier source, et non tire au hasard.
+
+    Un fichier n'a qu'un plan a la fois. Avec un identifiant aleatoire, tout
+    recalcul en produisait un second : la seconde passe IA, qui remplace un
+    plan par un meilleur, creait ainsi un doublon des lors que le premier avait
+    deja ete publie. Deriver l'identifiant de la source rend le remplacement
+    naturel — le recalcul ecrase, il n'ajoute pas.
+
+    Effet de bord bienvenu : une selection cochee dans l'interface survit a un
+    recalcul, et un plan relu depuis le disque garde le meme identifiant.
+    """
+    return hashlib.blake2s(str(source).encode("utf-8"), digest_size=6).hexdigest()
 
 
 def build_values(scanned: ScannedFile, match: MatchResult | None) -> dict[str, Any]:
@@ -162,7 +177,7 @@ def build_plan(
     leve pas : il produit un plan REJECT porteur du motif. Une exception
     interromprait le traitement de toute la bibliotheque pour un fichier.
     """
-    plan_id = uuid.uuid4().hex[:12]
+    plan_id = plan_id_for(scanned.path)
     kind = KIND_KEYS.get(scanned.parsed.kind, "movie")
     all_candidates = all_candidates or []
 
