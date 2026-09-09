@@ -112,6 +112,14 @@ jobs:
         if: steps.release.outputs.released == 'true'
         continue-on-error: true
         run: |
+          # Le build Docker tourne en root et laisse des objets lui appartenant
+          # dans .git : le rebase de rattrapage echoue alors sur « insufficient
+          # permission for adding an object ». C'est une consequence directe
+          # d'avoir place le build AVANT la poussee — ce qui reste le bon
+          # ordre, l'image etant le seul artefact deployable. On rend donc la
+          # main sur .git plutot que de revenir en arriere.
+          sudo chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}/.git" || true
+
           # Identite git OBLIGATOIRE avant tout rebase. Sans elle, le rattrapage
           # echoue sur « empty ident name », les trois tentatives deviennent
           # inutiles, et le push suivant annonce « Everything up-to-date » sur
