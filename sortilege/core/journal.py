@@ -215,7 +215,8 @@ def apply_plan(
             False,
             str(plan.source),
             str(plan.destination),
-            f"deplacement impossible : {exc}",
+            f"deplacement impossible : {exc}"
+            + (_permission_hint(plan.source) if isinstance(exc, PermissionError) else ""),
             reason="permission_denied" if isinstance(exc, PermissionError) else "move_failed",
         )
 
@@ -244,6 +245,25 @@ def apply_plan(
         detail += f", {trashed} reste(s) en corbeille"
 
     return ApplyResult(plan.id, True, str(plan.source), str(plan.destination), detail, reason="ok")
+
+
+def _permission_hint(path: Path) -> str:
+    """Dit QUI possede le fichier et sous quelle identite on tourne.
+
+    Un « Permission denied » nu oblige a partir en chasse : activer SSH,
+    trouver la bonne commande, la lancer au bon endroit. Or les deux nombres
+    qui manquent sont connus ici meme, a l'instant de l'echec. Les donner
+    transforme une enigme en une ligne a recopier dans le docker-compose.
+    """
+    try:
+        info = path.stat()
+    except OSError:
+        return ""
+    return (
+        f" — le fichier appartient a UID {info.st_uid}:{info.st_gid}, "
+        f"Sortilege tourne en UID {os.getuid()}:{os.getgid()}. "
+        f"Mets PUID={info.st_uid} et PGID={info.st_gid} dans ton docker-compose."
+    )
 
 
 def delete_ranged_source(plan: Plan) -> ApplyResult:
@@ -312,7 +332,8 @@ def delete_ranged_source(plan: Plan) -> ApplyResult:
             False,
             str(plan.source),
             str(plan.destination),
-            f"suppression impossible : {exc}",
+            f"suppression impossible : {exc}"
+            + (_permission_hint(plan.source) if isinstance(exc, PermissionError) else ""),
             reason="permission_denied" if isinstance(exc, PermissionError) else "move_failed",
         )
 
@@ -442,7 +463,8 @@ def evacuate_ranged_source(plan: Plan, journal: Journal, trash_root: Path | None
             False,
             str(plan.source),
             str(target),
-            f"evacuation impossible : {exc}",
+            f"evacuation impossible : {exc}"
+            + (_permission_hint(plan.source) if isinstance(exc, PermissionError) else ""),
             reason="permission_denied" if isinstance(exc, PermissionError) else "move_failed",
         )
 

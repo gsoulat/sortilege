@@ -298,3 +298,21 @@ def test_un_refus_du_systeme_est_rapporte_tel_quel(space: Path, monkeypatch) -> 
     assert result.ok is False
     assert result.reason == "permission_denied"
     assert "Permission denied" in result.message
+
+
+def test_un_refus_de_permission_nomme_le_proprietaire(space: Path, monkeypatch) -> None:
+    """Un « Permission denied » nu oblige a partir en chasse : activer SSH,
+    trouver la commande, la lancer au bon endroit. Les deux nombres qui
+    manquent sont pourtant connus a l'instant de l'echec."""
+    from sortilege.core.journal import delete_ranged_source
+
+    plan = plan_for(space, source_bytes=b"video", dest_bytes=b"video")
+
+    def refus(self):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "unlink", refus)
+    message = delete_ranged_source(plan).message
+
+    assert "PUID=" in message and "PGID=" in message
+    assert "appartient a UID" in message
