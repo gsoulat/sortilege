@@ -1,6 +1,72 @@
 # CHANGELOG
 
 
+## v0.32.1 (2026-09-09)
+
+### Bug Fixes
+
+- **evacuation**: Deplacer au lieu de copier, et resoudre les exemplaires en trop
+  ([`cb2f2a4`](https://github.com/gsoulat/sortilege/commit/cb2f2a4ec9619f02b35193cc03c1ae6cd34cfb70))
+
+Trois cent soixante-deux fichiers de deux gigaoctets etaient RECOPIES au lieu d'etre renommes. La
+  corbeille vivait sous la racine de bibliotheque alors que les telechargements sont un autre
+  partage : os.rename echouait sur EXDEV et l'on retombait sur copie puis suppression. Plusieurs
+  centaines de gigaoctets transferes pour ne rien produire, et une attente sans commune mesure avec
+  l'operation demandee.
+
+La corbeille est desormais choisie PAR FICHIER, sur le volume du fichier lui-meme. Ce n'est pas un
+  detail de rangement : un deplacement a l'interieur d'un volume est un renommage, instantane quelle
+  que soit la taille. La bibliotheque ne sert plus que de dernier recours — mieux vaut une copie
+  lente qu'un refus.
+
+Second point, lie : une source deja presente en corbeille etait refusee, donc elle revenait a chaque
+  scan sans jamais se resoudre. C'est pourtant le cas le plus clair qui soit — un exemplaire en
+  bibliotheque, un en corbeille, celui-ci en trop. Il est maintenant supprime.
+
+C'est le seul endroit ou l'evacuation supprime, et il est doublement encadre : le fichier doit etre
+  a destination avec la meme taille, ET la copie en corbeille doit elle aussi avoir cette taille. Un
+  homonyme de taille differente n'est pas le meme fichier et reste refuse.
+
+Les motifs de refus s'affichent enfin PENDANT l'operation. Sur trois cents fichiers, decouvrir a la
+  fin que tout a ete refuse pour une seule raison fait perdre l'attente entiere.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+### Refactoring
+
+- Supprimer la file de revue et le code qu elle laissait derriere
+  ([`be30005`](https://github.com/gsoulat/sortilege/commit/be30005d2306fbfee4c23aa3bda329021964eb34))
+
+L'onglet « File de revue » n'avait plus de raison d'etre. Je l'avais garde apres la fusion en
+  invoquant qu'une grille de jaquettes se parcourt mieux qu'une arborescence depliee ; le pretexte
+  ne tenait pas. Il affichait les memes plans sous une autre forme, et deux ecrans qui montrent la
+  meme chose obligent a se demander lequel fait foi.
+
+Trois fonctions n'existaient que la et ont ete portees dans la vue unifiee avant sa suppression : le
+  panneau d'annulation par oeuvre, le bouton « Simuler », et « Recommencer » qui repart du premier
+  fichier.
+
+La passe de code mort qui a suivi a trouve ce que ces suppressions avaient laisse derriere, et un
+  peu plus :
+
+- Huit routes exposees que plus rien n'appelait. Quatre etaient orphelines des anciennes vues ; les
+  quatre autres — les etats de scan, d'indexation et de calcul, et la file elle-meme — restent des
+  FONCTIONS, appelees dans le processus par /api/workspace qui les agrege. Seule leur exposition
+  HTTP disparait. - `schemas.py` en entier, 114 lignes devenues sans lecteur. - `plan_one`, laissee
+  derriere en scindant le rendu du plan pour permettre la seconde passe de franchise. - `_work_out`,
+  `Provider`, `invalidate`, `has_declared_id`, `drop_blob` : helpers sans appelant. `Provider` etait
+  une interface que rien ne verifiait, et qui decrivait deja mal un TMDBProvider devenu bien plus
+  large. - `database_url`, declare et jamais lu — le meme defaut que TheTVDB, retire plus tot pour
+  la meme raison : un reglage qui ment coute plus qu'une fonction absente.
+
+Deux tests s'appuyaient sur des helpers retires. Ils n'ont pas ete supprimes mais reecrits, et ils
+  testent mieux : la relecture des preferences passe desormais par un magasin NEUF, ce que fait un
+  redemarrage, au lieu de vider un cache — c'est l'ecriture sur disque qui est ainsi prouvee, pas le
+  cache.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.32.0 (2026-09-09)
 
 ### Features
