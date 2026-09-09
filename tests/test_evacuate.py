@@ -152,16 +152,83 @@ def test_un_plan_sans_destination_est_refuse(space: Path, journal: Journal) -> N
     assert evacuate_ranged_source(plan, journal, trash(space)).ok is False
 
 
-def test_une_corbeille_deja_occupee_ne_provoque_pas_d_ecrasement(
-    space: Path, journal: Journal
-) -> None:
+def test_un_exemplaire_surnumeraire_est_supprime(space: Path, journal: Journal) -> None:
+    """Troisieme exemplaire : un en bibliotheque, un en corbeille, celui-ci en
+    trop. Le refuser le ferait revenir a chaque scan sans jamais se resoudre.
+
+    C'est le seul cas ou l'evacuation supprime au lieu de deplacer, et il est
+    encadre : le fichier est deja a destination ET deja en corbeille, tous deux
+    verifies a la taille."""
     plan = plan_for(space, source_bytes=b"video", dest_bytes=b"video")
     evacuate_ranged_source(plan, journal, trash(space))
 
-    # Un second fichier de meme chemin d'origine, donc de meme nom aplati.
+    # Meme chemin d'origine, donc meme nom aplati en corbeille.
     plan.source.write_bytes(b"video")
     result = evacuate_ranged_source(plan, journal, trash(space))
 
+    assert result.ok is True
+    assert not plan.source.exists()
+    assert len(list(trash(space).rglob("*.mkv"))) == 1, "la corbeille n'a pas ete doublee"
+    assert plan.destination.is_file(), "la bibliotheque est intacte"
+
+
+def test_un_homonyme_de_taille_differente_est_refuse(space: Path, journal: Journal) -> None:
+    """L'homonymie ne suffit pas a conclure a l'identite : si la copie en
+    corbeille differe, on ne supprime rien."""
+    plan = plan_for(space, source_bytes=b"video", dest_bytes=b"video")
+    evacuate_ranged_source(plan, journal, trash(space))
+
+    # Meme nom, meme taille a destination, mais la corbeille contient autre
+    # chose — on l'y remplace pour simuler une collision reelle.
+    en_corbeille = next(trash(space).rglob("*.mkv"))
+    en_corbeille.write_bytes(b"un tout autre contenu, plus long")
+    plan.source.write_bytes(b"video")
+
+    result = evacuate_ranged_source(plan, journal, trash(space))
+
     assert result.ok is False
-    assert plan.source.is_file()
-    assert len(list(trash(space).rglob("*.mkv"))) == 1
+    assert result.reason == "destination_exists"
+    assert plan.source.is_file(), "rien n'a ete supprime"
+
+
+# --- Ou placer la corbeille -------------------------------------------------
+#
+# Ce n'est pas un detail de rangement, c'est un facteur mille sur le temps. Un
+# deplacement a l'interieur d'un volume est un renommage, instantane quelle que
+# soit la taille. D'un volume a l'autre, il faut recopier puis supprimer : sur
+# un NAS ou telechargements et bibliotheque sont deux partages distincts,
+# evacuer trois cents fichiers revenait a recopier des centaines de gigaoctets
+# pour ne rien produire.
+
+
+def test_la_corbeille_suit_la_racine_qui_contient_le_fichier(tmp_path) -> None:
+    from sortilege.core.companions import TRASH_DIRNAME, trash_root_for
+
+    downloads = tmp_path / "downloads"
+    library = tmp_path / "media"
+    downloads.mkdir()
+    library.mkdir()
+    fichier = downloads / "film.mkv"
+    fichier.write_bytes(b"x")
+
+    assert trash_root_for(fichier, library, [downloads]) == downloads / TRASH_DIRNAME
+
+
+def test_sans_racine_source_connue_on_retombe_sur_la_bibliotheque(tmp_path) -> None:
+    """Mieux vaut une copie lente qu'un refus."""
+    from sortilege.core.companions import TRASH_DIRNAME, trash_root_for
+
+    library = tmp_path / "media"
+    library.mkdir()
+    fichier = tmp_path / "ailleurs.mkv"
+    fichier.write_bytes(b"x")
+
+    assert trash_root_for(fichier, library, []) == library / TRASH_DIRNAME
+
+
+def test_un_fichier_disparu_ne_leve_pas(tmp_path) -> None:
+    from sortilege.core.companions import TRASH_DIRNAME, trash_root_for
+
+    library = tmp_path / "media"
+    library.mkdir()
+    assert trash_root_for(tmp_path / "absent.mkv", library, []) == library / TRASH_DIRNAME

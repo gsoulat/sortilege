@@ -437,6 +437,18 @@ onUnmounted(() => clearInterval(poller))
               <span v-if="evacProgress.failed" class="ko-count">{{ evacProgress.failed }} refusée(s)</span>
               <span v-if="evacProgress.current" class="current">{{ evacProgress.current }}</span>
             </div>
+            <!-- Les motifs de refus, pendant l'opération et non après : sur
+                 trois cents fichiers, découvrir à la fin que tout a été refusé
+                 pour une même raison fait perdre l'attente entière. -->
+            <ul v-if="evacProgress.results?.length" class="refus">
+              <li v-for="(r, i) in evacProgress.results.slice(0, 5)" :key="i">
+                <code>{{ shortPath(r.source) }}</code>
+                <span>{{ r.message }}</span>
+              </li>
+              <li v-if="evacProgress.results.length > 5" class="more">
+                … et {{ evacProgress.results.length - 5 }} autres refus
+              </li>
+            </ul>
           </div>
           <code class="sample">{{ g.sample }}</code>
         </li>
@@ -734,6 +746,10 @@ onUnmounted(() => clearInterval(poller))
 .evac .ok-count { color: var(--ok); }
 .evac .ko-count { color: var(--err); }
 .evac .current { font-family: var(--mono); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.refus { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.refus li { display: flex; gap: 9px; align-items: baseline; font-size: 11px; color: var(--err); flex-wrap: wrap; }
+.refus code { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
+.refus .more { color: var(--text-faint); font-style: italic; }
 
 .filters { display: flex; gap: 7px; flex-wrap: wrap; }
 .filters button { font-size: 11.5px; padding: 3px 11px; }

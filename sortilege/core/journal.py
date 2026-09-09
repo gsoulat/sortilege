@@ -317,13 +317,41 @@ def evacuate_ranged_source(plan: Plan, journal: Journal, trash_root: Path | None
     batch = datetime.now(UTC).strftime("%Y-%m-%d")
     target = trash_destination(trash_root, batch, plan.source)
     if target.exists():
+        # Meme chemin d'origine, donc meme fichier : une evacuation precedente
+        # l'a deja mis a l'abri. La source est alors un TROISIEME exemplaire —
+        # un en bibliotheque, un en corbeille, celui-ci en trop. La refuser
+        # laisserait le fichier revenir a chaque scan sans jamais se resoudre.
+        #
+        # La taille est verifiee une seconde fois, contre la copie en
+        # corbeille : c'est gratuit, et cela couvre le seul cas ou l'homonymie
+        # ne signifierait pas l'identite.
+        if target.stat().st_size != source_size:
+            return ApplyResult(
+                plan.id,
+                False,
+                str(plan.source),
+                str(target),
+                "un autre fichier du meme nom occupe la corbeille",
+                reason="destination_exists",
+            )
+        try:
+            plan.source.unlink()
+        except OSError as exc:
+            return ApplyResult(
+                plan.id,
+                False,
+                str(plan.source),
+                str(target),
+                f"suppression impossible : {exc}",
+                reason="permission_denied" if isinstance(exc, PermissionError) else "move_failed",
+            )
         return ApplyResult(
             plan.id,
-            False,
+            True,
             str(plan.source),
             str(target),
-            "un fichier du meme nom occupe deja la corbeille",
-            reason="destination_exists",
+            "exemplaire surnumeraire supprime — deja en bibliotheque et en corbeille",
+            reason="ok",
         )
 
     try:

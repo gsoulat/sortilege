@@ -47,6 +47,44 @@ JUNK_NAMES = {"rarbg", "readme", "downloaded from", "torrent downloaded", "www",
 TRASH_DIRNAME = ".sortilege-corbeille"
 
 
+def trash_root_for(source: Path, library_root: Path, source_roots: list[Path]) -> Path:
+    """Corbeille situee sur le MEME systeme de fichiers que le fichier a evacuer.
+
+    Ce n'est pas un detail de rangement, c'est un facteur mille sur le temps.
+    Un deplacement a l'interieur d'un volume est un simple renommage,
+    instantane quelle que soit la taille. D'un volume a l'autre, il faut
+    recopier puis supprimer : sur un NAS ou telechargements et bibliotheque
+    sont deux partages distincts, evacuer trois cents fichiers revenait a
+    recopier plusieurs centaines de gigaoctets pour ne rien produire.
+
+    On cherche donc, parmi les racines connues, celle qui contient le fichier
+    et se trouve sur son volume. La bibliotheque ne sert que de dernier
+    recours — mieux vaut une copie lente qu'un refus.
+    """
+    try:
+        device = source.stat().st_dev
+    except OSError:
+        return library_root / TRASH_DIRNAME
+
+    def same_volume(root: Path) -> bool:
+        try:
+            return root.is_dir() and root.stat().st_dev == device
+        except OSError:
+            return False
+
+    # La racine qui CONTIENT le fichier d'abord : c'est la plus specifique, et
+    # la corbeille y reste visible a cote de ce dont elle provient.
+    for root in source_roots:
+        if same_volume(root) and source.is_relative_to(root):
+            return root / TRASH_DIRNAME
+
+    for root in [library_root, *source_roots]:
+        if same_volume(root):
+            return root / TRASH_DIRNAME
+
+    return library_root / TRASH_DIRNAME
+
+
 class CompanionKind(StrEnum):
     SUBTITLE = "subtitle"
     ARTWORK = "artwork"

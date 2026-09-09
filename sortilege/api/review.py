@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..config import get_settings
-from ..core.companions import TRASH_DIRNAME
+from ..core.companions import TRASH_DIRNAME, trash_root_for
 from ..core.journal import (
     apply_plan,
     evacuate_ranged_source,
@@ -593,7 +593,6 @@ async def evacuate(body: EvacuateRequest) -> dict[str, object]:
 
     conf = get_settings()
     journal = get_journal()
-    trash_root = conf.library_root / TRASH_DIRNAME
 
     with _lock:
         if body.plan_ids is not None:
@@ -620,7 +619,14 @@ async def evacuate(body: EvacuateRequest) -> dict[str, object]:
         try:
             for plan in selected:
                 _evac_job.current = plan.source.name
-                result = evacuate_ranged_source(plan, journal, trash_root)
+                # Corbeille choisie PAR FICHIER : sur un NAS ou telechargements
+                # et bibliotheque sont deux partages, une corbeille commune
+                # imposerait de recopier chaque fichier au lieu de le renommer.
+                result = evacuate_ranged_source(
+                    plan,
+                    journal,
+                    trash_root_for(plan.source, conf.library_root, conf.source_roots),
+                )
                 _evac_job.processed += 1
                 if result.ok:
                     _evac_job.evacuated += 1
