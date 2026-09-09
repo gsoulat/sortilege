@@ -247,7 +247,7 @@ const REASONS = {
   },
   permission_denied: {
     label: 'Permission refusée',
-    fix: "Le conteneur n'a pas le droit d'écrire dans la bibliothèque. Vérifie PUID / PGID et le propriétaire du dossier de destination sur le NAS.",
+    fix: "Sortilège n'a pas le droit d'écrire là où il doit agir — le plus souvent le dossier de TÉLÉCHARGEMENT, dont les fichiers appartiennent au client qui les a créés (JDownloader, un client torrent…). Aucun réglage de Sortilège ne peut le contourner : c'est une permission du NAS. Sur le NAS : « ls -ln » sur le dossier concerné pour voir l'UID propriétaire, puis aligne PUID / PGID du conteneur dessus, ou donne l'écriture au groupe partagé par les deux conteneurs.",
   },
   move_failed: {
     label: 'Déplacement impossible',
@@ -291,12 +291,22 @@ let evacPoller = null
  * suppression : l'opération est journalisée, donc annulable, et une source de
  * taille différente est refusée plutôt que confondue avec un doublon.
  */
-async function evacuate(group) {
+const confirmDelete = ref(false)
+
+async function evacuate(group, { mode = 'trash' } = {}) {
+  // La suppression directe demande un second clic : elle est irréversible, et
+  // un bouton irréversible qui part au premier clic est un piège.
+  if (mode === 'delete' && !confirmDelete.value) {
+    confirmDelete.value = true
+    return
+  }
+  confirmDelete.value = false
   evacuating.value = true
   evacProgress.value = null
 
   const started = await call('/api/review/evacuate', {
     plan_ids: group.items.map((r) => r.plan_id),
+    mode,
   })
   if (!started) {
     evacuating.value = false
@@ -314,8 +324,9 @@ async function evacuate(group) {
         evacPoller = null
         evacuating.value = false
         evacProgress.value = null
+        const verbe = mode === 'delete' ? 'supprimée(s)' : 'mise(s) en corbeille'
         message.value =
-          `${status.evacuated} copie(s) mise(s) en corbeille` +
+          `${status.evacuated} copie(s) ${verbe}` +
           (status.failed ? `, ${status.failed} refusée(s).` : '.')
         failures.value = status.results ?? []
         await load()
@@ -543,10 +554,20 @@ onUnmounted(() => clearInterval(poller))
             <span class="label">{{ g.label }}</span>
           </div>
           <p class="fix">{{ g.fix }}</p>
-          <button v-if="g.action === 'evacuate'" class="act" :disabled="evacuating"
-                  @click="evacuate(g)">
-            {{ evacuating ? 'Évacuation…' : `Mettre ces ${g.items.length} copies en corbeille` }}
-          </button>
+          <div v-if="g.action === 'evacuate'" class="actions">
+            <button class="act" :disabled="evacuating" @click="evacuate(g)">
+              {{ evacuating ? 'En cours…' : `Mettre ces ${g.items.length} copies en corbeille` }}
+            </button>
+            <button class="act danger" :disabled="evacuating" @click="evacuate(g, { mode: 'delete' })">
+              {{ confirmDelete
+                ? `Confirmer : supprimer ces ${g.items.length} copies`
+                : 'Supprimer sans passer par la corbeille' }}
+            </button>
+          </div>
+          <p v-if="confirmDelete" class="fix warn-strong">
+            Irréversible. Chaque fichier est tout de même vérifié avant : présent à
+            destination et de même taille, sinon il est refusé.
+          </p>
           <div v-if="g.action === 'evacuate' && evacProgress" class="evac">
             <div class="bar"><div class="fill" :style="{ width: evacPercent + '%' }"></div></div>
             <div class="stats">
@@ -876,7 +897,11 @@ onUnmounted(() => clearInterval(poller))
   background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err);
 }
 .failures .fix { margin: 6px 0 0; font-size: 12px; color: var(--text-dim); line-height: 1.6; max-width: 680px; }
-.failures .act { margin: 9px 0 0; font-size: 12px; padding: 4px 12px; }
+.failures .actions { display: flex; gap: 8px; margin: 9px 0 0; flex-wrap: wrap; }
+.failures .act { font-size: 12px; padding: 4px 12px; }
+.failures .act.danger { color: var(--text-faint); }
+.failures .act.danger:hover:not(:disabled) { color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, transparent); }
+.failures .warn-strong { color: var(--err); }
 .failures .act:hover:not(:disabled) { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
 .failures .sample { display: block; margin: 6px 0 0; font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
 .evac { margin: 10px 0 0; max-width: 680px; }

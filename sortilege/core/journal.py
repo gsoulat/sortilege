@@ -246,6 +246,86 @@ def apply_plan(
     return ApplyResult(plan.id, True, str(plan.source), str(plan.destination), detail, reason="ok")
 
 
+def delete_ranged_source(plan: Plan) -> ApplyResult:
+    """Supprime une source dont le fichier est DEJA range, sans corbeille.
+
+    C'est le seul endroit ou l'application supprime un fichier de l'utilisateur
+    sans filet, et cela n'a de sens que parce que les memes garde-fous que
+    l'evacuation s'appliquent d'abord :
+
+    1. le fichier doit REELLEMENT etre a destination — sinon on supprimerait
+       une source qui n'existe nulle part ailleurs ;
+    2. les deux doivent avoir la MEME TAILLE — deux encodages d'un meme
+       episode visent le meme nom sans etre le meme fichier.
+
+    Ces deux conditions reunies, la source n'est pas un fichier : c'est un
+    doublon strict de quelque chose qu'on vient de verifier present. La
+    corbeille n'y ajouterait qu'un deplacement et une seconde corvee de
+    vidage.
+
+    Rien n'est journalise, parce que rien ne serait annulable. Le dire est plus
+    honnete que d'ecrire une ligne de journal qui ne pourrait rien defaire.
+    """
+    if plan.destination is None:
+        return ApplyResult(plan.id, False, str(plan.source), None, "aucune destination")
+
+    if not plan.source.is_file():
+        return ApplyResult(
+            plan.id,
+            False,
+            str(plan.source),
+            str(plan.destination),
+            "source deja absente",
+            reason="source_missing",
+        )
+
+    if not plan.destination.is_file():
+        return ApplyResult(
+            plan.id,
+            False,
+            str(plan.source),
+            str(plan.destination),
+            "le fichier n'est pas a destination — il n'a pas ete range",
+            reason="not_ranged",
+        )
+
+    source_size = plan.source.stat().st_size
+    target_size = plan.destination.stat().st_size
+    if source_size != target_size:
+        return ApplyResult(
+            plan.id,
+            False,
+            str(plan.source),
+            str(plan.destination),
+            (
+                f"tailles differentes ({source_size} vs {target_size} octets) : "
+                "ce n'est pas le meme fichier, rien n'a ete touche"
+            ),
+            reason="size_mismatch",
+        )
+
+    try:
+        plan.source.unlink()
+    except OSError as exc:
+        return ApplyResult(
+            plan.id,
+            False,
+            str(plan.source),
+            str(plan.destination),
+            f"suppression impossible : {exc}",
+            reason="permission_denied" if isinstance(exc, PermissionError) else "move_failed",
+        )
+
+    return ApplyResult(
+        plan.id,
+        True,
+        str(plan.source),
+        str(plan.destination),
+        "copie en double supprimee",
+        reason="ok",
+    )
+
+
 def evacuate_ranged_source(plan: Plan, journal: Journal, trash_root: Path | None) -> ApplyResult:
     """Evacue une source dont le fichier est DEJA a destination.
 

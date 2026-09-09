@@ -20,6 +20,7 @@ from ..config import get_settings
 from ..core.companions import TRASH_DIRNAME, trash_root_for
 from ..core.journal import (
     apply_plan,
+    delete_ranged_source,
     evacuate_ranged_source,
     group_by_work,
     undo_last,
@@ -530,6 +531,14 @@ class EvacuateRequest(BaseModel):
     """Plans concernes. Absent = tous ceux dont la destination est deja
     occupee par un fichier identique."""
 
+    mode: str = "trash"
+    """« trash » met en corbeille, « delete » supprime directement.
+
+    La corbeille reste le defaut. Mais quand le fichier est verifie present a
+    destination ET de meme taille, la source n'est pas un fichier : c'est un
+    doublon strict. Y ajouter un deplacement puis une seconde corvee de vidage
+    n'apporte rien — d'ou ce mode, demande explicitement."""
+
 
 @dataclass
 class EvacuateJob:
@@ -617,11 +626,14 @@ async def evacuate(body: EvacuateRequest) -> dict[str, object]:
                 # Corbeille choisie PAR FICHIER : sur un NAS ou telechargements
                 # et bibliotheque sont deux partages, une corbeille commune
                 # imposerait de recopier chaque fichier au lieu de le renommer.
-                result = evacuate_ranged_source(
-                    plan,
-                    journal,
-                    trash_root_for(plan.source, conf.library_root, conf.source_roots),
-                )
+                if body.mode == "delete":
+                    result = delete_ranged_source(plan)
+                else:
+                    result = evacuate_ranged_source(
+                        plan,
+                        journal,
+                        trash_root_for(plan.source, conf.library_root, conf.source_roots),
+                    )
                 _evac_job.processed += 1
                 if result.ok:
                     _evac_job.evacuated += 1

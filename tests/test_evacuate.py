@@ -232,3 +232,69 @@ def test_un_fichier_disparu_ne_leve_pas(tmp_path) -> None:
     library = tmp_path / "media"
     library.mkdir()
     assert trash_root_for(tmp_path / "absent.mkv", library, []) == library / TRASH_DIRNAME
+
+
+# --- Suppression directe ----------------------------------------------------
+#
+# Demandee explicitement : quand le fichier est verifie present a destination
+# ET de meme taille, la source n'est pas un fichier, c'est un doublon strict.
+# Y ajouter un deplacement puis une corvee de vidage n'apporte rien.
+#
+# Les garde-fous restent les memes, et c'est eux qui rendent la suppression
+# defendable. Les tests portent donc sur ce qui est REFUSE.
+
+
+def test_une_copie_verifiee_est_supprimee(space: Path) -> None:
+    from sortilege.core.journal import delete_ranged_source
+
+    plan = plan_for(space, source_bytes=b"video", dest_bytes=b"video")
+
+    result = delete_ranged_source(plan)
+
+    assert result.ok is True
+    assert not plan.source.exists()
+    assert plan.destination.is_file(), "l'exemplaire range est intact"
+
+
+def test_un_fichier_jamais_range_n_est_pas_supprime(space: Path) -> None:
+    """Sans ce controle, on supprimerait une source qui n'existe nulle part
+    ailleurs : la perte seche."""
+    from sortilege.core.journal import delete_ranged_source
+
+    plan = plan_for(space, source_bytes=b"video", dest_bytes=None)
+
+    assert delete_ranged_source(plan).ok is False
+    assert plan.source.is_file()
+
+
+def test_une_taille_differente_n_est_pas_supprimee(space: Path) -> None:
+    """Deux encodages d'un meme episode visent le meme nom sans etre le meme
+    fichier."""
+    from sortilege.core.journal import delete_ranged_source
+
+    plan = plan_for(space, source_bytes=b"un encodage plus long", dest_bytes=b"court")
+
+    result = delete_ranged_source(plan)
+
+    assert result.ok is False
+    assert result.reason == "size_mismatch"
+    assert plan.source.is_file()
+
+
+def test_un_refus_du_systeme_est_rapporte_tel_quel(space: Path, monkeypatch) -> None:
+    """Le cas reel rencontre : le dossier de telechargement appartient au
+    client qui l'a rempli, et le conteneur n'y a pas droit. Aucun reglage de
+    l'application ne peut le contourner — il faut le DIRE, pas l'avaler."""
+    from sortilege.core.journal import delete_ranged_source
+
+    plan = plan_for(space, source_bytes=b"video", dest_bytes=b"video")
+
+    def refus(self):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(Path, "unlink", refus)
+    result = delete_ranged_source(plan)
+
+    assert result.ok is False
+    assert result.reason == "permission_denied"
+    assert "Permission denied" in result.message
