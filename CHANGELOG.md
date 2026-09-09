@@ -1,6 +1,39 @@
 # CHANGELOG
 
 
+## v0.35.0 (2026-09-09)
+
+### Features
+
+- **revue**: Chercher une oeuvre par son titre quand rien ne convient
+  ([`b509325`](https://github.com/gsoulat/sortilege/commit/b5093258a82b52350ba66616aa9ef19602b80588))
+
+Les candidats proposes viennent du titre LU dans le nom de fichier. Quand ce nom est trop abime — un
+  titre traduit, une abreviation, une faute du groupe de release — aucune proposition ne peut etre
+  bonne. L'utilisateur voyait alors que c'etait faux sans aucun moyen de le corriger : le selecteur
+  montrait huit mauvaises jaquettes et s'arretait la.
+
+Un champ de recherche complete donc le selecteur, avec les memes jaquettes : c'est l'image qui
+  tranche entre deux titres proches, pas la date.
+
+Le point qui fait tenir l'ensemble est ailleurs que dans l'interface. Les resultats REJOIGNENT les
+  alternatives du plan cote serveur, ce qui permet a « choisir » de rester inchange et surtout de
+  conserver son invariant : on ne peut retenir qu'un candidat que le SERVEUR a lui-meme rapporte,
+  jamais un identifiant fabrique par le navigateur. Sans cette jonction, on aurait ajoute une belle
+  grille sur laquelle cliquer n'aurait rien fait.
+
+Ils s'ajoutent sans remplacer, et sans doublon : une recherche decevante se quitte en revenant aux
+  propositions d'origine.
+
+Sans cle TheMovieDB, la recherche REFUSE au lieu de renvoyer une liste vide. Une liste vide laisse
+  croire que la requete etait mauvaise, alors que la recherche n'a jamais eu lieu — on cherche alors
+  l'erreur du mauvais cote.
+
+9 tests, dont celui qui verifie qu'un identifiant invente reste refuse.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.34.0 (2026-09-09)
 
 ### Features
