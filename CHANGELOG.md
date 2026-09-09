@@ -1,6 +1,46 @@
 # CHANGELOG
 
 
+## v0.28.0 (2026-09-09)
+
+### Features
+
+- **franchise**: Ranger les series d une meme saga sous un dossier commun
+  ([`3c41e12`](https://github.com/gsoulat/sortilege/commit/3c41e12e3522039de6474c8e33775d20e53fe911))
+
+Le jeton {collection} du prereglage Jellyfin promettait le regroupement par franchise depuis le
+  debut. Rien ne l'alimentait pour les series : il n'etait renseigne que pour les films, via
+  belongs_to_collection chez TMDB. Le module de deduction existait, complet et teste, et n'etait
+  appele nulle part. Le dossier de franchise n'est donc jamais apparu.
+
+TMDB ne declare aucun lien entre « Star Trek », « Star Trek: Discovery » et « Star Trek: Picard » :
+  trois series sans rapport pour lui. La franchise se deduit du sous-titre, mais cette deduction ne
+  peut pas se faire fichier par fichier — « Star Trek » tout court n'a rien d'une franchise tant
+  qu'on ignore que « Star Trek: Discovery » existe a cote. D'ou une seconde passe, apres que tous
+  les titres du lot sont resolus, qui ne redemande rien au reseau et ne change qu'une valeur du
+  gabarit.
+
+Deux corrections de fond dans la deduction :
+
+**La serie fondatrice rejoint sa propre franchise.** « Star Trek » (1966) ne porte pas de sous-titre
+  et ne revelait donc rien de lui-meme : il se retrouvait range A COTE du dossier portant son nom.
+  Le regroupement laissait dehors ce qu'il regroupait.
+
+**Un dossier de franchise a un seul element n'en est pas un.** La deduction n'est retenue que si une
+  autre serie la partage — sinon « The Witcher: Blood Origin » creerait un niveau supplementaire
+  pour une serie unique.
+
+Les titres deja en bibliotheque comptent parmi les voisins : sans eux, importer « Star Trek: Picard
+  » seul ne le rangerait pas avec les autres.
+
+Le prereglage Plex gagne le meme jeton ; il ne l'avait pas, sans raison.
+
+11 tests, dont le regroupement verifie au bout du pipeline et la garantie qu'un gabarit sans
+  {collection} reste inchange.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.27.0 (2026-09-09)
 
 ### Features
