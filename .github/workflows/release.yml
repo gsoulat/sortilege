@@ -112,11 +112,18 @@ jobs:
         if: steps.release.outputs.released == 'true'
         continue-on-error: true
         run: |
+          # --atomic est ESSENTIEL, pas une precaution de style. Sans lui,
+          # GitHub a accepte refs/tags/v0.29.0 puis refuse refs/heads/main : le
+          # depot s'est retrouve avec un tag pointant hors de toute branche, et
+          # semantic-release, voyant « 0.29.0 deja publiee », a cesse de
+          # publier — en vert. Un echec silencieux vaut bien pire qu'un echec.
+          # Avec --atomic, les deux refs partent ensemble ou aucune ne part.
+          #
           # Trois tentatives espacees : l'erreur observee est transitoire cote
           # serveur, pas un refus. Une tentative unique faisait dependre la
           # release d'un alea qu'on ne controle pas.
           for attempt in 1 2 3; do
-            if git push --follow-tags origin "HEAD:${GITHUB_REF_NAME}"; then
+            if git push --atomic --follow-tags origin "HEAD:${GITHUB_REF_NAME}"; then
               echo "pushed=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi

@@ -32,9 +32,13 @@ logger = logging.getLogger(__name__)
 
 _BATCH_DIR = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2})$")
 
-MIN_AGE_DAYS = 1
-"""Plancher. Vider ce qui a ete evacue aujourd'hui n'est plus une corbeille,
-c'est une suppression avec un detour."""
+MIN_AGE_DAYS = 0
+"""Zero est permis : « tout vider » doit vraiment tout vider.
+
+Un plancher silencieux aurait laisse en place ce que l'utilisateur venait de
+demander de supprimer, sans le dire — le pire des comportements. La protection
+est ailleurs : elle est explicite, dans la confirmation demandee avant un
+vidage integral."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -113,15 +117,22 @@ class PurgeResult:
 def purge(trash_root: Path, older_than_days: int) -> PurgeResult:
     """Supprime DEFINITIVEMENT les lots plus vieux que le delai donne.
 
-    C'est le seul endroit de l'application qui supprime reellement, et il ne
-    s'execute que sur demande explicite. Trois garde-fous :
+    Le seul endroit de l'application qui supprime reellement, et le seul qui
+    rende de la place. Un detour par la corbeille du NAS a ete envisage puis
+    ecarte : il ne libere rien non plus, il donne juste deux corbeilles a vider
+    au lieu d'une.
 
-    1. **Un plancher sur le delai.** Vider ce qui vient d'etre evacue ferait de
-       la corbeille une formalite.
-    2. **Seuls les dossiers de lot sont touches**, reconnus a leur nom de date.
+    ``older_than_days=0`` vide tout, y compris ce qui vient d'etre evacue.
+    C'est voulu : un plancher silencieux laisserait en place ce qu'on vient de
+    demander de supprimer, sans le dire. La protection est explicite, en amont,
+    dans la confirmation que l'appelant doit fournir.
+
+    Deux garde-fous demeurent :
+
+    1. **Seuls les dossiers de lot sont touches**, reconnus a leur nom de date.
        Un dossier inattendu sous la corbeille est ignore plutot que supprime :
        s'il est la, ce n'est pas nous qui l'avons mis.
-    3. **Un echec sur un lot n'arrete pas les autres**, et il est rapporte.
+    2. **Un echec sur un lot n'arrete pas les autres**, et il est rapporte.
     """
     days = max(MIN_AGE_DAYS, older_than_days)
     result = PurgeResult()

@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..config import get_settings
@@ -299,9 +299,16 @@ def trash_duplicates(body: TrashRequest) -> dict[str, object]:
 
 class PurgeRequest(BaseModel):
     older_than_days: int = 30
-    """Age minimal d'un lot pour etre supprime. Le delai EST la protection :
-    c'est la fenetre pendant laquelle on peut encore s'apercevoir qu'un fichier
-    a ete evacue a tort."""
+    """Age minimal d'un lot pour etre supprime. 0 = tout, sans exception."""
+
+    confirm_all: bool = False
+    """Obligatoire pour un vidage integral.
+
+    Supprimer ce qui vient d'etre evacue est parfaitement legitime — c'est meme
+    le geste attendu quand on cherche de la place — mais cela ne doit pas
+    pouvoir arriver par un reglage laisse a zero. La protection est explicite
+    et vient de l'appelant, plutot qu'un plancher silencieux qui laisserait en
+    place ce qu'on vient de demander de supprimer."""
 
 
 @router.get("/trash")
@@ -334,9 +341,17 @@ def read_trash() -> dict[str, object]:
 def purge_trash(body: PurgeRequest) -> dict[str, object]:
     """Supprime DEFINITIVEMENT les lots plus vieux que le delai donne.
 
-    Le seul endroit de l'application qui supprime reellement, et il ne
-    s'execute que sur demande explicite.
+    Le seul endroit de l'application qui supprime reellement, et le seul qui
+    rende de la place. Un vidage integral demande une confirmation explicite —
+    non pour dissuader, mais pour qu'il ne se declenche pas par un champ laisse
+    a zero.
     """
+    if body.older_than_days <= 0 and not body.confirm_all:
+        raise HTTPException(
+            status_code=400,
+            detail="Un vidage integral doit etre confirme explicitement.",
+        )
+
     conf = get_settings()
     result = purge(conf.library_root / TRASH_DIRNAME, body.older_than_days)
     return {

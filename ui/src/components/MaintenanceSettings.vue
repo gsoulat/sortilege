@@ -60,20 +60,36 @@ async function loadTrash() {
   }
 }
 
-async function purge() {
+const confirmingAll = ref(false)
+
+/**
+ * `all` vide TOUT, sans condition d'âge. C'est le geste attendu quand on
+ * cherche de la place, mais il ne doit pas partir d'un champ laissé à zéro :
+ * le serveur exige une confirmation explicite, et l'interface la demande.
+ */
+async function purge({ all = false } = {}) {
+  if (all && !confirmingAll.value) {
+    confirmingAll.value = true
+    return
+  }
   purging.value = true
   purgeMessage.value = null
+  confirmingAll.value = false
   try {
     const res = await fetch('/api/collection/trash/purge', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ older_than_days: Number(days.value) }),
+      body: JSON.stringify(
+        all ? { older_than_days: 0, confirm_all: true } : { older_than_days: Number(days.value) },
+      ),
     })
     const body = await res.json()
     if (res.ok) {
       trash.value = body
       purgeMessage.value =
-        `${body.removed_files} fichier(s) supprimé(s), ${gb(body.freed_bytes)} Go libérés.`
+        `${body.removed_files} fichier(s) supprimé(s) définitivement, ${gb(body.freed_bytes)} Go libérés.`
+    } else {
+      purgeMessage.value = body.detail ?? 'Échec.'
     }
   } finally {
     purging.value = false
@@ -196,17 +212,26 @@ onMounted(loadTrash)
       <div class="purge">
         <label>
           Supprimer définitivement ce qui a plus de
-          <input type="number" :min="trash.min_age_days" max="365" v-model="days" />
+          <input type="number" min="0" max="365" v-model="days" />
           jours
         </label>
-        <button class="danger" :disabled="purging" @click="purge">
+        <button class="danger" :disabled="purging" @click="purge()">
           {{ purging ? 'Suppression…' : 'Vider' }}
+        </button>
+        <span class="sep"></span>
+        <button class="danger strong" :disabled="purging" @click="purge({ all: true })">
+          {{ confirmingAll ? `Confirmer : supprimer les ${gb(trash.total_bytes)} Go` : 'Tout vider' }}
         </button>
       </div>
       <p class="hint">
-        Le délai est la protection : c'est la fenêtre pendant laquelle tu peux encore
-        t'apercevoir qu'un fichier a été évacué à tort. C'est le seul endroit de
-        l'application qui supprime réellement.
+        C'est le seul endroit de l'application qui supprime réellement, et le seul qui
+        rende de la place. Un détour par la corbeille du NAS a été envisagé puis écarté :
+        il ne libère rien non plus, il donne juste deux corbeilles à vider au lieu d'une.
+        <template v-if="confirmingAll">
+          <strong class="warn-strong">
+            Un second clic supprime tout, y compris ce qui vient d'être évacué. Irréversible.
+          </strong>
+        </template>
       </p>
       <p v-if="purgeMessage" class="ok-text">{{ purgeMessage }}</p>
     </template>
@@ -279,6 +304,9 @@ h3 {
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 5px; color: var(--text); font-family: var(--mono);
 }
+.purge .sep { flex: 1; }
 .danger { color: var(--text-faint); }
+.danger.strong { border-color: color-mix(in srgb, var(--err) 30%, transparent); color: var(--err); }
+.warn-strong { display: block; margin-top: 7px; color: var(--err); }
 .danger:hover:not(:disabled) { color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, transparent); }
 </style>

@@ -173,15 +173,19 @@ def test_le_vidage_respecte_le_delai(trash: Path) -> None:
     assert recent.is_file() or recent.is_dir(), "le lot recent est intact"
 
 
-def test_un_delai_nul_est_ramene_au_plancher(trash: Path) -> None:
-    """Vider ce qui vient d'etre evacue ferait de la corbeille une formalite :
-    quelques secondes de sursis ne protegent de rien."""
+def test_un_delai_nul_vide_vraiment_tout(trash: Path) -> None:
+    """« Tout vider » doit tout vider, y compris ce qui vient d'etre evacue.
+
+    Un plancher silencieux laisserait en place ce qu'on vient de demander de
+    supprimer, sans le dire — le pire des comportements. La protection est
+    ailleurs : la confirmation exigee par l'endpoint."""
     aujourdhui = batch(trash, 0)
 
-    purge(trash, older_than_days=0)
+    result = purge(trash, older_than_days=0)
 
-    assert aujourdhui.is_dir()
-    assert MIN_AGE_DAYS >= 1
+    assert not aujourdhui.exists()
+    assert result.removed_batches == 1
+    assert MIN_AGE_DAYS == 0
 
 
 def test_un_dossier_inattendu_n_est_jamais_supprime(trash: Path) -> None:
