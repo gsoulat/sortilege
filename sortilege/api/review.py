@@ -536,15 +536,61 @@ class EvacuateRequest(BaseModel):
     occupee par un fichier identique."""
 
 
+@dataclass
+class EvacuateJob:
+    """Avancement de la mise en corbeille.
+
+    Meme raison que pour le scan et le calcul : trois cents deplacements durent
+    assez longtemps pour qu'un bouton fige ne dise plus rien — ni si l'outil
+    travaille, ni s'il est bloque. Et une requete synchrone aussi longue
+    finirait par expirer cote navigateur, perdant un resultat que le serveur a
+    pourtant produit.
+    """
+
+    running: bool = False
+    processed: int = 0
+    total: int = 0
+    current: str = ""
+    evacuated: int = 0
+    failed: int = 0
+    error: str | None = None
+    results: list[dict] = field(default_factory=list)
+
+
+_evac_job = EvacuateJob()
+_evac_task: asyncio.Task | None = None
+
+
+@router.get("/evacuate/status")
+def evacuate_status() -> dict[str, object]:
+    return {
+        "running": _evac_job.running,
+        "processed": _evac_job.processed,
+        "total": _evac_job.total,
+        "current": _evac_job.current,
+        "evacuated": _evac_job.evacuated,
+        "failed": _evac_job.failed,
+        "error": _evac_job.error,
+        "results": [r for r in _evac_job.results if not r["ok"]][:200],
+    }
+
+
 @router.post("/evacuate")
-def evacuate(body: EvacuateRequest) -> dict[str, object]:
+async def evacuate(body: EvacuateRequest) -> dict[str, object]:
     """Met en corbeille les sources dont le fichier est deja range.
 
     Apres un rangement rejoue, une copie subsiste dans les telechargements :
     elle occupe la place et revient a chaque scan. Elle part en CORBEILLE, pas
     a la poubelle — l'operation est journalisee, donc annulable, et une source
     de taille differente est refusee plutot que confondue avec un doublon.
+
+    Le travail part en tache de fond et l'avancement se suit : sur trois cents
+    fichiers l'operation dure, et rendre la main tout de suite evite qu'une
+    requete expire alors que le serveur, lui, a fini.
     """
+    if _evac_job.running:
+        return {"started": False, **evacuate_status()}
+
     conf = get_settings()
     journal = get_journal()
     trash_root = conf.library_root / TRASH_DIRNAME
@@ -559,33 +605,53 @@ def evacuate(body: EvacuateRequest) -> dict[str, object]:
                 if p.destination is not None and p.destination.exists() and p.source.is_file()
             ]
 
-    results = [evacuate_ranged_source(p, journal, trash_root) for p in selected]
+    _evac_job.running = True
+    _evac_job.processed = 0
+    _evac_job.total = len(selected)
+    _evac_job.evacuated = 0
+    _evac_job.failed = 0
+    _evac_job.current = ""
+    _evac_job.error = None
+    _evac_job.results = []
 
-    # Un plan dont la source est partie n'a plus lieu d'etre : le garder le
-    # ferait reproposer a chaque affichage, avec le meme echec.
-    done = [r.plan_id for r in results if r.ok]
-    if done:
-        with _lock:
-            for pid in done:
-                _plans.pop(pid, None)
-        _persist_plans()
+    def work() -> None:
+        """Les deplacements sont bloquants : ils tournent dans un thread pour
+        ne pas figer la boucle d'evenements pendant plusieurs minutes."""
+        try:
+            for plan in selected:
+                _evac_job.current = plan.source.name
+                result = evacuate_ranged_source(plan, journal, trash_root)
+                _evac_job.processed += 1
+                if result.ok:
+                    _evac_job.evacuated += 1
+                    # Un plan dont la source est partie n'a plus lieu d'etre :
+                    # le garder le ferait reproposer a chaque affichage, avec
+                    # le meme echec.
+                    with _lock:
+                        _plans.pop(result.plan_id, None)
+                else:
+                    _evac_job.failed += 1
+                _evac_job.results.append(
+                    {
+                        "plan_id": result.plan_id,
+                        "ok": result.ok,
+                        "source": result.source,
+                        "destination": result.destination,
+                        "message": result.message,
+                        "reason": result.reason,
+                    }
+                )
+        except Exception as exc:
+            _evac_job.error = f"{type(exc).__name__}: {exc}"
+            logger.exception("l'evacuation a echoue")
+        finally:
+            _evac_job.running = False
+            _evac_job.current = ""
+            _persist_plans()
 
-    return {
-        "evacuated": sum(1 for r in results if r.ok),
-        "failed": sum(1 for r in results if not r.ok),
-        "results": [
-            {
-                "plan_id": r.plan_id,
-                "ok": r.ok,
-                "source": r.source,
-                "destination": r.destination,
-                "message": r.message,
-                "reason": r.reason,
-            }
-            for r in results
-        ],
-        "queue": _queue(),
-    }
+    global _evac_task
+    _evac_task = asyncio.create_task(asyncio.to_thread(work), name="sortilege-evacuate")
+    return {"started": True, **evacuate_status()}
 
 
 @router.post("/rename-library")

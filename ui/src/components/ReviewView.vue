@@ -334,26 +334,64 @@ const failureGroups = computed(() => {
 
 const openReason = ref(null)
 const evacuating = ref(false)
+const evacProgress = ref(null)
+
+const evacPercent = computed(() => {
+  const p = evacProgress.value
+  if (!p || !p.total) return 0
+  return Math.min(100, Math.round((p.processed / p.total) * 100))
+})
 
 /**
  * Met en corbeille les copies dont le fichier est déjà rangé. Jamais une
  * suppression : l'opération est journalisée, donc annulable, et une source de
  * taille différente est refusée plutôt que confondue avec un doublon.
+ *
+ * Le travail tourne côté serveur et on en suit l'avancement. Trois cents
+ * déplacements durent assez longtemps pour qu'un bouton figé ne dise plus rien,
+ * et une requête synchrone aussi longue finirait par expirer alors que le
+ * serveur, lui, a fini.
  */
+let evacPoller = null
+
 async function evacuate(group) {
   evacuating.value = true
-  try {
-    const out = await call('/api/review/evacuate', { plan_ids: group.items.map((r) => r.plan_id) })
-    if (out) {
-      message.value =
-        `${out.evacuated} copie(s) mise(s) en corbeille` +
-        (out.failed ? `, ${out.failed} refusée(s) — taille différente ou fichier absent.` : '.')
-      results.value = out.failed ? { ...out, results: out.results.filter((r) => !r.ok) } : null
-      await Promise.all([load(), loadJournal()])
-    }
-  } finally {
+  evacProgress.value = null
+
+  const started = await call('/api/review/evacuate', {
+    plan_ids: group.items.map((r) => r.plan_id),
+  })
+  if (!started) {
     evacuating.value = false
+    return
   }
+
+  evacPoller = setInterval(async () => {
+    try {
+      const status = await (await fetch('/api/review/evacuate/status')).json()
+      evacProgress.value = status
+      if (status.error) error.value = status.error
+
+      if (!status.running) {
+        clearInterval(evacPoller)
+        evacPoller = null
+        evacuating.value = false
+        evacProgress.value = null
+        message.value =
+          `${status.evacuated} copie(s) mise(s) en corbeille` +
+          (status.failed
+            ? `, ${status.failed} refusée(s) — taille différente ou fichier absent.`
+            : '.')
+        results.value = status.failed ? { results: status.results } : null
+        await Promise.all([load(), loadJournal()])
+      }
+    } catch {
+      clearInterval(evacPoller)
+      evacPoller = null
+      evacuating.value = false
+      error.value = 'Contact perdu avec le serveur pendant l\'évacuation.'
+    }
+  }, 700)
 }
 
 // --- Annulation ciblée ---------------------------------------------------
@@ -515,6 +553,17 @@ onMounted(load)
             :disabled="evacuating"
             @click="evacuate(g)"
           >{{ evacuating ? 'Évacuation…' : `Mettre ces ${g.items.length} copies en corbeille` }}</button>
+          <div v-if="g.action === 'evacuate' && evacProgress" class="evac">
+            <div class="bar"><div class="fill" :style="{ width: evacPercent + '%' }"></div></div>
+            <div class="stats">
+              <span>{{ evacProgress.processed }} / {{ evacProgress.total }}</span>
+              <span class="ok-count">{{ evacProgress.evacuated }} en corbeille</span>
+              <span v-if="evacProgress.failed" class="ko-count">
+                {{ evacProgress.failed }} refusée(s)
+              </span>
+              <span v-if="evacProgress.current" class="current">{{ evacProgress.current }}</span>
+            </div>
+          </div>
           <code class="sample">{{ g.sample }}</code>
           <ul v-if="openReason === g.key" class="files">
             <li v-for="(r, i) in g.items.slice(0, 50)" :key="i">
@@ -881,6 +930,14 @@ code {
   background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err);
 }
 .failures .fix { margin: 6px 0 0 28px; font-size: 12px; color: var(--text-dim); line-height: 1.6; max-width: 680px; }
+.evac { margin: 10px 0 0 28px; max-width: 680px; }
+.evac .bar { height: 3px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }
+.evac .fill { height: 100%; background: var(--warn); transition: width .3s; }
+.evac .stats { display: flex; gap: 12px; align-items: baseline; margin-top: 6px; font-size: 11.5px; color: var(--text-faint); flex-wrap: wrap; }
+.evac .ok-count { color: var(--ok); }
+.evac .ko-count { color: var(--err); }
+.evac .current { font-family: var(--mono); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .failures .act { margin: 9px 0 0 28px; font-size: 12px; padding: 4px 12px; }
 .failures .act:hover:not(:disabled) { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
 .failures .sample {
