@@ -157,6 +157,15 @@ async function apply(ids, { includeReview = false, dryRun = true } = {}) {
     } else {
       message.value = `${out.applied} fichier(s) rangé(s), ${out.failed} en échec.`
     }
+    // La cause domine le compte : « 340 en échec » ne dit pas quoi faire,
+    // « 340 en échec, tous parce que la destination existe déjà » si.
+    if (out.failed) {
+      const [first] = failureGroups.value
+      if (first) {
+        const tous = first.items.length === out.failed ? 'tous' : `dont ${first.items.length}`
+        message.value += ` — ${tous} : ${first.label.toLowerCase()}.`
+      }
+    }
     // Une exécution vide la sélection ; une simulation la garde, pour qu'on
     // puisse enchaîner sur l'exécution des mêmes lignes.
     if (!out.dry_run) selected.value = new Set()
@@ -171,7 +180,7 @@ async function undo(count) {
   if (out) {
     results.value = null
     message.value = `${out.undone} opération(s) annulée(s), ${out.failed} en échec.`
-    await load()
+    await Promise.all([load(), loadJournal()])
   }
 }
 
@@ -270,6 +279,98 @@ function toggleGroup(plans) {
 
 const shortPath = (p) => (p ? p.split('/').slice(-3).join('/') : '—')
 
+/**
+ * Ce qu'il faut dire quand une application échoue, et ce qu'on peut y faire.
+ * Un compte d'échecs sans cause n'est pas exploitable : trois cents lignes
+ * disant chacune « déplacement impossible : /un/chemin/différent » se lisent
+ * exactement comme une seule.
+ */
+const REASONS = {
+  destination_exists: {
+    label: 'La destination existe déjà',
+    fix: "Un fichier porte déjà ce nom à l'arrivée. Rien n'a été écrasé — c'est volontaire. Regarde l'onglet « Ma collection » : ce sont probablement des doublons d'un rangement précédent.",
+  },
+  source_missing: {
+    label: 'Fichier source introuvable',
+    fix: 'Le fichier a bougé depuis le calcul du plan. Relance un scan, puis « Recommencer » pour repartir sur des plans à jour.',
+  },
+  permission_denied: {
+    label: 'Permission refusée',
+    fix: "Le conteneur n'a pas le droit d'écrire dans la bibliothèque. Vérifie PUID / PGID et le propriétaire du dossier de destination sur le NAS.",
+  },
+  move_failed: {
+    label: 'Déplacement impossible',
+    fix: 'Erreur système au moment du déplacement — disque plein, volume en lecture seule, ou chemin trop long.',
+  },
+  no_destination: {
+    label: 'Aucune destination calculée',
+    fix: "L'identification n'a rien donné pour ces fichiers ; ils ne peuvent pas être rangés automatiquement.",
+  },
+}
+
+/** Les échecs, groupés par cause, du plus fréquent au moins fréquent. */
+const failureGroups = computed(() => {
+  const failed = (results.value?.results ?? []).filter((r) => !r.ok)
+  const byReason = new Map()
+  for (const r of failed) {
+    const key = r.reason || 'move_failed'
+    if (!byReason.has(key)) byReason.set(key, [])
+    byReason.get(key).push(r)
+  }
+  return [...byReason.entries()]
+    .map(([key, items]) => ({
+      key,
+      label: REASONS[key]?.label ?? 'Échec',
+      fix: REASONS[key]?.fix ?? '',
+      items,
+      // Le message complet du premier : il porte le détail système (errno,
+      // chemin) que le libellé générique ne peut pas donner.
+      sample: items[0].message,
+    }))
+    .sort((a, b) => b.items.length - a.items.length)
+})
+
+const openReason = ref(null)
+
+// --- Annulation ciblée ---------------------------------------------------
+//
+// « Tout annuler (703) » est un aveu : il suppose qu'on veuille défaire une
+// session entière, alors qu'en pratique on veut défaire UNE série mal
+// identifiée au milieu de sept cents déplacements corrects.
+const journal = ref(null)
+const showUndo = ref(false)
+const undoing = ref(null)
+
+const WORK_KINDS = { movie: 'Film', episode: 'Série', anime: 'Anime' }
+
+async function loadJournal() {
+  try {
+    journal.value = await (await fetch('/api/review/journal')).json()
+  } catch {
+    journal.value = null
+  }
+}
+
+async function undoWork(work) {
+  undoing.value = work.key
+  try {
+    const out = await call('/api/review/undo', { work: work.key })
+    if (out) {
+      message.value = `« ${work.title} » : ${out.undone} déplacement(s) annulé(s)` +
+        (out.failed ? `, ${out.failed} en échec.` : '.')
+      results.value = null
+      await Promise.all([load(), loadJournal()])
+    }
+  } finally {
+    undoing.value = null
+  }
+}
+
+async function toggleUndo() {
+  showUndo.value = !showUndo.value
+  if (showUndo.value) await loadJournal()
+}
+
 onMounted(load)
 </script>
 
@@ -299,9 +400,50 @@ onMounted(load)
       <button
         v-if="data.journal_size"
         class="undo"
-        @click="undo(data.journal_size)"
-      >Tout annuler ({{ data.journal_size }})</button>
+        :class="{ open: showUndo }"
+        @click="toggleUndo"
+      >Annuler… ({{ data.journal_size }})</button>
     </div>
+
+    <!-- Ce qui a été rangé, par œuvre, avec une annulation par ligne -->
+    <section v-if="showUndo" class="undo-panel">
+      <div class="head">
+        <h3>Annuler un rangement</h3>
+        <button
+          v-if="data.journal_size"
+          class="danger"
+          @click="undo(data.journal_size)"
+        >Tout annuler ({{ data.journal_size }})</button>
+      </div>
+      <p class="note">
+        Les fichiers retournent à leur emplacement d'origine. Rien n'est supprimé, et
+        une origine déjà occupée fait échouer le retour plutôt que d'écraser.
+      </p>
+
+      <p v-if="!journal" class="empty">Lecture du journal…</p>
+      <p v-else-if="!journal.works.length" class="empty">Aucun déplacement à annuler.</p>
+
+      <ul v-else class="works">
+        <li v-for="w in journal.works" :key="w.key">
+          <div class="body">
+            <div class="title">
+              {{ w.title }}
+              <span v-if="w.work_kind" class="kind">{{ WORK_KINDS[w.work_kind] ?? w.work_kind }}</span>
+            </div>
+            <div class="meta">
+              {{ w.files }} fichier{{ w.files > 1 ? 's' : '' }}
+              <span v-if="w.companions">+ {{ w.companions }} associé{{ w.companions > 1 ? 's' : '' }}</span>
+              <code>{{ shortPath(w.sample) }}</code>
+            </div>
+          </div>
+          <button
+            class="undo-one"
+            :disabled="undoing === w.key"
+            @click="undoWork(w)"
+          >{{ undoing === w.key ? 'Annulation…' : 'Annuler' }}</button>
+        </li>
+      </ul>
+    </section>
 
     <div v-if="planning && progress?.total" class="progress">
       <div class="bar"><div class="fill" :style="{ width: percent + '%' }"></div></div>
@@ -330,6 +472,31 @@ onMounted(load)
 
     <p v-if="error" class="err-msg">{{ error }}</p>
     <p v-if="message" class="ok-msg">{{ message }}</p>
+
+    <!-- Pourquoi ça a échoué. En haut, pas en bas : chercher la cause sous
+         trois cents lignes de plans revient à ne pas la donner. -->
+    <section v-if="failureGroups.length" class="failures">
+      <h3>Ce qui a bloqué</h3>
+      <ul>
+        <li v-for="g in failureGroups" :key="g.key">
+          <button class="head" @click="openReason = openReason === g.key ? null : g.key">
+            <span class="chev" :class="{ closed: openReason !== g.key }">▾</span>
+            <span class="count">{{ g.items.length }}</span>
+            <span class="label">{{ g.label }}</span>
+          </button>
+          <p class="fix">{{ g.fix }}</p>
+          <code class="sample">{{ g.sample }}</code>
+          <ul v-if="openReason === g.key" class="files">
+            <li v-for="(r, i) in g.items.slice(0, 50)" :key="i">
+              <code>{{ shortPath(r.source) }}</code>
+            </li>
+            <li v-if="g.items.length > 50" class="more">
+              … et {{ g.items.length - 50 }} autres
+            </li>
+          </ul>
+        </li>
+      </ul>
+    </section>
 
     <!-- Ce qui manque, quand rien n'est calculable -->
     <ol v-if="data.blockers.length && !hasPlans" class="blockers">
@@ -498,9 +665,10 @@ onMounted(load)
       </details>
     </template>
 
-    <!-- Résultat d'une application -->
+    <!-- Détail ligne à ligne. Les échecs sont déjà résumés en haut ; ici on
+         garde la trace de ce qui est réellement parti. -->
     <section v-if="results" class="group results">
-      <h3>Résultat</h3>
+      <h3>Détail</h3>
       <ul class="plans">
         <li v-for="(r, i) in results.results" :key="i" :class="{ failed: !r.ok }">
           <div class="line">
@@ -634,6 +802,62 @@ code {
 .dot.ko { background: var(--err); }
 .msg { font-size: 12.5px; }
 .results li.failed .msg { color: var(--err); }
+
+.undo-panel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px 16px;
+}
+.undo-panel .head { display: flex; align-items: center; gap: 12px; }
+.undo-panel > .head h3 {
+  margin: 0; flex: 1; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim);
+}
+.undo-panel .danger { font-size: 11.5px; padding: 3px 10px; color: var(--text-faint); }
+.undo-panel .danger:hover { color: var(--err); border-color: color-mix(in srgb, var(--err) 30%, transparent); }
+.undo-panel .note { margin: 9px 0 12px; font-size: 12px; color: var(--text-faint); line-height: 1.6; max-width: 680px; }
+.undo-panel .empty { margin: 0; font-size: 12.5px; color: var(--text-faint); font-style: italic; }
+
+.works { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto; }
+.works li { display: flex; align-items: center; gap: 12px; }
+.works .body { flex: 1; min-width: 0; }
+.works .title { font-size: 13px; display: flex; align-items: baseline; gap: 8px; }
+.works .kind {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text-faint); border: 1px solid var(--border);
+  border-radius: 3px; padding: 0 5px;
+}
+.works .meta { display: flex; gap: 9px; align-items: baseline; margin-top: 2px; font-size: 11px; color: var(--text-faint); flex-wrap: wrap; }
+.works .meta code { font-family: var(--mono); font-size: 10.5px; }
+.undo-one { font-size: 11.5px; padding: 3px 12px; flex: none; }
+.undo-one:hover:not(:disabled) { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+
+.failures {
+  background: var(--surface); border: 1px solid color-mix(in srgb, var(--err) 25%, var(--border));
+  border-radius: 10px; padding: 14px 16px;
+}
+.failures > h3 {
+  margin: 0 0 12px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .07em; color: var(--err);
+}
+.failures > ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.failures .head {
+  border: none; background: none; padding: 0; display: flex; align-items: center;
+  gap: 9px; font-size: 13.5px; color: var(--text); cursor: pointer;
+}
+.failures .chev { font-size: 10px; color: var(--text-faint); transition: transform .15s; }
+.failures .chev.closed { transform: rotate(-90deg); }
+.failures .count {
+  font-family: var(--mono); font-size: 11.5px; padding: 1px 7px; border-radius: 4px;
+  background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err);
+}
+.failures .fix { margin: 6px 0 0 28px; font-size: 12px; color: var(--text-dim); line-height: 1.6; max-width: 680px; }
+.failures .sample {
+  display: block; margin: 6px 0 0 28px; font-family: var(--mono);
+  font-size: 11px; color: var(--text-faint);
+}
+.failures .files { list-style: none; margin: 9px 0 0 28px; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.failures .files code { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.failures .files .more { font-size: 11.5px; color: var(--text-faint); font-style: italic; }
 
 .fix {
   font-size: 10.5px; padding: 2px 8px; margin-left: 8px;

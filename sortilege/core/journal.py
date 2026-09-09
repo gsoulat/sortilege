@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -29,6 +30,11 @@ from .companions import directory_now_empty, trash_destination
 from .planner import Plan
 
 logger = logging.getLogger(__name__)
+
+# Dossier de saison tel que NOS gabarits l'ecrivent — « Season 01 », « Saison 2 ».
+# Volontairement distinct du motif du parseur, qui lit des noms de release : ici
+# on relit ce qu'on a soi-meme produit, et les deux n'ont pas a evoluer ensemble.
+_SEASON_FOLDER = re.compile(r"^s(?:aison|eason)?[\s._-]*\d{1,2}$", re.IGNORECASE)
 
 
 @dataclass(slots=True)
@@ -48,6 +54,17 @@ class MoveRecord:
     illisibles et seraient silencieusement ignorees a la relecture — on
     perdrait la possibilite d'annuler d'anciens deplacements."""
 
+    title: str = ""
+    """Oeuvre concernee, telle qu'identifiee au moment du rangement.
+
+    Sans elle, annuler « juste cette serie » demanderait de deviner l'oeuvre a
+    partir des chemins — ce qui marche tant que le gabarit n'a pas change. Les
+    entrees anterieures a ce champ retombent sur cette deduction, faute de
+    mieux ; les nouvelles n'en dependent pas."""
+
+    work_kind: str = ""
+    """« movie », « episode » ou « anime ». Sert a l'affichage du regroupement."""
+
 
 @dataclass(slots=True)
 class ApplyResult:
@@ -57,6 +74,13 @@ class ApplyResult:
     destination: str | None
     message: str
     simulated: bool = False
+    reason: str = ""
+    """Cause stable, distincte du message.
+
+    Le message porte le detail utile a UN fichier (le chemin, l'errno) ; il est
+    donc different pour chacun. Quand trois cents plans echouent, ce qu'on veut
+    savoir tient en une ligne — « ils echouent tous pour la meme raison, et
+    laquelle » — et cela demande une valeur qu'on puisse regrouper."""
 
 
 class Journal:
@@ -134,7 +158,9 @@ def apply_plan(
 ) -> ApplyResult:
     """Execute un plan. En simulation, verifie tout sans rien deplacer."""
     if plan.destination is None:
-        return ApplyResult(plan.id, False, str(plan.source), None, "aucune destination")
+        return ApplyResult(
+            plan.id, False, str(plan.source), None, "aucune destination", reason="no_destination"
+        )
 
     if plan.is_noop:
         return ApplyResult(
@@ -144,6 +170,7 @@ def apply_plan(
             str(plan.destination),
             "deja a sa place, rien a faire",
             simulated=dry_run,
+            reason="noop",
         )
 
     if not plan.source.is_file():
@@ -153,6 +180,7 @@ def apply_plan(
             str(plan.source),
             str(plan.destination),
             "fichier source introuvable",
+            reason="source_missing",
         )
 
     if plan.destination.exists():
@@ -165,6 +193,7 @@ def apply_plan(
             str(plan.source),
             str(plan.destination),
             "la destination existe deja — rien n'a ete ecrase",
+            reason="destination_exists",
         )
 
     if dry_run:
@@ -175,6 +204,7 @@ def apply_plan(
             str(plan.destination),
             "simulation : le deplacement serait possible",
             simulated=True,
+            reason="ok",
         )
 
     try:
@@ -186,9 +216,10 @@ def apply_plan(
             str(plan.source),
             str(plan.destination),
             f"deplacement impossible : {exc}",
+            reason="permission_denied" if isinstance(exc, PermissionError) else "move_failed",
         )
 
-    _record(journal, plan.id, plan.source, plan.destination, method, "video")
+    _record(journal, plan, plan.source, plan.destination, method, "video")
 
     # Les compagnons suivent la video. Chacun est journalise separement : une
     # annulation doit pouvoir tout defaire, y compris un sous-titre.
@@ -201,7 +232,7 @@ def apply_plan(
         except OSError as exc:
             logger.warning("compagnon non deplace (%s) : %s", source.name, exc)
             continue
-        _record(journal, plan.id, source, target, how, "companion")
+        _record(journal, plan, source, target, how, "companion")
         moved_companions += 1
 
     trashed = _evacuate(plan, journal, trash_root)
@@ -212,20 +243,22 @@ def apply_plan(
     if trashed:
         detail += f", {trashed} reste(s) en corbeille"
 
-    return ApplyResult(plan.id, True, str(plan.source), str(plan.destination), detail)
+    return ApplyResult(plan.id, True, str(plan.source), str(plan.destination), detail, reason="ok")
 
 
 def _record(
-    journal: Journal, plan_id: str, source: Path, destination: Path, method: str, kind: str
+    journal: Journal, plan: Plan, source: Path, destination: Path, method: str, kind: str
 ) -> None:
     journal.append(
         MoveRecord(
             timestamp=datetime.now(UTC).isoformat(),
-            plan_id=plan_id,
+            plan_id=plan.id,
             source=str(source),
             destination=str(destination),
             method=method,
             kind=kind,
+            title=plan.title,
+            work_kind=plan.kind,
         )
     )
 
@@ -253,7 +286,7 @@ def _evacuate(plan: Plan, journal: Journal, trash_root: Path | None) -> int:
         except OSError as exc:
             logger.warning("reste non evacue (%s) : %s", leftover.name, exc)
             continue
-        _record(journal, plan.id, leftover, target, how, "trash")
+        _record(journal, plan, leftover, target, how, "trash")
         moved += 1
 
     # Le dossier d'origine, une fois vide, n'a plus de raison d'exister. Il est
@@ -269,6 +302,97 @@ def _evacuate(plan: Plan, journal: Journal, trash_root: Path | None) -> int:
     return moved
 
 
+def work_key(record: MoveRecord) -> str:
+    """Identifie l'oeuvre a laquelle appartient une operation.
+
+    Le titre inscrit au journal fait foi. Les entrees anterieures a ce champ
+    n'en ont pas : on retombe alors sur le dossier de destination, qui porte le
+    nom de l'oeuvre dans tous les gabarits livres. C'est une deduction, pas une
+    certitude — d'ou la preference donnee au titre des qu'il existe.
+    """
+    if record.title:
+        return record.title
+
+    parts = Path(record.destination).parts
+    # « .../Severance (2022)/Season 01/fichier.mkv » : le dossier de saison ne
+    # designe pas l'oeuvre, celui du dessus si.
+    if len(parts) >= 3 and _SEASON_FOLDER.match(parts[-2]):
+        return parts[-3]
+    if len(parts) >= 2:
+        return parts[-2]
+    return record.destination
+
+
+def group_by_work(records: list[MoveRecord]) -> list[dict]:
+    """Regroupe les operations par oeuvre, la plus recente en tete.
+
+    Un bouton « tout annuler » est un aveu : il suppose qu'on veuille defaire
+    une session entiere, alors qu'en pratique on veut defaire UNE serie mal
+    identifiee au milieu de sept cents deplacements corrects.
+    """
+    groups: dict[str, dict] = {}
+    for record in records:
+        key = work_key(record)
+        group = groups.setdefault(
+            key,
+            {
+                "key": key,
+                "title": record.title or key,
+                "work_kind": record.work_kind,
+                "files": 0,
+                "companions": 0,
+                "operations": 0,
+                "last_at": record.timestamp,
+                "sample": record.destination,
+            },
+        )
+        group["operations"] += 1
+        if record.kind == "video":
+            group["files"] += 1
+        elif record.kind == "companion":
+            group["companions"] += 1
+        if record.timestamp > group["last_at"]:
+            group["last_at"] = record.timestamp
+            group["sample"] = record.destination
+        if not group["work_kind"] and record.work_kind:
+            group["work_kind"] = record.work_kind
+
+    return sorted(groups.values(), key=lambda g: g["last_at"], reverse=True)
+
+
+def undo_work(journal: Journal, key: str) -> list[ApplyResult]:
+    """Annule tout ce qui concerne UNE oeuvre, sans toucher au reste.
+
+    Les operations d'une meme oeuvre sont defaites de la plus recente a la plus
+    ancienne, pour la meme raison que l'annulation globale : deux deplacements
+    peuvent avoir touche des chemins imbriques.
+    """
+    records = journal.read_all()
+    to_undo = [r for r in records if work_key(r) == key]
+    if not to_undo:
+        return []
+    remaining = [r for r in records if work_key(r) != key]
+    return _undo(journal, to_undo, remaining)
+
+
+def undo_plans(journal: Journal, plan_ids: list[str]) -> list[ApplyResult]:
+    """Annule le rangement de fichiers precis — un episode, un film.
+
+    Le plan porte la video ET ses compagnons : annuler un episode remet aussi
+    son sous-titre a sa place, sans quoi le retour arriere serait a moitie
+    fait.
+    """
+    wanted = set(plan_ids)
+    if not wanted:
+        return []
+    records = journal.read_all()
+    to_undo = [r for r in records if r.plan_id in wanted]
+    if not to_undo:
+        return []
+    remaining = [r for r in records if r.plan_id not in wanted]
+    return _undo(journal, to_undo, remaining)
+
+
 def undo_last(journal: Journal, count: int = 1) -> list[ApplyResult]:
     """Annule les dernieres operations, de la plus recente a la plus ancienne.
 
@@ -282,6 +406,18 @@ def undo_last(journal: Journal, count: int = 1) -> list[ApplyResult]:
 
     to_undo = records[-count:]
     remaining = records[: len(records) - len(to_undo)]
+    return _undo(journal, to_undo, remaining)
+
+
+def _undo(
+    journal: Journal, to_undo: list[MoveRecord], remaining: list[MoveRecord]
+) -> list[ApplyResult]:
+    """Defait un lot d'operations et reecrit le journal.
+
+    ``remaining`` est ce qui doit SUBSISTER : le calculer chez l'appelant
+    permet d'annuler une selection au milieu du journal sans perdre l'ordre du
+    reste.
+    """
     results: list[ApplyResult] = []
 
     for record in reversed(to_undo):
@@ -332,8 +468,10 @@ def undo_last(journal: Journal, count: int = 1) -> list[ApplyResult]:
 
     # Seules les operations effectivement annulees quittent le journal : une
     # annulation partielle doit rester rejouable.
-    undone = {r.plan_id for r in results if r.ok}
-    kept = [r for r in to_undo if r.plan_id not in undone]
-    journal.rewrite(remaining + kept)
+    undone = {(r.source, r.destination) for r in results if r.ok}
+    kept = [r for r in to_undo if (r.destination, r.source) not in undone]
+    # Remis dans l'ordre chronologique : les operations annulees pouvaient se
+    # trouver n'importe ou dans le journal, pas seulement a la fin.
+    journal.rewrite(sorted(remaining + kept, key=lambda r: r.timestamp))
 
     return results

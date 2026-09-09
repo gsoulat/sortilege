@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from ..config import get_settings
 from ..core.companions import TRASH_DIRNAME
-from ..core.journal import apply_plan, undo_last
+from ..core.journal import apply_plan, group_by_work, undo_last, undo_plans, undo_work
 from ..core.pipeline import BATCH_SIZE, Pipeline
 from ..core.planner import Plan
 from ..core.scoring import Decision, Policy
@@ -64,6 +64,18 @@ class ApplyRequest(BaseModel):
 
 class UndoRequest(BaseModel):
     count: int = 1
+    """Nombre d'operations a defaire, de la plus recente. Ignore si un critere
+    plus precis est fourni."""
+
+    work: str | None = None
+    """Cle d'oeuvre : annule TOUT ce qui concerne cette serie ou ce film.
+
+    C'est le cas d'usage reel — une serie mal identifiee au milieu de sept
+    cents deplacements corrects — que « tout annuler » ne couvrait pas."""
+
+    plan_ids: list[str] | None = None
+    """Fichiers precis. Un plan porte la video et ses compagnons : annuler un
+    episode remet aussi son sous-titre en place."""
 
 
 def _ai_resolver():
@@ -447,6 +459,7 @@ def apply(body: ApplyRequest) -> dict[str, object]:
                 "destination": r.destination,
                 "message": r.message,
                 "simulated": r.simulated,
+                "reason": r.reason,
             }
             for r in results
         ],
@@ -569,7 +582,20 @@ async def choose(plan_id: str, body: ChooseRequest) -> dict[str, object]:
 
 @router.post("/undo")
 def undo(body: UndoRequest) -> dict[str, object]:
-    results = undo_last(get_journal(), max(1, body.count))
+    """Annule des deplacements. Du plus precis au plus large.
+
+    L'ordre des criteres n'est pas arbitraire : une requete qui nomme une
+    oeuvre veut cette oeuvre, pas « les N dernieres operations ». Retomber sur
+    le compte serait la pire des interpretations, puisqu'elle defait autre
+    chose que ce qui etait demande.
+    """
+    journal = get_journal()
+    if body.plan_ids:
+        results = undo_plans(journal, body.plan_ids)
+    elif body.work:
+        results = undo_work(journal, body.work)
+    else:
+        results = undo_last(journal, max(1, body.count))
     return {
         "undone": sum(1 for r in results if r.ok),
         "failed": sum(1 for r in results if not r.ok),
@@ -589,6 +615,9 @@ def read_journal(limit: int = 50) -> dict[str, object]:
     recent = records[-limit:][::-1]
     return {
         "total": len(records),
+        # Regroupe par oeuvre : c'est a cette maille qu'on decide d'annuler,
+        # pas a celle du fichier ni a celle de la session entiere.
+        "works": group_by_work(records),
         "entries": [
             {
                 "timestamp": r.timestamp,
