@@ -314,5 +314,8 @@ def test_un_refus_de_permission_nomme_le_proprietaire(space: Path, monkeypatch) 
     monkeypatch.setattr(Path, "unlink", refus)
     message = delete_ranged_source(plan).message
 
-    assert "PUID=" in message and "PGID=" in message
-    assert "appartient a UID" in message
+    # Le DOSSIER, pas le fichier : c'est le droit d'ecriture sur le repertoire
+    # qui gouverne une suppression. Diagnostiquer le fichier envoie chercher au
+    # mauvais endroit.
+    assert "DOSSIER" in message
+    assert "Sortilege tourne en" in message

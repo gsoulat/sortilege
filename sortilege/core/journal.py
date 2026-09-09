@@ -21,6 +21,7 @@ import logging
 import os
 import re
 import shutil
+import stat
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -248,22 +249,43 @@ def apply_plan(
 
 
 def _permission_hint(path: Path) -> str:
-    """Dit QUI possede le fichier et sous quelle identite on tourne.
+    """Dit qui possede le DOSSIER PARENT, et sous quelle identite on tourne.
 
-    Un « Permission denied » nu oblige a partir en chasse : activer SSH,
-    trouver la bonne commande, la lancer au bon endroit. Or les deux nombres
-    qui manquent sont connus ici meme, a l'instant de l'echec. Les donner
-    transforme une enigme en une ligne a recopier dans le docker-compose.
+    Le parent, pas le fichier : sous Unix, supprimer ou deplacer un fichier
+    exige le droit d'ECRITURE SUR LE REPERTOIRE qui le contient, jamais sur le
+    fichier lui-meme. Regarder le fichier est l'erreur naturelle, et elle
+    envoie chercher au mauvais endroit — un fichier parfaitement accessible
+    dans un dossier verrouille donne exactement cette erreur.
+
+    Les deux identites et le mode sont connus ici, a l'instant de l'echec.
+    Les donner evite d'avoir a ouvrir un terminal pour les retrouver.
     """
+    parent = path.parent
     try:
-        info = path.stat()
+        info = parent.stat()
     except OSError:
         return ""
-    return (
-        f" — le fichier appartient a UID {info.st_uid}:{info.st_gid}, "
-        f"Sortilege tourne en UID {os.getuid()}:{os.getgid()}. "
-        f"Mets PUID={info.st_uid} et PGID={info.st_gid} dans ton docker-compose."
+
+    mode = stat.filemode(info.st_mode)
+    moi, mon_groupe = os.getuid(), os.getgid()
+    detail = (
+        f" — le DOSSIER « {parent.name} » appartient a {info.st_uid}:{info.st_gid} "
+        f"en {mode} ; Sortilege tourne en {moi}:{mon_groupe}. "
+        "Supprimer ou deplacer un fichier exige l'ecriture sur son dossier, pas sur lui."
     )
+
+    if info.st_uid != moi:
+        detail += f" Mets PUID={info.st_uid} et PGID={info.st_gid} dans ton docker-compose."
+    elif not info.st_mode & 0o200:
+        detail += (
+            " Le proprietaire lui-meme n'a pas le droit d'ecrire : corrige le mode du dossier."
+        )
+    else:
+        detail += (
+            " L'identite concorde pourtant : cherche du cote des ACL du partage, "
+            "d'un montage en lecture seule, ou d'un volume different de celui que tu crois."
+        )
+    return detail
 
 
 def delete_ranged_source(plan: Plan) -> ApplyResult:
