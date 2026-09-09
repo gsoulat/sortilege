@@ -257,7 +257,7 @@ def test_un_scan_traverse_un_redemarrage(memoire) -> None:
 def test_les_plans_traversent_un_redemarrage(memoire) -> None:
     from sortilege.api import review
 
-    review.adopt_plans([plan()])
+    review.merge_plans([plan()], [])
     review._plans.clear()
 
     assert review.restore_plans() is True
@@ -270,7 +270,7 @@ def test_l_avancement_du_lot_est_repris(memoire) -> None:
     from sortilege.api import review
 
     review._job.done_paths = {"/media/a.mkv", "/media/b.mkv"}
-    review.adopt_plans([plan()])
+    review.merge_plans([plan()], [])
 
     review._plans.clear()
     review._job.done_paths.clear()

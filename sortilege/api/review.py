@@ -11,6 +11,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field, replace
+from pathlib import Path
 from threading import Lock
 
 from fastapi import APIRouter, HTTPException
@@ -169,11 +170,20 @@ def current_plans() -> list[Plan]:
         return list(_plans.values())
 
 
-def adopt_plans(plans: list[Plan]) -> None:
-    """Remplace la file par un lot calcule ailleurs (cycle automatique)."""
+def merge_plans(plans: list[Plan], sources: list[Path]) -> None:
+    """Ajoute un lot calcule ailleurs, sans effacer ce qui attend deja.
+
+    Le cycle automatique remplacait la file entiere a chaque tour. Tout ce qui
+    etait en attente d'arbitrage disparaissait donc au tour suivant, sans que
+    rien ne le signale : les questions posees a l'utilisateur s'effacaient
+    d'elles-memes toutes les quinze minutes.
+
+    ``sources`` marque les fichiers comme deja passes par le calcul, ce qui
+    evite de les repasser au fournisseur au tour d'apres.
+    """
     with _lock:
-        _plans.clear()
         _plans.update({p.id: p for p in plans})
+        _job.done_paths.update(str(s) for s in sources)
     _persist_plans()
 
 
@@ -505,7 +515,15 @@ async def apply(body: ApplyRequest) -> dict[str, object]:
 
     simulate = body.dry_run
 
-    results = [apply_plan(p, journal, dry_run=simulate, trash_root=trash_root) for p in selected]
+    # Dans un THREAD, imperativement. apply_plan deplace des fichiers, parfois
+    # des gigaoctets d'un volume a l'autre ; le laisser sur la boucle
+    # d'evenements gele toute l'application le temps du lot — y compris le
+    # suivi de progression que l'utilisateur regarde. C'etait le cas depuis que
+    # cet endpoint est devenu async pour prevenir le serveur multimedia :
+    # auparavant, FastAPI le placait lui-meme dans un thread.
+    results = await asyncio.to_thread(
+        lambda: [apply_plan(p, journal, dry_run=simulate, trash_root=trash_root) for p in selected]
+    )
 
     # Un plan applique quitte la file : le laisser inviterait a le rejouer, et
     # sa source n'existe plus.
@@ -695,7 +713,11 @@ async def rename_library() -> dict[str, object]:
     store = get_store()
     prefs = store.load()
 
-    result = scan([conf.library_root], deep=False, library_root=conf.library_root)
+    # Un parcours complet de la bibliotheque : des minutes de disque. Sur la
+    # boucle d'evenements, l'application entiere serait figee pendant ce temps.
+    result = await asyncio.to_thread(
+        scan, [conf.library_root], deep=False, library_root=conf.library_root
+    )
     plans: list[Plan] = []
     for kind in ("movie", "episode", "anime"):
         subset = [f for f in result.files if _kind_of(f) == kind]

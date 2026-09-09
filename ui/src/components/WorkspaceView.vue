@@ -837,8 +837,9 @@ onUnmounted(() => clearInterval(poller))
       </li>
     </ul>
 
-    <p v-if="counts.works > works.length && filter === 'all'" class="truncated">
-      {{ works.length }} œuvres affichées sur {{ counts.works }}.
+    <p v-if="data.shown < counts.works" class="truncated">
+      {{ data.shown }} œuvres chargées sur {{ counts.works }} — affine avec les filtres
+      pour atteindre les suivantes.
     </p>
   </div>
 </template>

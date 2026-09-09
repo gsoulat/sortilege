@@ -36,8 +36,16 @@ mille chemins ferait peser plusieurs megaoctets sur chaque rafraichissement,
 pour une information que personne ne lit ligne a ligne."""
 
 
-def _plan_out(plan: Plan) -> dict[str, object]:
-    return {
+def _plan_out(plan: Plan, *, with_alternatives: bool = False) -> dict[str, object]:
+    """Un plan, tel que la liste l'affiche.
+
+    Les candidats alternatifs ne sont joints QUE pour ce qui demande un
+    arbitrage. Ils ne servent qu'a l'ouverture du selecteur, et ils multiplient
+    la reponse par neuf : sur trois cents plans, cette route — interrogee
+    toutes les deux secondes — transferait quarante megaoctets par minute pour
+    des donnees que personne ne regardait.
+    """
+    out: dict[str, object] = {
         "id": plan.id,
         "source": str(plan.source),
         "destination": str(plan.destination) if plan.destination else None,
@@ -49,18 +57,21 @@ def _plan_out(plan: Plan) -> dict[str, object]:
         "reasons": plan.reasons,
         "error": plan.error,
         "manual": plan.manual,
-        "alternatives": [
+    }
+    if with_alternatives:
+        out["alternatives"] = [
             {
                 "provider": c.provider,
                 "external_id": c.external_id,
                 "title": c.title,
                 "year": c.year,
                 "poster_url": c.poster_url,
-                "overview": c.overview,
+                # Tronque : le selecteur affiche deux lignes, pas un synopsis.
+                "overview": c.overview[:200],
             }
             for c in plan.alternatives
-        ],
-    }
+        ]
+    return out
 
 
 def _entry_out(entry: WorkspaceEntry) -> dict[str, object]:
@@ -105,7 +116,7 @@ def _entry_out(entry: WorkspaceEntry) -> dict[str, object]:
         },
         "pending": {
             "ready": [_plan_out(p) for p in entry.pending.ready],
-            "review": [_plan_out(p) for p in entry.pending.review],
+            "review": [_plan_out(p, with_alternatives=True) for p in entry.pending.review],
             "rejected": [_plan_out(p) for p in entry.pending.rejected],
             "unplanned_count": len(entry.pending.unplanned),
             "unplanned": [
@@ -118,7 +129,7 @@ def _entry_out(entry: WorkspaceEntry) -> dict[str, object]:
 
 
 @router.get("")
-def read_workspace(limit: int = 200) -> dict[str, object]:
+def read_workspace(limit: int = 1000) -> dict[str, object]:
     """Etat courant de la mediatheque, oeuvre par oeuvre.
 
     ``limit`` borne les lignes RENVOYEES, jamais celles comptees : les

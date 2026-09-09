@@ -133,12 +133,24 @@ class Journal:
 
 
 def _move(source: Path, destination: Path) -> str:
-    """Deplace un fichier sans jamais ecraser. Retourne la methode employee."""
+    """Deplace un fichier sans jamais ecraser. Retourne la methode employee.
+
+    Le refus est APPLIQUE ici, il n'est pas seulement documente. La version
+    precedente s'en remettait aux verifications des appelants en affirmant que
+    « os.rename echoue si la destination existe » — c'est l'inverse : sous
+    POSIX, rename REMPLACE silencieusement, et shutil.move aussi. La promesse
+    du docstring etait donc fausse, et il a suffi qu'un appelant oublie son
+    garde-fou pour ouvrir une perte de donnees silencieuse dans la fonction
+    meme qui sert de filet.
+
+    Un garde-fou dans la primitive protege aussi les appelants a venir, ce
+    qu'une convention ne fait jamais.
+    """
+    if destination.exists():
+        raise FileExistsError(f"la destination existe deja : {destination}")
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
-        # os.rename echoue si la destination existe deja sur la plupart des
-        # systemes, mais pas partout : la verification prealable dans apply()
-        # reste la garantie.
         os.rename(source, destination)
         return "rename"
     except OSError:

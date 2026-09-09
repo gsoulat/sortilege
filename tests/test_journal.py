@@ -184,3 +184,40 @@ def test_annulation_dans_l_ordre_inverse(env) -> None:
 def test_annulation_sans_journal(env) -> None:
     *_, journal = env
     assert undo_last(journal, 5) == []
+
+
+# --- Le refus d'ecraser, applique et non seulement documente ----------------
+
+
+def test_un_deplacement_sur_une_destination_occupee_est_refuse(tmp_path: Path) -> None:
+    """Le garde-fou vit dans la PRIMITIVE, pas dans la convention.
+
+    La version precedente affirmait « os.rename echoue si la destination
+    existe ». C'est l'inverse : sous POSIX rename REMPLACE silencieusement, et
+    shutil.move aussi. Il a suffi qu'un appelant — la mise en corbeille des
+    doublons — oublie sa verification pour ouvrir une perte de donnees dans la
+    fonction meme qui sert de filet."""
+    from sortilege.core.journal import _move
+
+    source = tmp_path / "nouveau.mkv"
+    destination = tmp_path / "precieux.mkv"
+    source.write_text("nouveau", encoding="utf-8")
+    destination.write_text("A NE PAS PERDRE", encoding="utf-8")
+
+    with pytest.raises(FileExistsError):
+        _move(source, destination)
+
+    assert destination.read_text(encoding="utf-8") == "A NE PAS PERDRE"
+    assert source.is_file(), "la source n'a pas bouge non plus"
+
+
+def test_un_deplacement_normal_fonctionne_toujours(tmp_path: Path) -> None:
+    from sortilege.core.journal import _move
+
+    source = tmp_path / "film.mkv"
+    source.write_text("video", encoding="utf-8")
+    cible = tmp_path / "range" / "film.mkv"
+
+    assert _move(source, cible) == "rename"
+    assert cible.read_text(encoding="utf-8") == "video"
+    assert not source.exists()

@@ -29,7 +29,7 @@ from ..config import get_settings
 from ..core.companions import TRASH_DIRNAME
 from ..core.journal import apply_plan
 from ..core.notify import cycle_notification, failure_notification, send
-from ..core.pipeline import Pipeline
+from ..core.pipeline import BATCH_SIZE, Pipeline
 from ..core.scanner import scan
 from ..core.scoring import Decision, Policy
 from ..core.watch import Watcher
@@ -51,6 +51,10 @@ class CycleReport:
     planned: int = 0
     applied: int = 0
     queued: int = 0
+    remaining: int = 0
+    """Fichiers eligibles laisses au cycle suivant. Le dire evite de croire
+    qu'un cycle « termine » a tout traite."""
+
     message: str = ""
 
 
@@ -129,12 +133,32 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
         memory=get_memory(),
         known_titles=review._library_titles(),
     )
+    # PAR LOT, comme le traitement manuel. Sans cette borne, un premier cycle
+    # sur une bibliotheque constituee planifiait plusieurs milliers de fichiers
+    # d'un seul tenant : des heures d'appels au fournisseur, pendant lesquelles
+    # rien n'est applicable. Un lot par tour grignote l'arriere sans bloquer.
+    deja = review.planned_paths()
+    eligible = [
+        f
+        for f in result.files
+        if not f.in_library and f.skipped_reason is None and str(f.path) not in deja
+    ]
+    lot = eligible[:BATCH_SIZE]
+    report.remaining = max(0, len(eligible) - len(lot))
+
+    if not lot:
+        report.message = "rien de nouveau a identifier"
+        return report
+
     try:
-        plans = await pipeline.plan_all(result.files)
+        plans = await pipeline.plan_all(lot)
     finally:
         await pipeline.aclose()
 
-    review.adopt_plans(plans)
+    # On AJOUTE au lieu de remplacer : le cycle effacait la file entiere a
+    # chaque tour, faisant disparaitre sans un mot tout ce qui attendait un
+    # arbitrage humain.
+    review.merge_plans(plans, [f.path for f in lot])
     report.planned = len(plans)
 
     confident = [p for p in plans if p.decision is Decision.AUTO]
@@ -158,6 +182,8 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
 
     failed = len(results) - report.applied
     report.message = f"{report.applied} range(s), {report.queued} en attente"
+    if report.remaining:
+        report.message += f", {report.remaining} pour le prochain tour"
     if failed:
         report.message += f", {failed} en echec"
     return report
@@ -243,6 +269,7 @@ def _report_out(report: CycleReport | None) -> dict[str, object] | None:
         "scanned": report.scanned,
         "planned": report.planned,
         "applied": report.applied,
+        "remaining": report.remaining,
         "queued": report.queued,
         "message": report.message,
     }
