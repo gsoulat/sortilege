@@ -1,6 +1,39 @@
 # CHANGELOG
 
 
+## v0.35.1 (2026-09-09)
+
+### Bug Fixes
+
+- **scan**: Recaler la file sur ce que le scan trouve, et vider le cache
+  ([`c40783c`](https://github.com/gsoulat/sortilege/commit/c40783cc6d57b984ee0b1473a91560f9cb588b4d))
+
+Un rescan ne remettait rien d'aplomb. Deux etats survivaient a leur objet.
+
+**Les plans dont le fichier a disparu restaient dans la file.** Range, evacue, ou supprime a la main
+  : le plan continuait de s'afficher, proposait un deplacement impossible, et echouait a
+  l'application. La file ne se vidait donc jamais tout a fait, et les compteurs annoncaient un
+  travail qui n'existait plus.
+
+**Les chemins marques « deja planifies » ne l'etaient jamais moins.** Un telechargement refait apres
+  un echec, revenu sous le meme nom, etait donc tenu pour deja traite et ne pouvait plus etre
+  identifie — sans que rien ne le signale.
+
+Les deux sont maintenant restreints a ce que le scan a REELLEMENT trouve. Ce qui est toujours la ne
+  bouge pas, et c'est la propriete qui compte le plus : un arbitrage en attente sur un fichier
+  present est du travail humain, et le perdre serait bien pire que de garder un plan perime.
+
+**Le cache des vignettes se vide au scan.** Les cles incluent la taille et la date du fichier, donc
+  une image perimee n'est jamais SERVIE — mais elle n'est jamais liberee non plus, et le cache ne
+  faisait que croitre. Un scan est le moment ou l'on sait que la bibliotheque a bouge : c'est la que
+  le menage a le plus de sens, et il ne coute rien puisque les images se reconstruisent a la
+  demande. Un bouton permet aussi de le vider sans relancer un scan complet.
+
+7 tests, dont ceux qui verifient ce qui ne doit PAS bouger.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.35.0 (2026-09-09)
 
 ### Features
