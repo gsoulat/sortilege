@@ -26,6 +26,7 @@ from ..providers.anilist import AniListProvider
 from ..providers.base import Candidate
 from ..providers.tmdb import TMDBProvider
 from .ai import AIProposal, AmbiguousItem
+from .franchise import franchise_for
 from .matching import MatchResult, best_match, build_signals
 from .parser import MediaKind, ParsedName
 from .planner import Plan, build_plan
@@ -61,6 +62,7 @@ class Pipeline:
         ai_batch_size: int = 12,
         ai_threshold: float = 0.80,
         memory=None,
+        known_titles: set[str] | None = None,
     ) -> None:
         self._tmdb = tmdb
         self._anilist = anilist
@@ -75,6 +77,10 @@ class Pipeline:
         self._ai_batch_size = max(1, ai_batch_size)
         self._ai_threshold = ai_threshold
         self._memory = memory
+        # Titres deja presents en bibliotheque. Ils comptent comme voisins pour
+        # la deduction de franchise : sans eux, importer « Star Trek: Picard »
+        # seul ne le rangerait pas avec les autres Star Trek deja la.
+        self._known_titles = known_titles or set()
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
     async def aclose(self) -> None:
@@ -219,6 +225,16 @@ class Pipeline:
         return plan
 
     async def plan_one(self, scanned: ScannedFile) -> Plan:
+        plan, _ = await self._plan_with_match(scanned)
+        return plan
+
+    async def _plan_with_match(self, scanned: ScannedFile):
+        """Plan ET correspondance retenue.
+
+        La correspondance sert au second rendu : la franchise d'une serie ne se
+        connait qu'une fois TOUS les titres du lot resolus, et il faut alors
+        pouvoir refabriquer la destination sans relancer les appels reseau.
+        """
         async with self._semaphore:
             try:
                 # Une decision deja prise court-circuite tout : ni recherche,
@@ -226,7 +242,7 @@ class Pipeline:
                 # revue converge vers le vide au lieu de reposer eternellement
                 # les memes questions.
                 if (remembered := await self._recall(scanned)) is not None:
-                    return remembered
+                    return remembered, None
 
                 candidates = await self._candidates(scanned)
                 match = best_match(scanned.parsed, scanned.probe, candidates)
@@ -243,17 +259,7 @@ class Pipeline:
                         episode_match=episode_match,
                     )
 
-                template = self._templates.get(_kind_key(scanned.parsed.kind), "")
-                return build_plan(
-                    scanned,
-                    match,
-                    template=template,
-                    destination_root=self._destination_for(
-                        _kind_key(scanned.parsed.kind), scanned.size_bytes
-                    ),
-                    policy=self._policy,
-                    all_candidates=candidates,
-                )
+                return self._render(scanned, match, candidates), match
             except Exception as exc:
                 # Filet de securite : un fichier pathologique ne doit pas faire
                 # perdre le travail deja fait sur les precedents.
@@ -267,7 +273,23 @@ class Pipeline:
                     decision=Decision.REJECT,
                     reasons=[f"erreur interne : {type(exc).__name__}"],
                     error=str(exc),
-                )
+                ), None
+
+    def _render(self, scanned: ScannedFile, match, candidates) -> Plan:
+        """Fabrique le plan a partir d'une correspondance deja etablie.
+
+        Isole pour pouvoir etre rejoue : le second rendu de franchise ne
+        change qu'une valeur du gabarit, il ne doit rien redemander au reseau.
+        """
+        kind = _kind_key(scanned.parsed.kind)
+        return build_plan(
+            scanned,
+            match,
+            template=self._templates.get(kind, ""),
+            destination_root=self._destination_for(kind, scanned.size_bytes),
+            policy=self._policy,
+            all_candidates=candidates or [],
+        )
 
     async def replan_with(self, scanned: ScannedFile, chosen: Candidate, previous: Plan) -> Plan:
         """Reconstruit un plan autour d'un candidat impose par l'utilisateur.
@@ -357,9 +379,13 @@ class Pipeline:
         total = len(todo)
         done = 0
 
+        matched: dict[str, object] = {}
+
         async def one(scanned: ScannedFile) -> Plan:
             nonlocal done
-            plan = await self.plan_one(scanned)
+            plan, match = await self._plan_with_match(scanned)
+            if match is not None:
+                matched[plan.id] = (scanned, match)
             done += 1
             if on_plan:
                 on_plan(plan)
@@ -381,6 +407,14 @@ class Pipeline:
             chunk = todo[start : start + BATCH_SIZE]
             plans.extend(await asyncio.gather(*(one(f) for f in chunk)))
 
+        # --- Regroupement par franchise ------------------------------------
+        #
+        # Une franchise ne se voit qu'une fois TOUS les titres du lot resolus :
+        # « Star Trek » tout court n'a rien d'une franchise tant qu'on ignore
+        # que « Star Trek: Discovery » existe a cote. D'ou ce second rendu, qui
+        # ne redemande rien au reseau et ne change qu'une valeur du gabarit.
+        plans = self._group_franchises(plans, matched)
+
         if self._ai is not None:
             # La seconde passe n'a pas d'avancement fin : c'est un ou deux
             # appels groupes. On annonce la phase plutot que de figer la barre.
@@ -394,6 +428,46 @@ class Pipeline:
             plans = improved
 
         return plans
+
+    def _group_franchises(self, plans: list[Plan], matched: dict) -> list[Plan]:
+        """Range les series d'une meme franchise sous un dossier commun.
+
+        TMDB ne declare aucun lien entre « Star Trek », « Star Trek: Discovery »
+        et « Star Trek: Picard » : ce sont trois series sans rapport pour lui.
+        La franchise se deduit du sous-titre, mais la deduction n'est retenue
+        que si une AUTRE serie la partage — un dossier de franchise a un seul
+        element n'est pas un regroupement, c'est un niveau de plus a traverser.
+
+        Les titres deja presents en bibliotheque comptent parmi les voisins :
+        sans eux, importer « Star Trek: Picard » seul ne le rangerait pas avec
+        les autres Star Trek deja la.
+        """
+        titles = {p.title for p in plans if p.title} | self._known_titles
+        if not titles:
+            return plans
+
+        updated = list(plans)
+        for index, plan in enumerate(plans):
+            if plan.kind not in ("episode", "anime") or not plan.title:
+                continue
+            entry = matched.get(plan.id)
+            if entry is None:
+                continue
+
+            franchise = franchise_for(plan.title, sorted(titles))
+            scanned, match = entry
+            if not franchise or match.candidate.extra.get("collection") == franchise:
+                continue
+
+            match.candidate.extra["collection"] = franchise
+            rebuilt = self._render(scanned, match, plan.alternatives)
+            # Le second rendu ne doit rien degrader : il ne touche qu'au
+            # chemin. Si le gabarit n'utilise pas {collection}, la destination
+            # est identique et l'echange est sans effet.
+            if rebuilt.destination is not None:
+                updated[index] = rebuilt
+
+        return updated
 
     # --- Seconde passe assistee par IA --------------------------------------
 

@@ -127,6 +127,7 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
         ai_batch_size=prefs.ai.batch_size,
         ai_threshold=prefs.ai.threshold,
         memory=get_memory(),
+        known_titles=review._library_titles(),
     )
     try:
         plans = await pipeline.plan_all(result.files)

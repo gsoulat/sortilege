@@ -120,7 +120,7 @@ PRESETS: dict[str, dict[str, str]] = {
         # accolades sont la syntaxe des jetons : on ne l'expose pas ici.
         "movie": "{collection}/{title}{? year: ($)}/{title}{? year: ($)}",
         "episode": (
-            "{title}{? year: ($)}/Season {season:02}/"
+            "{collection}/{title}{? year: ($)}/Season {season:02}/"
             "{title} - s{season:02}e{episode:02}{? episode_end:02:-e$}"
         ),
         "anime": "{title}/{title} - {absolute_episode:03}",

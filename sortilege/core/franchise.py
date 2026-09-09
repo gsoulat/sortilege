@@ -106,7 +106,23 @@ def franchise_for(title: str, siblings: list[str] | None = None) -> str | None:
     un regroupement n'a de sens que s'il regroupe effectivement.
     """
     candidate = derive_franchise(title)
-    if candidate is None or siblings is None:
+
+    if candidate is None:
+        # La serie d'ORIGINE n'a pas de sous-titre : « Star Trek » (1966) ne
+        # revele rien de lui-meme. Il n'est une franchise que parce que
+        # « Star Trek: Discovery » existe a cote. Sans ce cas, la serie
+        # fondatrice se retrouvait rangee A COTE du dossier portant son nom —
+        # le regroupement laissait dehors ce qu'il regroupait.
+        if siblings is None:
+            return None
+        folded = title.casefold()
+        for other in siblings:
+            if other != title and (derived := derive_franchise(other)) is not None:
+                if derived.casefold() == folded:
+                    return title
+        return None
+
+    if siblings is None:
         return candidate
 
     needle = candidate.casefold()

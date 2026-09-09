@@ -85,6 +85,19 @@ class UndoRequest(BaseModel):
     episode remet aussi son sous-titre en place."""
 
 
+def _library_titles() -> set[str]:
+    """Titres des oeuvres deja rangees.
+
+    Ils servent de voisins a la deduction de franchise : sans eux, importer
+    « Star Trek: Picard » seul ne le rangerait pas avec les Star Trek deja en
+    bibliotheque. Un index absent n'est pas une erreur — on retombe alors sur
+    les seuls titres du lot en cours.
+    """
+    from . import collection
+
+    return {w.title for w in collection.current_works() if w.title}
+
+
 def _ai_resolver():
     """Construit le resolveur choisi dans les reglages, ou None.
 
@@ -300,6 +313,7 @@ async def build_plans(limit: int = 100, reset: bool = False) -> dict[str, object
         ai_batch_size=prefs.ai.batch_size,
         ai_threshold=prefs.ai.threshold,
         memory=get_memory(),
+        known_titles=_library_titles(),
     )
 
     if _job.running:
