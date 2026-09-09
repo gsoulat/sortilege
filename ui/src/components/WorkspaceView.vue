@@ -41,9 +41,28 @@ const FILTERS = {
   todo: (w) => w.pending.total > 0,
   gaps: (w) => (w.owned?.missing_count ?? 0) > 0,
   dupes: (w) => (w.owned?.duplicates?.length ?? 0) > 0,
+  heavy: (w) => w.heaviness >= (data.value?.heavy_ratio ?? 2),
 }
 
-const works = computed(() => (data.value?.works ?? []).filter(FILTERS[filter.value]))
+// Filtre de type, indépendant de l'état : on veut pouvoir croiser « les séries »
+// avec « celles qui pèsent lourd ».
+const kind = ref('all')
+
+const works = computed(() =>
+  (data.value?.works ?? [])
+    .filter(FILTERS[filter.value])
+    .filter((w) => kind.value === 'all' || w.kind === kind.value),
+)
+
+const kindCounts = computed(() => {
+  const out = { movie: 0, episode: 0, anime: 0 }
+  for (const w of data.value?.works ?? []) if (w.kind in out) out[w.kind] += 1
+  return out
+})
+
+/** Les plus lourds d'abord : c'est l'ordre utile quand on cherche de la place. */
+const bySize = computed(() => [...works.value].sort((a, b) => b.bytes_per_file - a.bytes_per_file))
+const listed = computed(() => (filter.value === 'heavy' ? bySize.value : works.value))
 
 /** Ce que le travail en cours est en train de faire, en une ligne. */
 const activity = computed(() => {
@@ -181,6 +200,9 @@ function toggle(key) {
 const shortPath = (p) => (p ? p.split('/').slice(-2).join('/') : '—')
 const gb = (bytes) => (bytes / 1024 ** 3).toFixed(1)
 
+/** « ×2,4 » se lit d'un coup d'œil là où « 8,3 Go » demande de comparer. */
+const heavyLabel = (w) => `×${w.heaviness.toFixed(1).replace('.', ',')}`
+
 // L'affichage progressif tient à ce seul intervalle : le serveur répond ce
 // qu'il sait, et il en sait un peu plus à chaque appel. Pas de flux ouvert,
 // pas d'état partagé.
@@ -238,6 +260,27 @@ onUnmounted(() => clearInterval(poller))
       <button v-if="counts.duplicates" :class="{ active: filter === 'dupes' }" @click="filter = 'dupes'">
         Doublons ({{ counts.duplicates }})
       </button>
+      <button v-if="counts.heavy" class="heavy-filter" :class="{ active: filter === 'heavy' }"
+              @click="filter = 'heavy'"
+              :title="`Au moins ${data.heavy_ratio} fois le poids habituel de leur type`">
+        Anormalement lourds ({{ counts.heavy }})
+      </button>
+    </div>
+
+    <div class="filters kinds">
+      <button :class="{ active: kind === 'all' }" @click="kind = 'all'">Tous types</button>
+      <button v-if="kindCounts.movie" :class="{ active: kind === 'movie' }" @click="kind = 'movie'">
+        Films ({{ kindCounts.movie }})
+      </button>
+      <button v-if="kindCounts.episode" :class="{ active: kind === 'episode' }" @click="kind = 'episode'">
+        Séries ({{ kindCounts.episode }})
+      </button>
+      <button v-if="kindCounts.anime" :class="{ active: kind === 'anime' }" @click="kind = 'anime'">
+        Animes ({{ kindCounts.anime }})
+      </button>
+      <span v-if="counts.total_bytes" class="total">
+        {{ gb(counts.total_bytes) }} Go en bibliothèque
+      </span>
     </div>
 
     <p v-if="!works.length" class="empty">
@@ -245,7 +288,7 @@ onUnmounted(() => clearInterval(poller))
     </p>
 
     <ul class="works">
-      <li v-for="w in works" :key="w.key" :class="{ open: open.has(w.key) }">
+      <li v-for="w in listed" :key="w.key" :class="{ open: open.has(w.key) }">
         <button class="row" @click="toggle(w.key)">
           <span class="chev" :class="{ closed: !open.has(w.key) }">▾</span>
           <img v-if="w.poster_url" class="thumb" :src="w.poster_url" :alt="w.title" loading="lazy" />
@@ -258,6 +301,11 @@ onUnmounted(() => clearInterval(poller))
 
           <span class="badges">
             <span v-if="w.owned" class="badge own">{{ w.owned.file_count }} fichier{{ w.owned.file_count > 1 ? 's' : '' }}</span>
+            <span v-if="w.owned?.total_bytes" class="badge size">{{ gb(w.owned.total_bytes) }} Go</span>
+            <span v-if="w.heaviness >= (data.heavy_ratio ?? 2)" class="badge heavy"
+                  :title="`${gb(w.bytes_per_file)} Go par fichier, contre ${(w.bytes_per_file / w.heaviness / 1024 ** 3).toFixed(1)} Go en médiane`">
+              {{ heavyLabel(w) }} le poids habituel
+            </span>
             <span v-if="w.owned?.missing_count" class="badge gap">{{ w.owned.missing_count }} manquant{{ w.owned.missing_count > 1 ? 's' : '' }}</span>
             <span v-if="w.owned?.duplicates?.length" class="badge dupe">{{ w.owned.duplicates.length }} doublon{{ w.owned.duplicates.length > 1 ? 's' : '' }}</span>
             <span v-if="w.pending.ready.length" class="badge ready">{{ w.pending.ready.length }} prêt{{ w.pending.ready.length > 1 ? 's' : '' }}</span>
@@ -324,7 +372,10 @@ onUnmounted(() => clearInterval(poller))
           <section v-if="w.owned" class="block">
             <div class="block-head">
               <h4>En bibliothèque</h4>
-              <span class="size">{{ gb(w.owned.total_bytes) }} Go</span>
+              <span class="size">
+                {{ gb(w.owned.total_bytes) }} Go — {{ gb(w.bytes_per_file) }} Go par fichier
+                <template v-if="w.heaviness">({{ heavyLabel(w) }} la médiane de son type)</template>
+              </span>
             </div>
             <ul class="seasons">
               <li v-for="s in w.owned.seasons" :key="s.number">
@@ -410,6 +461,10 @@ onUnmounted(() => clearInterval(poller))
 .badge.review { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
 .badge.gap { background: color-mix(in srgb, var(--warn) 12%, transparent); color: var(--warn); }
 .badge.dupe { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); }
+.badge.size { font-family: var(--mono); font-size: 10px; }
+.badge.heavy { background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err); }
+.filters.kinds { margin-top: -6px; align-items: baseline; }
+.filters .total { margin-left: auto; font-size: 11.5px; color: var(--text-faint); }
 
 .detail { padding: 4px 12px 12px 12px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 14px; }
 .block-head { display: flex; align-items: center; gap: 10px; margin: 10px 0 7px; }

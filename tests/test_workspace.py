@@ -223,3 +223,131 @@ def test_les_compteurs_portent_sur_tout() -> None:
 def test_une_mediatheque_vide_ne_leve_pas() -> None:
     assert build([], [], []) == []
     assert summarize([])["works"] == 0
+
+
+# --- Reperer ce qui pese anormalement lourd ---------------------------------
+#
+# L'objectif concret : savoir quoi re-telecharger ou re-encoder pour gagner de
+# la place. La taille BRUTE ne dit rien — une serie de trente episodes pese
+# forcement plus qu'un film. Ce qui se compare, c'est le poids d'UN fichier,
+# rapporte a l'habitude du meme type.
+
+
+GB = 1024**3
+
+
+def owned(title: str, *, files: int, total_gb: float, kind: str = "movie") -> Work:
+    return Work(
+        key=f"{kind}:{title.casefold()}",
+        kind=kind,
+        title=title,
+        file_count=files,
+        total_bytes=int(total_gb * GB),
+    )
+
+
+def test_le_poids_se_compare_par_fichier() -> None:
+    """Une serie de dix episodes a 2 Go n'est pas « plus lourde » qu'un film de
+    8 Go : elle est plus legere par fichier."""
+    entries = {
+        e.title: e
+        for e in build(
+            [
+                owned("Serie", files=10, total_gb=20, kind="episode"),
+                owned("Film", files=1, total_gb=8),
+            ],
+            [],
+            [],
+        )
+    }
+    assert entries["Serie"].bytes_per_file < entries["Film"].bytes_per_file
+
+
+def test_un_remux_est_signale() -> None:
+    """Le cas vise : un fichier deux fois plus lourd que l'habitude, a qualite
+    comparable, vaut la peine d'etre repris."""
+    entries = {
+        e.title: e
+        for e in build(
+            [
+                owned("Normal A", files=1, total_gb=4),
+                owned("Normal B", files=1, total_gb=4),
+                owned("Normal C", files=1, total_gb=5),
+                owned("Remux", files=1, total_gb=40),
+            ],
+            [],
+            [],
+        )
+    }
+    assert entries["Remux"].heaviness >= 2.0
+    assert entries["Normal A"].heaviness < 2.0
+
+
+def test_chaque_type_a_sa_propre_norme() -> None:
+    """Comparer un episode a un film ferait passer tous les films pour des
+    anomalies."""
+    entries = {
+        e.title: e
+        for e in build(
+            [
+                owned("Ep A", files=10, total_gb=10, kind="episode"),
+                owned("Ep B", files=10, total_gb=11, kind="episode"),
+                owned("Ep C", files=10, total_gb=9, kind="episode"),
+                owned("Film A", files=1, total_gb=8),
+                owned("Film B", files=1, total_gb=9),
+                owned("Film C", files=1, total_gb=7),
+            ],
+            [],
+            [],
+        )
+    }
+    for e in entries.values():
+        assert e.heaviness < 2.0, f"{e.title} signale a tort"
+
+
+def test_la_mediane_resiste_aux_extremes() -> None:
+    """Avec une moyenne, un seul enorme fichier releverait le seuil et se
+    cacherait lui-meme. C'est la raison du choix de la mediane."""
+    entries = {
+        e.title: e
+        for e in build(
+            [
+                owned("A", files=1, total_gb=4),
+                owned("B", files=1, total_gb=4),
+                owned("C", files=1, total_gb=4),
+                owned("Enorme", files=1, total_gb=200),
+            ],
+            [],
+            [],
+        )
+    }
+    assert entries["Enorme"].heaviness > 10
+
+
+def test_trop_peu_d_oeuvres_pour_conclure() -> None:
+    """Une mediane sur deux valeurs ne dit rien : signaler une anomalie sur
+    cette base serait du bruit."""
+    entries = build([owned("A", files=1, total_gb=1), owned("B", files=1, total_gb=50)], [], [])
+    assert all(e.heaviness == 0.0 for e in entries)
+
+
+def test_une_oeuvre_non_possedee_n_a_pas_de_poids() -> None:
+    entries = build([], [plan("Severance")], [])
+    assert entries[0].bytes_per_file == 0
+    assert entries[0].heaviness == 0.0
+
+
+def test_le_compte_des_lourds_remonte_dans_les_totaux() -> None:
+    entries = build(
+        [
+            owned("A", files=1, total_gb=4),
+            owned("B", files=1, total_gb=4),
+            owned("C", files=1, total_gb=4),
+            owned("Gros", files=1, total_gb=40),
+        ],
+        [],
+        [],
+    )
+    counts = summarize(entries)
+    assert counts["heavy"] == 1
+    assert counts["total_bytes"] == int(52 * GB)

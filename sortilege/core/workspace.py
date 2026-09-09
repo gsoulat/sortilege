@@ -29,6 +29,13 @@ from .scanner import ScannedFile
 from .scoring import Decision
 from .store import title_key
 
+HEAVY_RATIO = 2.0
+"""A partir de combien de fois la mediane une oeuvre merite d'etre signalee.
+
+Deux fois le poids habituel pour une qualite identique, c'est ce qui distingue
+un remux d'un encodage courant. En dessous, l'ecart s'explique par la duree ou
+la scene et ne justifie pas de re-telecharger."""
+
 
 @dataclass
 class Pending:
@@ -62,6 +69,24 @@ class WorkspaceEntry:
     poster_url: str = ""
     owned: Work | None = None
     pending: Pending = field(default_factory=Pending)
+
+    heaviness: float = 0.0
+    """Taille par fichier RAPPORTEE a la mediane des oeuvres du meme type.
+
+    1.0 = dans la norme, 2.5 = deux fois et demie plus lourd que l'habitude.
+    La taille brute ne dirait rien : une serie de trente episodes pese
+    forcement plus qu'un film. Ce qui se compare, c'est le poids d'UN fichier.
+
+    La mediane et non la moyenne : la moyenne serait tiree vers le haut par les
+    quelques remux enormes qu'on cherche justement a reperer, et le seuil se
+    deplacerait avec eux.
+    """
+
+    @property
+    def bytes_per_file(self) -> int:
+        if self.owned is None or not self.owned.file_count:
+            return 0
+        return self.owned.total_bytes // self.owned.file_count
 
     @property
     def is_new(self) -> bool:
@@ -192,7 +217,33 @@ def build(
         entry.pending.unplanned.append(scanned)
         entry.kind = entry.kind or str(scanned.parsed.kind)
 
+    _mark_heaviness(list(entries.values()))
     return sorted(entries.values(), key=lambda e: e.sort_rank())
+
+
+def _mark_heaviness(entries: list[WorkspaceEntry]) -> None:
+    """Situe chaque oeuvre par rapport au poids habituel de son type.
+
+    Comparer un film a une serie n'aurait aucun sens ; on compare donc a
+    l'interieur de chaque type. En dessous de trois oeuvres, on s'abstient : une
+    mediane sur deux valeurs ne dit rien, et signaler un « anormal » sur une
+    base pareille serait du bruit.
+    """
+    by_kind: dict[str, list[WorkspaceEntry]] = {}
+    for entry in entries:
+        if entry.owned is not None and entry.bytes_per_file:
+            by_kind.setdefault(entry.kind or "?", []).append(entry)
+
+    for group in by_kind.values():
+        if len(group) < 3:
+            continue
+        sizes = sorted(e.bytes_per_file for e in group)
+        middle = len(sizes) // 2
+        median = sizes[middle] if len(sizes) % 2 else (sizes[middle - 1] + sizes[middle]) // 2
+        if median <= 0:
+            continue
+        for entry in group:
+            entry.heaviness = entry.bytes_per_file / median
 
 
 def summarize(entries: list[WorkspaceEntry]) -> dict[str, int]:
@@ -206,4 +257,6 @@ def summarize(entries: list[WorkspaceEntry]) -> dict[str, int]:
         "unplanned": sum(len(e.pending.unplanned) for e in entries),
         "missing": sum(e.owned.missing_count for e in entries if e.owned),
         "duplicates": sum(len(e.owned.duplicates) for e in entries if e.owned),
+        "total_bytes": sum(e.owned.total_bytes for e in entries if e.owned),
+        "heavy": sum(1 for e in entries if e.heaviness >= HEAVY_RATIO),
     }

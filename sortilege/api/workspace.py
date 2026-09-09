@@ -20,7 +20,7 @@ import logging
 from fastapi import APIRouter
 
 from ..core.planner import Plan
-from ..core.workspace import WorkspaceEntry, build, summarize
+from ..core.workspace import HEAVY_RATIO, WorkspaceEntry, build, summarize
 from . import collection, library, review
 
 logger = logging.getLogger(__name__)
@@ -71,6 +71,10 @@ def _entry_out(entry: WorkspaceEntry) -> dict[str, object]:
         "year": entry.year,
         "poster_url": entry.poster_url or (owned.poster_url if owned else ""),
         "is_new": entry.is_new,
+        # Poids RELATIF au type : une serie de trente episodes pese forcement
+        # plus qu'un film, seul le poids d'un fichier se compare.
+        "bytes_per_file": entry.bytes_per_file,
+        "heaviness": round(entry.heaviness, 2),
         "owned": None
         if owned is None
         else {
@@ -139,6 +143,7 @@ def read_workspace(limit: int = 200) -> dict[str, object]:
 
     return {
         "counts": counts,
+        "heavy_ratio": HEAVY_RATIO,
         "shown": min(limit, len(entries)),
         "works": [_entry_out(e) for e in entries[:limit]],
         # Les trois travaux qui alimentent la vue. L'interface s'en sert pour
