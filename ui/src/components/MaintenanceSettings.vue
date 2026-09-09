@@ -104,6 +104,50 @@ async function purge({ all = false } = {}) {
 
 const gb = (bytes) => (bytes / 1024 ** 3).toFixed(1)
 
+// --- Dossiers vides restes des rangements anterieurs ---------------------
+//
+// En DEUX temps, et pas par prudence excessive : un balayage destructeur sur
+// des centaines de dossiers ne doit pas partir du meme geste que celui qui
+// sert a le regarder.
+const vides = ref(null)
+const cherchantVides = ref(false)
+const nettoyant = ref(false)
+const videMessage = ref(null)
+
+async function chercherVides() {
+  cherchantVides.value = true
+  videMessage.value = null
+  try {
+    vides.value = await (await fetch('/api/library/empty-dirs')).json()
+  } catch {
+    videMessage.value = 'Serveur injoignable.'
+  } finally {
+    cherchantVides.value = false
+  }
+}
+
+async function nettoyerVides() {
+  nettoyant.value = true
+  try {
+    const res = await fetch('/api/library/empty-dirs/prune', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true }),
+    })
+    const body = await res.json()
+    if (res.ok) {
+      vides.value = body
+      videMessage.value =
+        `${body.removed} dossier(s) supprimé(s)` +
+        (body.failed?.length ? `, ${body.failed.length} en échec.` : '.')
+    } else {
+      videMessage.value = body.detail ?? 'Échec.'
+    }
+  } finally {
+    nettoyant.value = false
+  }
+}
+
 const purgingThumbs = ref(false)
 const thumbMessage = ref(null)
 
@@ -274,6 +318,44 @@ onMounted(loadTrash)
   </section>
 
   <section v-if="montre('renommage')">
+    <h3>Dossiers vides</h3>
+    <p class="note">
+      Ranger un fichier laisse derrière lui le dossier de la release. Le nettoyage
+      automatique ne rattrape que ce qu'il vient de vider : les carcasses des
+      rangements antérieurs restent, et le client de téléchargement en crée de son
+      côté — liens abandonnés, extractions ratées.
+    </p>
+    <p class="note">
+      <strong>Aucun fichier n'est touché.</strong> Un dossier n'est proposé que s'il ne
+      contient rien, ou seulement des dossiers eux-mêmes vides. Les sources elles-mêmes
+      ne sont jamais supprimées.
+    </p>
+
+    <div class="vides-actions">
+      <button :disabled="cherchantVides" @click="chercherVides">
+        {{ cherchantVides ? 'Recherche…' : 'Chercher les dossiers vides' }}
+      </button>
+      <button
+        v-if="vides?.count"
+        class="danger"
+        :disabled="nettoyant"
+        @click="nettoyerVides"
+      >
+        {{ nettoyant ? 'Suppression…' : `Supprimer ces ${vides.count} dossiers` }}
+      </button>
+    </div>
+
+    <p v-if="vides && !vides.count" class="empty">Aucun dossier vide.</p>
+    <ul v-else-if="vides" class="vides">
+      <li v-for="d in vides.dirs" :key="d"><code>{{ d }}</code></li>
+      <li v-if="vides.count > vides.dirs.length" class="more">
+        … et {{ vides.count - vides.dirs.length }} autres
+      </li>
+    </ul>
+    <p v-if="videMessage" class="ok-text">{{ videMessage }}</p>
+  </section>
+
+  <section v-if="montre('renommage')">
     <h3>Remettre la bibliothèque en conformité</h3>
     <p class="note">
       Quand un gabarit change, ce qui est déjà rangé garde des noms produits par une
@@ -341,6 +423,11 @@ h3 {
   border-radius: 5px; color: var(--text); font-family: var(--mono);
 }
 .purge .sep { flex: 1; }
+.vides-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.vides { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; }
+.vides code { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
+.vides .more { font-size: 11.5px; color: var(--text-faint); font-style: italic; margin-top: 4px; }
+
 .vignettes { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); flex-wrap: wrap; }
 .vignettes .warn-text { flex: 1; min-width: 240px; font-size: 11.5px; color: var(--text-faint); line-height: 1.55; }
 .danger { color: var(--text-faint); }

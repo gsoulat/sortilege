@@ -19,8 +19,10 @@ from dataclasses import dataclass, field
 from threading import Lock, Thread
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from ..config import get_settings
+from ..core.companions import find_empty_dirs
 from ..core.scanner import ScanResult, scan
 from ..core.snapshot import SCAN_KEY, SnapshotError, scan_in, scan_out
 from .deps import get_memory, get_store
@@ -69,6 +71,55 @@ class ScanJob:
 
 
 _job = ScanJob()
+
+
+class PruneRequest(BaseModel):
+    confirm: bool = False
+    """Obligatoire. La liste se consulte d'abord : un balayage destructeur sur
+    des centaines de dossiers ne doit pas partir du meme geste que celui qui
+    sert a le regarder."""
+
+
+@router.get("/empty-dirs")
+def read_empty_dirs() -> dict[str, object]:
+    """Dossiers vides sous les sources, sans rien supprimer.
+
+    Le nettoyage a la volee ne rattrape que ce qu'il vient de vider : les
+    carcasses des rangements anterieurs restent, et le client de telechargement
+    en cree de son cote.
+    """
+    store = get_store()
+    vides = find_empty_dirs(store.resolved_sources())
+    return {
+        "count": len(vides),
+        # Bornee : trois cents chemins suffisent a juger, et la liste entiere
+        # ne se lit pas de toute facon.
+        "dirs": [str(d) for d in vides[:300]],
+    }
+
+
+@router.post("/empty-dirs/prune")
+def prune_empty_dirs_endpoint(body: PruneRequest) -> dict[str, object]:
+    """Supprime les dossiers vides trouves. Ne touche a aucun fichier.
+
+    Ils sont supprimes et non mis en corbeille : un dossier vide ne contient
+    rien a recuperer. Les racines sont exclues, et l'ordre — les plus profonds
+    d'abord — permet a un parent devenu vide de partir dans la meme passe.
+    """
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="Le nettoyage doit etre confirme.")
+
+    store = get_store()
+    supprimes, echecs = 0, []
+    for chemin in find_empty_dirs(store.resolved_sources()):
+        try:
+            chemin.rmdir()
+            supprimes += 1
+        except OSError as exc:
+            echecs.append(f"{chemin} : {exc}")
+
+    logger.info("dossiers vides supprimes : %s", supprimes)
+    return {"removed": supprimes, "failed": echecs[:20], **read_empty_dirs()}
 
 
 def _reconcile(result: ScanResult) -> None:

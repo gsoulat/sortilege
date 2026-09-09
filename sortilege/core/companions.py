@@ -16,6 +16,7 @@ Deux notions distinctes, deliberement separees :
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from enum import StrEnum
@@ -241,3 +242,50 @@ def directory_now_empty(directory: Path) -> bool:
     except OSError:
         return False
     return True
+
+
+def _sans_interet(nom: str) -> bool:
+    """Un fichier systeme du NAS ne fait pas d'un dossier un dossier occupe."""
+    return nom.startswith(".") or nom in {"@eaDir", ".@__thumb"}
+
+
+def find_empty_dirs(roots: list[Path]) -> list[Path]:
+    """Dossiers vides sous les racines donnees, les plus profonds d'abord.
+
+    Le nettoyage a la volee ne rattrape que ce qu'il vient de vider. Une
+    bibliotheque constituee garde donc les carcasses des rangements anterieurs,
+    et le client de telechargement en cree de son cote — liens abandonnes,
+    extractions ratees.
+
+    Le parcours est REMONTANT, les feuilles avant les branches : un dossier qui
+    ne contient que des dossiers vides est vide lui aussi, et ne serait jamais
+    vu autrement. « Serie/Serie S01E01/ » compte ainsi pour deux.
+
+    Une racine n'est jamais renvoyee, meme vide : la supprimer ferait echouer
+    le scan suivant sur un dossier absent.
+    """
+    interdits = {r.resolve() for r in roots}
+    condamnes: set[Path] = set()
+
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for courant, sous_dossiers, fichiers in os.walk(root, topdown=False):
+            chemin = Path(courant)
+            try:
+                if chemin.resolve() in interdits:
+                    continue
+            except OSError:
+                continue
+
+            # Un seul vrai fichier suffit a le garder.
+            if any(not _sans_interet(nom) for nom in fichiers):
+                continue
+            # Et tous ses sous-dossiers doivent eux-memes etre condamnes.
+            if any(chemin / nom not in condamnes for nom in sous_dossiers):
+                continue
+
+            condamnes.add(chemin)
+
+    # Les plus profonds d'abord : c'est l'ordre dans lequel il faut supprimer.
+    return sorted(condamnes, key=lambda c: (-len(c.parts), str(c)))

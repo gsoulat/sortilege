@@ -316,3 +316,79 @@ def test_sans_corbeille_configuree_rien_n_est_evacue(tmp_path: Path, release: Pa
     apply_plan(plan, Journal(tmp_path / "j.jsonl"), dry_run=False, trash_root=None)
 
     assert (release / "RARBG.txt").is_file()
+
+
+# --- Balayage des dossiers vides --------------------------------------------
+#
+# Le nettoyage a la volee ne rattrape que ce qu'il vient de vider. Une
+# bibliotheque constituee garde les carcasses des rangements anterieurs, et le
+# client de telechargement en cree de son cote.
+
+
+def test_un_dossier_vide_est_trouve(tmp_path: Path) -> None:
+    from sortilege.core.companions import find_empty_dirs
+
+    (tmp_path / "Serie" / "S01E01").mkdir(parents=True)
+    trouves = find_empty_dirs([tmp_path])
+
+    assert tmp_path / "Serie" / "S01E01" in trouves
+
+
+def test_un_parent_de_dossiers_vides_est_vide_aussi(tmp_path: Path) -> None:
+    """« Serie/Serie S01E01/ » compte pour DEUX : sans parcours remontant, le
+    parent ne serait jamais vu, et une carcasse resterait par serie."""
+    from sortilege.core.companions import find_empty_dirs
+
+    (tmp_path / "Serie" / "S01E01").mkdir(parents=True)
+    (tmp_path / "Serie" / "S01E02").mkdir()
+
+    trouves = find_empty_dirs([tmp_path])
+
+    assert tmp_path / "Serie" in trouves
+    assert len(trouves) == 3
+
+
+def test_un_dossier_avec_un_fichier_est_epargne(tmp_path: Path) -> None:
+    from sortilege.core.companions import find_empty_dirs
+
+    plein = tmp_path / "Occupe"
+    plein.mkdir()
+    (plein / "film.mkv").write_text("video", encoding="utf-8")
+
+    assert plein not in find_empty_dirs([tmp_path])
+
+
+def test_les_fichiers_systeme_du_nas_ne_comptent_pas(tmp_path: Path) -> None:
+    """Sinon aucun dossier ne serait jamais considere vide sur un NAS."""
+    from sortilege.core.companions import find_empty_dirs
+
+    d = tmp_path / "AvecDSStore"
+    d.mkdir()
+    (d / ".DS_Store").write_text("x", encoding="utf-8")
+
+    assert d in find_empty_dirs([tmp_path])
+
+
+def test_une_racine_n_est_jamais_proposee(tmp_path: Path) -> None:
+    """La supprimer ferait echouer le scan suivant sur un dossier absent."""
+    from sortilege.core.companions import find_empty_dirs
+
+    assert tmp_path not in find_empty_dirs([tmp_path])
+
+
+def test_les_plus_profonds_viennent_en_premier(tmp_path: Path) -> None:
+    """C'est l'ordre dans lequel il faut supprimer : un parent ne se retire
+    qu'une fois ses enfants partis."""
+    from sortilege.core.companions import find_empty_dirs
+
+    (tmp_path / "a" / "b" / "c").mkdir(parents=True)
+    trouves = find_empty_dirs([tmp_path])
+
+    profondeurs = [len(d.parts) for d in trouves]
+    assert profondeurs == sorted(profondeurs, reverse=True)
+
+
+def test_une_racine_absente_ne_leve_pas(tmp_path: Path) -> None:
+    from sortilege.core.companions import find_empty_dirs
+
+    assert find_empty_dirs([tmp_path / "jamais-creee"]) == []
