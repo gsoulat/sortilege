@@ -1,6 +1,34 @@
 # CHANGELOG
 
 
+## v0.33.1 (2026-09-09)
+
+### Bug Fixes
+
+- **diagnostic**: Regarder le DOSSIER parent, pas le fichier
+  ([`0ca9bbd`](https://github.com/gsoulat/sortilege/commit/0ca9bbd8e4a0e4c9c6470c69beb8b9f254c7e7de))
+
+Le diagnostic ajoute juste avant designait le mauvais objet. Sous Unix, supprimer ou deplacer un
+  fichier exige le droit d'ECRITURE SUR LE REPERTOIRE qui le contient — jamais sur le fichier
+  lui-meme. Un fichier parfaitement accessible dans un dossier verrouille produit exactement «
+  Permission denied », et regarder le fichier envoie chercher la ou il n'y a rien.
+
+Le cas reel le montrait : JDownloader ecrit en USER_ID=1000, ce qui est deja l'identite par defaut
+  de Sortilege. Conseiller d'aligner PUID aurait fait perdre du temps sans rien changer.
+
+Le message donne donc maintenant le proprietaire ET le mode du dossier, puis adapte le conseil selon
+  ce qu'il constate :
+
+- identites differentes -> la ligne PUID/PGID a recopier ; - proprietaire sans droit d'ecriture ->
+  corriger le mode du dossier ; - identites concordantes -> chercher ailleurs, et ou : ACL du
+  partage, montage en lecture seule, volume different de celui qu'on croit.
+
+Ce dernier cas est le plus utile. Un diagnostic qui repete « aligne PUID » alors que PUID est deja
+  aligne ne fait pas qu'echouer a aider : il envoie dans la mauvaise direction avec assurance.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.33.0 (2026-09-09)
 
 ### Bug Fixes
