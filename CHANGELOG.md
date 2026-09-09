@@ -1,6 +1,38 @@
 # CHANGELOG
 
 
+## v0.32.0 (2026-09-09)
+
+### Features
+
+- **revue**: Confirmer toute une serie d un seul bouton
+  ([`55ccace`](https://github.com/gsoulat/sortilege/commit/55ccace5d264252c75234a4285f3b743df62ca81))
+
+Quinze episodes de la meme serie demandaient quinze clics. Le bouton de ligne confirmait en realite
+  deja toute la serie — mais rien ne le disait, et un bouton dont on ignore la portee est aussi
+  inutilisable qu'un bouton absent : on ne sait pas ce qu'on vient de valider.
+
+Les deux niveaux sont desormais explicites et l'ecrivent :
+
+- « C'est bon pour les 15 », en tete du bloc d'arbitrage, pour toute l'oeuvre. - « C'est bon », sur
+  une ligne, pour ce fichier seul.
+
+La confirmation groupee passe par les IDENTIFIANTS des plans affiches, et non par une deduction a
+  partir du titre. La deduction echoue des qu'une meme oeuvre a ete lue sous deux orthographes — cas
+  frequent entre le titre d'une release et celui d'un fournisseur — alors que l'interface, elle,
+  sait precisement ce qu'elle montre.
+
+Le defaut cote serveur passe donc a « ce fichier seul ». Elargir la portee en silence est exactement
+  le defaut qu'on cherche a eviter ; qui veut toute une serie le demande. « Ce n'est pas ca » garde
+  son comportement inverse, et c'est volontaire : corriger une identification fausse doit valoir
+  pour l'oeuvre entiere, sinon on repond douze fois a la meme question.
+
+10 tests, portant sur la portee et sur ce qui ne doit PAS bouger : l'autre serie, la destination
+  deja calculee, et les films homonymes qui restent deux oeuvres distinctes.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.31.0 (2026-09-09)
 
 ### Features
