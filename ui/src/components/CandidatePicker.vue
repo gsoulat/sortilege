@@ -1,9 +1,54 @@
 <script setup>
-defineProps({
+import { ref, computed } from 'vue'
+
+const props = defineProps({
   candidates: { type: Array, required: true },
   busy: { type: Boolean, default: false },
+  // Nécessaire pour chercher : le serveur retrouve le type d'œuvre et le
+  // fournisseur à interroger à partir du plan, jamais à partir du client.
+  planId: { type: String, default: '' },
 })
 defineEmits(['choose', 'close'])
+
+/**
+ * Les propositions viennent du titre LU dans le nom de fichier. Quand ce nom
+ * est trop abîmé — un titre traduit, une abréviation, une faute du groupe de
+ * release — aucune ne peut être bonne, et on voyait que c'était faux sans
+ * pouvoir le corriger. D'où la recherche à la main.
+ */
+const requete = ref('')
+const trouves = ref(null)
+const cherche = ref(false)
+const erreur = ref(null)
+
+const liste = computed(() => trouves.value ?? props.candidates)
+
+async function chercher() {
+  const q = requete.value.trim()
+  if (q.length < 2 || !props.planId) return
+  cherche.value = true
+  erreur.value = null
+  try {
+    const res = await fetch(`/api/review/${props.planId}/search?q=${encodeURIComponent(q)}`)
+    const body = await res.json()
+    if (res.ok) {
+      trouves.value = body.results
+      if (!body.results.length) erreur.value = `Aucun résultat pour « ${q} ».`
+    } else {
+      erreur.value = body.detail ?? 'Recherche impossible.'
+    }
+  } catch {
+    erreur.value = 'Serveur injoignable.'
+  } finally {
+    cherche.value = false
+  }
+}
+
+function revenir() {
+  trouves.value = null
+  requete.value = ''
+  erreur.value = null
+}
 </script>
 
 <template>
@@ -16,8 +61,25 @@ defineEmits(['choose', 'close'])
       <button class="close" @click="$emit('close')">Fermer</button>
     </div>
 
+    <div v-if="planId" class="recherche">
+      <input
+        type="search"
+        placeholder="Aucune ne convient ? Cherche par titre…"
+        v-model="requete"
+        @keyup.enter="chercher"
+      />
+      <button :disabled="cherche || requete.trim().length < 2" @click="chercher">
+        {{ cherche ? 'Recherche…' : 'Chercher' }}
+      </button>
+      <button v-if="trouves" class="retour" @click="revenir">Propositions d'origine</button>
+    </div>
+    <p v-if="erreur" class="err">{{ erreur }}</p>
+    <p v-if="trouves && trouves.length" class="source">
+      {{ trouves.length }} résultat(s) pour « {{ requete.trim() }} »
+    </p>
+
     <ul class="grid">
-      <li v-for="c in candidates" :key="`${c.provider}-${c.external_id}`">
+      <li v-for="c in liste" :key="`${c.provider}-${c.external_id}`">
         <button class="card" :disabled="busy" @click="$emit('choose', c)">
           <div class="poster">
             <img v-if="c.poster_url" :src="c.poster_url" :alt="c.title" loading="lazy" />
@@ -45,6 +107,17 @@ defineEmits(['choose', 'close'])
 .head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 11px; }
 .hint { font-size: 12px; color: var(--text-faint); line-height: 1.5; flex: 1; }
 .close { font-size: 11.5px; padding: 3px 9px; flex: none; }
+
+.recherche { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+.recherche input {
+  flex: 1; min-width: 180px; font-size: 12.5px; padding: 5px 9px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text);
+}
+.recherche button { font-size: 11.5px; padding: 3px 11px; flex: none; }
+.recherche .retour { color: var(--text-faint); }
+.err { margin: 0 0 9px; font-size: 12px; color: var(--err); }
+.source { margin: 0 0 9px; font-size: 11.5px; color: var(--text-faint); }
 
 .grid {
   list-style: none; margin: 0; padding: 0;

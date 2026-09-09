@@ -834,6 +834,87 @@ def confirm(plan_id: str, body: ConfirmRequest) -> dict[str, object]:
     return {"confirmed": len(targets), "queue": _queue()}
 
 
+MAX_SEARCH_RESULTS = 12
+"""Au-dela, une grille de jaquettes cesse d'aider a decider et redevient une
+liste a lire — le contraire de ce qu'on cherche."""
+
+
+@router.get("/{plan_id}/search")
+async def search_candidates(plan_id: str, q: str) -> dict[str, object]:
+    """Cherche une oeuvre par son titre, quand aucune proposition ne convient.
+
+    Les candidats proposes viennent du titre LU dans le nom de fichier. Quand
+    ce nom est trop abime — un titre traduit, une abreviation, une faute de
+    frappe du groupe de release — aucune des propositions ne peut etre bonne,
+    et l'utilisateur se retrouvait sans issue : il voyait que c'etait faux sans
+    pouvoir le corriger.
+
+    Les resultats REJOIGNENT les alternatives du plan. C'est ce qui permet a
+    « choisir » de rester inchange, et surtout de conserver son invariant : on
+    ne peut retenir qu'un candidat que le serveur a lui-meme rapporte, jamais
+    un identifiant fabrique par le client.
+    """
+    requete = q.strip()
+    if len(requete) < 2:
+        raise HTTPException(status_code=400, detail="Cherche au moins deux caracteres.")
+
+    with _lock:
+        plan = _plans.get(plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Plan inconnu ou deja applique.")
+
+    conf = get_settings()
+    if not conf.tmdb_api_key:
+        # Le dire plutot que renvoyer une liste vide : sans cela, la recherche
+        # semble ne rien trouver alors qu'elle n'a jamais eu lieu, et on
+        # cherche l'erreur du cote de sa requete.
+        raise HTTPException(
+            status_code=503,
+            detail="Aucune cle TheMovieDB : la recherche ne peut rien interroger.",
+        )
+
+    tmdb = TMDBProvider(conf.tmdb_api_key)
+    anilist = AniListProvider()
+    trouves: list = []
+    try:
+        if plan.kind == "movie":
+            trouves += await tmdb.search_movie(requete, None)
+        else:
+            trouves += await tmdb.search_series(requete, None)
+            # Les animes sont mal couverts par TMDB seul, et l'utilisateur qui
+            # cherche a la main est precisement dans un cas difficile.
+            if plan.kind == "anime":
+                trouves += await anilist.search_anime(requete, None)
+    finally:
+        await tmdb.aclose()
+        await anilist.aclose()
+
+    trouves = trouves[:MAX_SEARCH_RESULTS]
+
+    with _lock:
+        vivant = _plans.get(plan_id)
+        if vivant is not None:
+            connus = {(c.provider, c.external_id) for c in vivant.alternatives}
+            vivant.alternatives = [
+                *vivant.alternatives,
+                *[c for c in trouves if (c.provider, c.external_id) not in connus],
+            ]
+
+    return {
+        "results": [
+            {
+                "provider": c.provider,
+                "external_id": c.external_id,
+                "title": c.title,
+                "year": c.year,
+                "poster_url": c.poster_url,
+                "overview": c.overview[:200],
+            }
+            for c in trouves
+        ]
+    }
+
+
 class ChooseRequest(BaseModel):
     provider: str
     external_id: str

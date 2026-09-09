@@ -790,8 +790,9 @@ onUnmounted(() => clearInterval(poller))
             <template v-for="p in w.pending.review" :key="`pick-${p.id}`">
               <CandidatePicker
                 v-if="picking === p.id"
-                :candidates="p.alternatives"
+                :candidates="p.alternatives ?? []"
                 :busy="choosing"
+                :plan-id="p.id"
                 @choose="(c) => choose(p.id, c)"
                 @close="picking = null"
               />
