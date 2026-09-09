@@ -1,6 +1,110 @@
 # CHANGELOG
 
 
+## v0.29.0 (2026-09-09)
+
+### Features
+
+- **entretien**: Rescan Jellyfin, vidage de la corbeille, remise en conformite
+  ([`6ef593e`](https://github.com/gsoulat/sortilege/commit/6ef593e3bdea2586619c68a4343daca6c124d748))
+
+Trois boucles laissees ouvertes, fermees ensemble.
+
+**Le serveur multimedia n'apprenait jamais qu'un fichier venait d'arriver.** Un film range
+  n'apparaissait dans Jellyfin qu'au prochain scan planifie, soit plusieurs heures. Un POST apres
+  rangement le rend visible dans la minute.
+
+C'est deliberement un appel et non une fusion. Forker Jellyfin couterait une reecriture complete (C#
+  contre Python), un rebase perpetuel sur un projet dont les correctifs de securite comptent, et la
+  perte de la separation qui fait qu'un bug de rangement n'empeche pas de regarder un film. L'appel
+  apporte l'essentiel du benefice pour une fraction infime du cout.
+
+L'adresse est restreinte au reseau local : le champ est saisi depuis le navigateur et appele par le
+  SERVEUR, donc sans restriction il ferait du conteneur un relais de requetes. Les redirections ne
+  sont pas suivies — elles meneraient hors du perimetre qu'on vient de verifier — et 169.254.0.0/16
+  est ecarte : « prive » au sens de Python, mais c'est l'adresse des metadonnees d'instance, et
+  aucun serveur multimedia n'y vit.
+
+**La corbeille ne se vidait pas.** Sortilege ne supprimant jamais, elle grossissait indefiniment et
+  l'espace qu'on croyait recuperer ne l'etait jamais. Elle s'inventorie maintenant lot par lot, et
+  se vide au-dela d'un age choisi. Le delai EST la protection : c'est la fenetre pendant laquelle on
+  peut encore s'apercevoir qu'un fichier a ete evacue a tort, et un delai nul ferait de la corbeille
+  une suppression avec un detour. C'est le seul endroit de l'application qui supprime reellement ;
+  un dossier au nom inattendu y est ignore plutot que supprime — s'il est la, ce n'est pas nous qui
+  l'avons mis.
+
+**Ce qui etait deja range ne suivait pas les changements de gabarit.** Le pipeline ignore
+  deliberement les fichiers en bibliotheque, sans quoi chaque scan proposerait de deplacer X vers X.
+  Un mode dedie compare l'existant au gabarit courant et propose ce qui differe — dans la file de
+  revue, jamais directement : un renommage de masse sur une bibliotheque constituee ne doit pas
+  partir d'un seul clic. Aucune identification n'est refaite, ce qui corrige la STRUCTURE et non
+  l'identite : un fichier range sous « severance.s01e01 » ressort « severance - S01E01 », minuscule
+  comprise. Seul le fournisseur connait la casse officielle, et on ne l'interroge pas — une mauvaise
+  reponse renommerait des fichiers corrects.
+
+26 tests, portant surtout sur ce que ces trois fonctions refusent de faire.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+- **mediatheque**: Filtres par type et reperage des fichiers trop lourds
+  ([`072e63b`](https://github.com/gsoulat/sortilege/commit/072e63b6d87771ff8aa2771eeec3aa0964fe279c))
+
+Savoir quoi re-telecharger ou re-encoder pour gagner de la place demandait d'ouvrir les dossiers un
+  par un. La vue le dit maintenant elle-meme.
+
+La mesure n'est pas la taille brute, qui ne dit rien : une serie de trente episodes pese forcement
+  plus qu'un film, et un film de trois heures plus qu'un de quatre-vingt-dix minutes. Ce qui se
+  compare, c'est le poids d'UN fichier, rapporte a l'habitude des oeuvres du MEME TYPE — comparer un
+  episode a un film ferait passer tous les films pour des anomalies.
+
+La reference est la MEDIANE, pas la moyenne. La moyenne serait tiree vers le haut par les quelques
+  remux enormes qu'on cherche justement a reperer : le seuil se deplacerait avec eux et le plus gros
+  fichier se cacherait lui-meme. En dessous de trois oeuvres d'un type, aucun verdict — une mediane
+  sur deux valeurs ne dit rien, et signaler une anomalie sur cette base serait du bruit.
+
+Une oeuvre a deux fois le poids habituel est signalee « ×2,1 le poids habituel », avec la
+  comparaison chiffree en infobulle. Le filtre dedie les trie du plus lourd au plus leger, l'ordre
+  utile quand on cherche de la place.
+
+S'y ajoutent les filtres par type — films, series, animes — croisables avec les filtres d'etat, et
+  le total occupe par la bibliotheque.
+
+7 tests, dont la resistance de la mediane aux extremes.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+- **mediatheque**: Une seule vue pour ce qu on possede et ce qui attend
+  ([`0512bc6`](https://github.com/gsoulat/sortilege/commit/0512bc62bebf08233c78378aba8bfdff22a968f8))
+
+« À ranger », « Ma collection » et « File de revue » montraient trois moities du meme objet.
+  Repondre a « ou en est cette serie ? » demandait de passer par les trois, en recomposant
+  mentalement ce que chacune ne montrait qu'a moitie.
+
+« Ma medhiateque » les reunit : une ligne par oeuvre, portant a la fois ce qu'on possede — saisons,
+  episodes manquants, doublons — et ce qui attend d'etre range. Le detail se deplie, et chaque
+  oeuvre s'execute seule.
+
+Deux partis pris :
+
+**Rien n'attend la fin de rien.** L'etat est relu pendant qu'un travail tourne, et la liste se
+  remplit. « Executer » agit sur ce qui est pret a cet instant, y compris pendant que
+  l'identification continue. Sur six mille fichiers, attendre la fin d'un lot de cent avant de
+  pouvoir agir n'etait pas tenable.
+
+**Ce qui demande une action passe devant.** Le tri n'est pas alphabetique : il enterrerait les
+  quelques lignes actionnables sous des centaines de lignes au repos, ce que la vue unique existe
+  precisement pour eviter.
+
+La file de revue reste un onglet a part. Sur un lot de plusieurs centaines de fichiers ambigus, une
+  grille de jaquettes se parcourt mieux qu'une arborescence depliee — ce sont deux gestes
+  differents, et les confondre aurait rendu l'arbitrage plus penible, pas moins.
+
+Rien n'est perdu au passage : la mise en corbeille des doublons, seule action que « Ma collection »
+  portait, est reprise telle quelle — a la corbeille, jamais a la suppression.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.28.0 (2026-09-09)
 
 ### Features
