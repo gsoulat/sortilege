@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed } from 'vue'
+import ImageZoom from './ImageZoom.vue'
 
 const props = defineProps({
   candidates: { type: Array, required: true },
@@ -44,6 +45,11 @@ async function chercher() {
   }
 }
 
+// Agrandissement SEPARE du choix. Ici, cliquer une carte retient l'oeuvre :
+// zoomer au meme endroit rendrait le geste imprevisible, et on validerait une
+// identification en croyant regarder l'affiche.
+const zoom = ref(null)
+
 function revenir() {
   trouves.value = null
   requete.value = ''
@@ -84,6 +90,17 @@ function revenir() {
           <div class="poster">
             <img v-if="c.poster_url" :src="c.poster_url" :alt="c.title" loading="lazy" />
             <span v-else class="noposter">sans affiche</span>
+            <!-- Bouton distinct : cliquer la carte CHOISIT, la loupe agrandit. -->
+            <span
+              v-if="c.poster_url"
+              class="loupe"
+              role="button"
+              title="Agrandir l'affiche"
+              @click.stop.prevent="zoom = {
+                src: c.poster_url,
+                legende: `${c.title}${c.year ? ` (${c.year})` : ''}`,
+              }"
+            >⌕</span>
           </div>
           <div class="label">
             <span class="title">{{ c.title }}</span>
@@ -95,6 +112,8 @@ function revenir() {
         </button>
       </li>
     </ul>
+
+    <ImageZoom v-if="zoom" :src="zoom.src" :legende="zoom.legende" @close="zoom = null" />
   </div>
 </template>
 
@@ -133,9 +152,18 @@ function revenir() {
 .card:disabled { opacity: .5; }
 
 .poster {
+  position: relative;
   aspect-ratio: 2 / 3; background: var(--surface-2);
   display: grid; place-items: center; overflow: hidden;
 }
+.loupe {
+  position: absolute; top: 4px; right: 4px;
+  width: 22px; height: 22px; display: grid; place-items: center;
+  font-size: 15px; line-height: 1; cursor: zoom-in;
+  background: color-mix(in srgb, #000 62%, transparent); color: #fff;
+  border-radius: 4px; opacity: 0; transition: opacity .12s;
+}
+.card:hover .loupe, .loupe:hover { opacity: 1; }
 .poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .noposter { font-size: 10px; color: var(--text-faint); }
 

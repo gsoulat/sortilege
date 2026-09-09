@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import CandidatePicker from './CandidatePicker.vue'
+import ImageZoom from './ImageZoom.vue'
 
 /**
  * Vue unique de la médiathèque.
@@ -445,6 +446,15 @@ async function togglePlayer(id) {
   }
 }
 
+// Image agrandie, ou null. Une jaquette de trente pixels ne permet pas de
+// distinguer deux saisons d'une meme serie — et c'est pourtant sur elle qu'on
+// tranche.
+const zoom = ref(null)
+
+function agrandir(src, legende) {
+  if (src) zoom.value = { src, legende }
+}
+
 function toggle(key) {
   const next = new Set(open.value)
   next.has(key) ? next.delete(key) : next.add(key)
@@ -650,7 +660,15 @@ onUnmounted(() => clearInterval(poller))
       <li v-for="w in listed" :key="w.key" :class="{ open: open.has(w.key) }">
         <button class="row" @click="toggle(w.key)">
           <span class="chev" :class="{ closed: !open.has(w.key) }">▾</span>
-          <img v-if="w.poster_url" class="thumb" :src="w.poster_url" :alt="w.title" loading="lazy" />
+          <img
+            v-if="w.poster_url"
+            class="thumb zoomable"
+            :src="w.poster_url"
+            :alt="w.title"
+            loading="lazy"
+            title="Agrandir"
+            @click.stop="agrandir(w.poster_url, `${w.title}${w.year ? ` (${w.year})` : ''}`)"
+          />
           <span v-else class="thumb empty"></span>
 
           <span class="title">
@@ -707,6 +725,12 @@ onUnmounted(() => clearInterval(poller))
                         :src="`/api/media/plan/${p.id}/thumb?at=${pos}`"
                         :alt="`à ${Math.round(pos * 100)} %`"
                         loading="lazy"
+                        title="Agrandir"
+                        class="zoomable"
+                        @click="agrandir(
+                          `/api/media/plan/${p.id}/thumb?at=${pos}`,
+                          `${shortPath(p.source)} — à ${Math.round(pos * 100)} % du fichier`,
+                        )"
                       />
                     </div>
                     <p class="thumb-note">
@@ -773,6 +797,12 @@ onUnmounted(() => clearInterval(poller))
                         :src="`/api/media/plan/${p.id}/thumb?at=${pos}`"
                         :alt="`à ${Math.round(pos * 100)} %`"
                         loading="lazy"
+                        title="Agrandir"
+                        class="zoomable"
+                        @click="agrandir(
+                          `/api/media/plan/${p.id}/thumb?at=${pos}`,
+                          `${shortPath(p.source)} — à ${Math.round(pos * 100)} % du fichier`,
+                        )"
                       />
                     </div>
                     <p class="thumb-note">
@@ -848,6 +878,13 @@ onUnmounted(() => clearInterval(poller))
         </div>
       </li>
     </ul>
+
+    <ImageZoom
+      v-if="zoom"
+      :src="zoom.src"
+      :legende="zoom.legende"
+      @close="zoom = null"
+    />
 
     <div v-if="data.has_more" class="plus">
       <button :disabled="busy" @click="chargerPlus">
@@ -951,6 +988,8 @@ onUnmounted(() => clearInterval(poller))
 
 .thumb { width: 30px; height: 45px; border-radius: 3px; object-fit: cover; background: var(--surface-2); flex: none; }
 .thumb.empty { border: 1px dashed var(--border); }
+.zoomable { cursor: zoom-in; }
+.zoomable:hover { outline: 1px solid var(--accent); outline-offset: 1px; }
 
 .title { flex: 1; min-width: 0; font-size: 13.5px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .year { color: var(--text-faint); }
