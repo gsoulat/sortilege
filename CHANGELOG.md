@@ -1,6 +1,40 @@
 # CHANGELOG
 
 
+## v0.26.0 (2026-09-09)
+
+### Features
+
+- **annulation**: Annuler une seule oeuvre au lieu de toute la session
+  ([`a2f817b`](https://github.com/gsoulat/sortilege/commit/a2f817b1cf0810a7d986ba1a54bec25301e09b7b))
+
+« Tout annuler (703) » etait la seule option offerte. Or le besoin reel est l'inverse : une serie
+  mal identifiee au milieu de sept cents deplacements corrects. Defaire les sept cents pour corriger
+  douze fichiers n'est pas une annulation, c'est une punition — et personne ne clique sur ce bouton,
+  donc l'erreur reste.
+
+Le journal retient desormais l'oeuvre concernee au moment du rangement. La file d'annulation se lit
+  groupee par oeuvre, avec un bouton par ligne. Les entrees anterieures a ce champ restent
+  annulables : faute de titre, l'oeuvre est deduite du dossier de destination — une deduction, d'ou
+  la preference donnee au titre des qu'il existe.
+
+Deux points qui decident si c'est utilisable :
+
+**Ce qui n'etait pas vise ne bouge pas.** Une annulation qui deborde sur les voisins est pire que
+  pas d'annulation : elle deplace des fichiers dont le rangement avait ete valide.
+
+**Le journal reste ordonne apres coup.** Les operations annulees peuvent se trouver n'importe ou
+  dedans, pas seulement a la fin ; sans remise en ordre, « annuler les N dernieres » deferait
+  ensuite autre chose que les dernieres.
+
+Annuler un episode ramene aussi ses sous-titres : un retour arriere a moitie fait laisserait la
+  video sans ses compagnons, exactement la perte qu'on cherche a eviter.
+
+14 tests.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.25.0 (2026-09-08)
 
 ### Documentation
