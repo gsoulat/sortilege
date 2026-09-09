@@ -310,14 +310,17 @@ async function trashDuplicates(work) {
  * est très souvent correct — le score dit l'incertitude de la MACHINE, pas
  * celle de la personne qui regarde.
  */
-async function confirm(plan) {
+async function confirm(plan, { ids = null } = {}) {
   choosing.value = true
   try {
-    const out = await call(`/api/review/${plan.id}/confirm`, {})
+    // Les identifiants exacts plutôt qu'un « toute la série » déduit du titre :
+    // une même œuvre peut avoir été lue sous deux orthographes, et l'interface
+    // sait précisément ce qu'elle affiche.
+    const out = await call(`/api/review/${plan.id}/confirm`, { plan_ids: ids })
     if (out) {
       message.value =
         out.confirmed > 1
-          ? `${out.confirmed} épisodes confirmés — prêts à ranger.`
+          ? `${out.confirmed} fichiers confirmés — prêts à ranger.`
           : 'Confirmé — prêt à ranger.'
       await load()
     }
@@ -560,7 +563,21 @@ onUnmounted(() => clearInterval(poller))
 
           <!-- Arbitrage : les jaquettes tranchent en une seconde -->
           <section v-if="w.pending.review.length" class="block">
-            <div class="block-head"><h4>À arbitrer</h4></div>
+            <div class="block-head">
+              <h4>À arbitrer</h4>
+              <!-- La portée est écrite sur le bouton. Un bouton par ligne qui
+                   agirait en douce sur toute la série serait pire qu'absent :
+                   on ne saurait pas ce qu'on vient de valider. -->
+              <button
+                class="small ok"
+                :disabled="choosing"
+                @click="confirm(w.pending.review[0], { ids: w.pending.review.map((p) => p.id) })"
+              >
+                C'est bon pour {{ w.pending.review.length > 1
+                  ? `les ${w.pending.review.length}`
+                  : 'celui-ci' }}
+              </button>
+            </div>
             <ul class="files">
               <template v-for="p in w.pending.review" :key="p.id">
                 <li class="reviewable">
@@ -570,7 +587,12 @@ onUnmounted(() => clearInterval(poller))
                           @click="togglePlayer(p.id)">
                     {{ playing === p.id ? 'Fermer' : '▶ Voir' }}
                   </button>
-                  <button class="small ok" :disabled="choosing" @click="confirm(p)">
+                  <button
+                    class="small ok"
+                    :disabled="choosing"
+                    title="Confirme ce fichier seul"
+                    @click="confirm(p)"
+                  >
                     C'est bon
                   </button>
                   <button class="small" @click="picking = picking === p.id ? null : p.id">

@@ -698,11 +698,20 @@ def _kind_of(scanned) -> str:
 
 
 class ConfirmRequest(BaseModel):
-    whole_series: bool = True
+    whole_series: bool = False
     """Confirme aussi les autres episodes de la meme oeuvre.
 
-    L'identification porte sur l'oeuvre, pas sur le fichier : valider episode
-    par episode reviendrait a repondre douze fois a la meme question."""
+    Faux par defaut, contrairement a « Ce n'est pas ca » : elargir la portee en
+    silence est precisement le defaut qu'on cherche a eviter — on ne saurait
+    pas ce qu'on vient de valider. Qui veut toute une serie le demande, et
+    l'interface l'ecrit sur son bouton."""
+
+    plan_ids: list[str] | None = None
+    """Fichiers a confirmer, quand l'appelant les connait exactement.
+
+    Prime sur ``whole_series`` : deduire l'ensemble d'un titre echoue des qu'une
+    meme oeuvre a ete lue sous deux orthographes, alors que l'interface, elle,
+    sait precisement ce qu'elle affiche."""
 
 
 @router.post("/{plan_id}/confirm")
@@ -729,13 +738,16 @@ def confirm(plan_id: str, body: ConfirmRequest) -> dict[str, object]:
         )
 
     with _lock:
-        targets = [plan]
-        if body.whole_series and plan.kind != "movie" and plan.title:
+        if body.plan_ids:
+            targets = [_plans[pid] for pid in body.plan_ids if pid in _plans] or [plan]
+        elif body.whole_series and plan.kind != "movie" and plan.title:
             targets = [
                 p
                 for p in _plans.values()
                 if p.title == plan.title and p.kind == plan.kind and p.decision is not Decision.AUTO
             ] or [plan]
+        else:
+            targets = [plan]
 
         for target in targets:
             # AUTO et `manual` : un accord explicite vaut mieux que n'importe
