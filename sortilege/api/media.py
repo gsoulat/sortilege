@@ -193,6 +193,29 @@ def _cache_evict() -> None:
             continue
 
 
+def purge_thumbnails() -> int:
+    """Vide le cache des vignettes. Appele a chaque scan.
+
+    Les cles incluent taille et date, donc une vignette perimee n'est jamais
+    SERVIE — mais elle n'est jamais liberee non plus. Un scan est le moment ou
+    l'on sait que la bibliotheque a bouge : c'est la que le menage a le plus de
+    sens, et le cout est nul puisque les images se reconstruisent a la demande.
+    """
+    supprimees = 0
+    try:
+        for image in CACHE_DIR.glob("*.jpg"):
+            try:
+                image.unlink()
+                supprimees += 1
+            except OSError:
+                continue
+    except OSError:
+        return supprimees
+    if supprimees:
+        logger.info("cache de vignettes vide : %s image(s)", supprimees)
+    return supprimees
+
+
 def _ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
 
@@ -300,6 +323,17 @@ def thumbnail(plan_id: str, at: float = 0.5) -> Response:
         # — c'est lui qui evite de relancer ffmpeg, et il suffit.
         headers={"Cache-Control": "no-store"},
     )
+
+
+@router.post("/thumbs/purge")
+def purge_cache() -> dict[str, object]:
+    """Vide le cache des vignettes a la demande.
+
+    Il se vide deja a chaque scan ; ce bouton sert quand on veut recuperer la
+    place sans relancer un scan complet, ou quand on soupconne une image de ne
+    pas correspondre.
+    """
+    return {"removed": purge_thumbnails()}
 
 
 @router.get("/plan/{plan_id}/positions")

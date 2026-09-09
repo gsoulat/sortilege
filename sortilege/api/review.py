@@ -279,6 +279,40 @@ def _plan_status() -> dict[str, object]:
     }
 
 
+def reconcile_with_scan(present: set[str]) -> dict[str, int]:
+    """Remet la file en accord avec ce qu'un nouveau scan a reellement trouve.
+
+    Un rescan ne remettait rien d'aplomb. Deux etats survivaient au-dela de
+    leur objet :
+
+    - **Les plans dont le fichier a disparu.** Range, evacue, supprime a la
+      main : le plan restait affiche, proposait un deplacement impossible, et
+      echouait a l'application. La file ne se vidait donc jamais tout a fait.
+    - **Les chemins marques comme deja planifies.** Ils empechaient de
+      recalculer un fichier revenu sous le meme nom — un telechargement refait
+      apres un echec, par exemple, qu'on ne pouvait plus identifier.
+
+    Les deux sont donc restreints a ce qui EXISTE dans le scan qui vient
+    d'aboutir. Ce qui est toujours la ne bouge pas : un arbitrage en attente
+    sur un fichier present reste en attente, c'est du travail humain.
+    """
+    with _lock:
+        perimes = [pid for pid, plan in _plans.items() if str(plan.source) not in present]
+        for pid in perimes:
+            del _plans[pid]
+        oublies = _job.done_paths - present
+        _job.done_paths &= present
+
+    if perimes or oublies:
+        _persist_plans()
+        logger.info(
+            "file recalee sur le scan : %s plan(s) perime(s), %s chemin(s) oublie(s)",
+            len(perimes),
+            len(oublies),
+        )
+    return {"dropped_plans": len(perimes), "forgotten_paths": len(oublies)}
+
+
 def planned_paths() -> set[str]:
     """Fichiers deja passes par le calcul, meme si leur plan n'existe plus.
 

@@ -71,6 +71,19 @@ class ScanJob:
 _job = ScanJob()
 
 
+def _reconcile(result: ScanResult) -> None:
+    """Recale la file et le cache sur ce que le scan vient de trouver.
+
+    Importe ici et non en tete du module : review importe library, et l'inverse
+    au chargement fermerait le cycle.
+    """
+    from . import media, review
+
+    present = {str(f.path) for f in result.files}
+    review.reconcile_with_scan(present)
+    media.purge_thumbnails()
+
+
 def _persist_scan() -> None:
     """Ecrit le scan courant sur disque. Ne leve jamais.
 
@@ -154,6 +167,7 @@ def _run(roots, deep: bool, limit: int | None, library_root) -> None:
         _job.result = result
         _job.error = None
         _persist_scan()
+        _reconcile(result)
         logger.info(
             "scan termine : %s fichiers, %s ignores, %s erreurs",
             result.total,

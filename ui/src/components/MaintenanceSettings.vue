@@ -104,6 +104,25 @@ async function purge({ all = false } = {}) {
 
 const gb = (bytes) => (bytes / 1024 ** 3).toFixed(1)
 
+const purgingThumbs = ref(false)
+const thumbMessage = ref(null)
+
+async function purgeThumbs() {
+  purgingThumbs.value = true
+  thumbMessage.value = null
+  try {
+    const res = await fetch('/api/media/thumbs/purge', { method: 'POST' })
+    const body = await res.json()
+    thumbMessage.value = res.ok
+      ? `${body.removed} aperçu(s) supprimé(s). Ils se reconstruiront à la demande.`
+      : (body.detail ?? 'Échec.')
+  } catch {
+    thumbMessage.value = 'Serveur injoignable.'
+  } finally {
+    purgingThumbs.value = false
+  }
+}
+
 // --- Remise en conformité --------------------------------------------------
 
 const renaming = ref(false)
@@ -241,6 +260,17 @@ onMounted(loadTrash)
       </p>
       <p v-if="purgeMessage" class="ok-text">{{ purgeMessage }}</p>
     </template>
+
+    <div class="vignettes">
+      <span class="warn-text">
+        Les aperçus extraits des vidéos sont gardés sur disque pour ne pas relancer
+        ffmpeg à chaque ouverture. Ils se vident à chaque scan.
+      </span>
+      <button :disabled="purgingThumbs" @click="purgeThumbs">
+        {{ purgingThumbs ? 'Vidage…' : 'Vider le cache des aperçus' }}
+      </button>
+    </div>
+    <p v-if="thumbMessage" class="ok-text">{{ thumbMessage }}</p>
   </section>
 
   <section v-if="montre('renommage')">
@@ -311,6 +341,8 @@ h3 {
   border-radius: 5px; color: var(--text); font-family: var(--mono);
 }
 .purge .sep { flex: 1; }
+.vignettes { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); flex-wrap: wrap; }
+.vignettes .warn-text { flex: 1; min-width: 240px; font-size: 11.5px; color: var(--text-faint); line-height: 1.55; }
 .danger { color: var(--text-faint); }
 .danger.strong { border-color: color-mix(in srgb, var(--err) 30%, transparent); color: var(--err); }
 .warn-strong { display: block; margin-top: 7px; color: var(--err); }
