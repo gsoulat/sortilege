@@ -1,6 +1,75 @@
 # CHANGELOG
 
 
+## v0.33.2 (2026-09-09)
+
+### Bug Fixes
+
+- Cinq passes d analyse — perte de donnees, gel de l interface, file effacee
+  ([`6889dc6`](https://github.com/gsoulat/sortilege/commit/6889dc61da3c1989b82e9a46d3a7de257a22c24e))
+
+**Perte de donnees silencieuse.** `_move` promettait « sans jamais ecraser » et ecrasait. Son
+  commentaire affirmait meme l'inverse de la verite : sous POSIX, os.rename REMPLACE la destination
+  sans rien dire, et shutil.move aussi. La protection reposait donc entierement sur la vigilance de
+  chaque appelant — et l'un l'avait oubliee : la mise en corbeille des doublons deplacait sans
+  verifier. Deux mises en corbeille du meme chemin le meme jour effacaient le premier exemplaire,
+  dans la fonction meme qui sert de filet.
+
+Le refus est desormais APPLIQUE dans la primitive. Un garde-fou la protege aussi les appelants a
+  venir, ce qu'une convention ne fait jamais.
+
+**Interface gelee pendant les rangements.** `apply` deplacait des centaines de fichiers — parfois
+  des gigaoctets d'un volume a l'autre — directement sur la boucle d'evenements. Toute l'application
+  se figeait le temps du lot, suivi de progression compris. C'est une regression que j'ai introduite
+  en rendant cet endpoint async pour prevenir le serveur multimedia : auparavant, FastAPI le placait
+  lui-meme dans un thread. Idem pour l'analyse de conformite, qui parcourt toute la bibliotheque.
+
+**File d'arbitrage effacee toutes les quinze minutes.** Le cycle automatique REMPLACAIT la file a
+  chaque tour. Tout ce qui attendait une decision humaine disparaissait donc au tour suivant, sans
+  un mot. Il ajoute maintenant, et marque les fichiers deja passes pour ne pas les repayer au
+  fournisseur.
+
+**Cycle automatique non borne.** Il planifiait tous les fichiers d'un seul tenant : sur une
+  bibliotheque constituee, des heures d'appels pendant lesquelles rien n'est applicable. Il traite
+  desormais un lot par tour, comme le manuel, et annonce ce qu'il laisse au suivant.
+
+**Quarante megaoctets par minute pour rien.** La vue unifiee, interrogee toutes les deux secondes,
+  joignait a chaque plan jusqu'a huit candidats alternatifs avec leur resume complet — des donnees
+  qui ne servent qu'a l'ouverture du selecteur. Elles ne sont plus envoyees que pour ce qui demande
+  un arbitrage.
+
+Les deux autres passes n'ont rien donne, et c'est une information : le confinement des chemins tient
+  (assainissement puis revalidation par resolve, ce qui couvre les liens symboliques), aucun secret
+  ne redescend au navigateur, et chaque preference declaree est effectivement lue.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+- **reglages**: Decouper la page, et faire descendre le compteur « a traiter »
+  ([`4e038d9`](https://github.com/gsoulat/sortilege/commit/4e038d9e26c12baf9d25accbc9a3a129a9fa6b3a))
+
+Deux problemes rapportes ensemble.
+
+**Le compteur ne descendait jamais.** « À traiter » restait fige a plusieurs milliers quoi qu'on
+  range. Les fichiers deja planifies etaient reconnus a partir des plans VIVANTS ; or un plan
+  applique quitte la file. Son fichier retombait donc dans « pas encore planifie », et le total ne
+  bougeait pas — pire, il aurait ete repropose au calcul suivant alors qu'il venait d'etre range.
+
+Le suivi passe donc par les chemins deja PASSES par le calcul, qui eux ne disparaissent pas avec le
+  plan. Un fichier qui n'existe plus sur le disque est egalement ecarte : le scan est un instantane,
+  et annoncer « en attente » un fichier deja parti promet un travail qui n'aura pas lieu.
+
+**Les reglages tenaient sur une seule page.** Plus de trois cents lignes, ou la liste des
+  identifications retenues — souvent plusieurs dizaines d'entrees — s'installait au milieu et
+  enterrait tout ce qui suivait : notifications, corbeille, resolveur IA devenaient invisibles sans
+  defiler longuement.
+
+Quatre onglets, decoupes selon ce qu'on vient FAIRE et non selon la structure du code : ou vont mes
+  fichiers, que fait l'outil tout seul, comment il identifie, et l'etat du deploiement. Un reglage
+  se cherche par son intention.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.33.1 (2026-09-09)
 
 ### Bug Fixes
