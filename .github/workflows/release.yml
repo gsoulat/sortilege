@@ -112,6 +112,14 @@ jobs:
         if: steps.release.outputs.released == 'true'
         continue-on-error: true
         run: |
+          # Identite git OBLIGATOIRE avant tout rebase. Sans elle, le rattrapage
+          # echoue sur « empty ident name », les trois tentatives deviennent
+          # inutiles, et le push suivant annonce « Everything up-to-date » sur
+          # un depot laisse en rebase avorte. C'est ce qui a fait echouer trois
+          # releases d'affilee, pas l'erreur serveur soupconnee au depart.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
           # --atomic est ESSENTIEL, pas une precaution de style. Sans lui,
           # GitHub a accepte refs/tags/v0.29.0 puis refuse refs/heads/main : le
           # depot s'est retrouve avec un tag pointant hors de toute branche, et
@@ -128,10 +136,17 @@ jobs:
               exit 0
             fi
             echo "::warning::poussee refusee (tentative $attempt/3), nouvel essai"
-            sleep $((attempt * 15))
-            # Un autre commit a pu arriver entre-temps : on rejoue par-dessus
-            # plutot que d'ecraser.
-            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
+            sleep $((attempt * 5))
+            # Un autre commit a pu arriver entre-temps — typiquement une
+            # poussee faite a la main pendant que la release tournait. On
+            # rejoue par-dessus plutot que d'ecraser.
+            if ! git pull --rebase --autostash origin "${GITHUB_REF_NAME}"; then
+              # Un rebase avorte laisse le depot dans un etat ou le push
+              # suivant annonce « Everything up-to-date » sans rien faire :
+              # le nettoyer vaut mieux que de rejouer sur des ruines.
+              git rebase --abort || true
+              echo "::warning::rebase impossible, tentative suivante sur l'etat courant"
+            fi
           done
           echo "pushed=false" >> "$GITHUB_OUTPUT"
           exit 1
