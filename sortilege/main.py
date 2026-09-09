@@ -17,7 +17,17 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
-from .api import auth, automation, collection, library, review, settings, templates, workspace
+from .api import (
+    auth,
+    automation,
+    collection,
+    library,
+    media,
+    review,
+    settings,
+    templates,
+    workspace,
+)
 from .config import get_settings
 from .core.auth import SESSION_COOKIE, verify_session
 from .core.probe import ffprobe_available
@@ -81,6 +91,7 @@ app.include_router(settings.router)
 app.include_router(automation.router)
 app.include_router(collection.router)
 app.include_router(workspace.router)
+app.include_router(media.router)
 
 # Routes accessibles sans session. Liste blanche et non liste noire : oublier
 # d'ajouter une exception rend une page inaccessible, ce qui se voit

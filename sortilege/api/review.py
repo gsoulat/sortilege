@@ -697,6 +697,72 @@ def _kind_of(scanned) -> str:
     return {MediaKind.MOVIE: "movie", MediaKind.ANIME: "anime"}.get(scanned.parsed.kind, "episode")
 
 
+class ConfirmRequest(BaseModel):
+    whole_series: bool = True
+    """Confirme aussi les autres episodes de la meme oeuvre.
+
+    L'identification porte sur l'oeuvre, pas sur le fichier : valider episode
+    par episode reviendrait a repondre douze fois a la meme question."""
+
+
+@router.post("/{plan_id}/confirm")
+def confirm(plan_id: str, body: ConfirmRequest) -> dict[str, object]:
+    """Valide l'identification proposee, sans rien changer d'autre.
+
+    Il manquait le geste symetrique de « Ce n'est pas ca ». Un plan a 78 % est
+    tres souvent correct — le score dit l'incertitude de la MACHINE, pas celle
+    de la personne qui regarde. Sans ce bouton, la seule facon d'accepter etait
+    de cocher puis d'executer, ce qui melange deux decisions distinctes :
+    « c'est la bonne oeuvre » et « range-le maintenant ».
+
+    Le choix est retenu, comme une correction : c'est ce qui fait qu'un scan
+    suivant ne repose pas la question.
+    """
+    with _lock:
+        plan = _plans.get(plan_id)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="Plan inconnu ou deja applique.")
+    if not plan.title:
+        raise HTTPException(
+            status_code=400,
+            detail="Ce fichier n'a aucune identification a confirmer.",
+        )
+
+    with _lock:
+        targets = [plan]
+        if body.whole_series and plan.kind != "movie" and plan.title:
+            targets = [
+                p
+                for p in _plans.values()
+                if p.title == plan.title and p.kind == plan.kind and p.decision is not Decision.AUTO
+            ] or [plan]
+
+        for target in targets:
+            # AUTO et `manual` : un accord explicite vaut mieux que n'importe
+            # quel score, et le repasser au calcul reviendrait a douter de la
+            # personne qui vient de decider.
+            target.decision = Decision.AUTO
+            target.manual = True
+            target.score = 1.0
+            target.reasons = ["identification confirmee a la main"]
+
+    if plan.provider and plan.external_id:
+        get_memory().remember(
+            RememberedDecision(
+                kind=plan.kind,
+                title_key=title_key(plan.title),
+                provider=plan.provider,
+                external_id=plan.external_id,
+                title=plan.title,
+                year=plan.year,
+                poster_url=plan.poster_url,
+            )
+        )
+
+    _persist_plans()
+    return {"confirmed": len(targets), "queue": _queue()}
+
+
 class ChooseRequest(BaseModel):
     provider: str
     external_id: str

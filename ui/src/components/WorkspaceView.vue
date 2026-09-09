@@ -141,15 +141,128 @@ async function index() {
  */
 async function apply(ids = null) {
   busy.value = 'apply'
+  failures.value = []
   try {
     const out = await call('/api/review/apply', { plan_ids: ids, dry_run: false })
     if (out) {
-      message.value = `${out.applied} fichier(s) rangé(s)` + (out.failed ? `, ${out.failed} en échec.` : '.')
+      failures.value = out.results.filter((r) => !r.ok)
+      message.value =
+        `${out.applied} fichier(s) rangé(s)` + (out.failed ? `, ${out.failed} en échec.` : '.')
+      // La cause domine le compte : « 340 en échec » ne dit pas quoi faire,
+      // « tous parce que la destination existe déjà » si.
+      const [first] = failureGroups.value
+      if (first) {
+        const part = first.items.length === out.failed ? 'tous' : `dont ${first.items.length}`
+        message.value += ` — ${part} : ${first.label.toLowerCase()}.`
+      }
       await load()
     }
   } finally {
     busy.value = null
   }
+}
+
+// --- Pourquoi ça a échoué -------------------------------------------------
+//
+// Un compte d'échecs sans cause n'est pas exploitable : trois cents lignes
+// disant chacune « déplacement impossible : /un/chemin/différent » se lisent
+// exactement comme une seule.
+const failures = ref([])
+const evacuating = ref(false)
+const evacProgress = ref(null)
+
+const REASONS = {
+  destination_exists: {
+    label: 'La destination existe déjà',
+    fix: "Ces fichiers sont déjà rangés : seule une copie traîne encore dans les téléchargements. Rien n'a été écrasé — c'est volontaire. Tu peux évacuer ces copies vers la corbeille ; celles dont la taille diffère du fichier rangé seront refusées, car ce n'est alors pas le même fichier.",
+    action: 'evacuate',
+  },
+  source_missing: {
+    label: 'Fichier source introuvable',
+    fix: 'Le fichier a bougé depuis le calcul du plan. Relance « Analyser les sources », puis « Identifier ».',
+  },
+  permission_denied: {
+    label: 'Permission refusée',
+    fix: "Le conteneur n'a pas le droit d'écrire dans la bibliothèque. Vérifie PUID / PGID et le propriétaire du dossier de destination sur le NAS.",
+  },
+  move_failed: {
+    label: 'Déplacement impossible',
+    fix: 'Erreur système — disque plein, volume en lecture seule, ou chemin trop long.',
+  },
+  no_destination: {
+    label: 'Aucune destination calculée',
+    fix: "L'identification n'a rien donné pour ces fichiers.",
+  },
+}
+
+const failureGroups = computed(() => {
+  const byReason = new Map()
+  for (const r of failures.value) {
+    const key = r.reason || 'move_failed'
+    if (!byReason.has(key)) byReason.set(key, [])
+    byReason.get(key).push(r)
+  }
+  return [...byReason.entries()]
+    .map(([key, items]) => ({
+      key,
+      label: REASONS[key]?.label ?? 'Échec',
+      fix: REASONS[key]?.fix ?? '',
+      action: REASONS[key]?.action ?? null,
+      items,
+      sample: items[0].message,
+    }))
+    .sort((a, b) => b.items.length - a.items.length)
+})
+
+const evacPercent = computed(() => {
+  const p = evacProgress.value
+  if (!p || !p.total) return 0
+  return Math.min(100, Math.round((p.processed / p.total) * 100))
+})
+
+let evacPoller = null
+
+/**
+ * Met en corbeille les copies dont le fichier est déjà rangé. Jamais une
+ * suppression : l'opération est journalisée, donc annulable, et une source de
+ * taille différente est refusée plutôt que confondue avec un doublon.
+ */
+async function evacuate(group) {
+  evacuating.value = true
+  evacProgress.value = null
+
+  const started = await call('/api/review/evacuate', {
+    plan_ids: group.items.map((r) => r.plan_id),
+  })
+  if (!started) {
+    evacuating.value = false
+    return
+  }
+
+  evacPoller = setInterval(async () => {
+    try {
+      const status = await (await fetch('/api/review/evacuate/status')).json()
+      evacProgress.value = status
+      if (status.error) error.value = status.error
+
+      if (!status.running) {
+        clearInterval(evacPoller)
+        evacPoller = null
+        evacuating.value = false
+        evacProgress.value = null
+        message.value =
+          `${status.evacuated} copie(s) mise(s) en corbeille` +
+          (status.failed ? `, ${status.failed} refusée(s).` : '.')
+        failures.value = status.results ?? []
+        await load()
+      }
+    } catch {
+      clearInterval(evacPoller)
+      evacPoller = null
+      evacuating.value = false
+      error.value = 'Contact perdu avec le serveur pendant l\'évacuation.'
+    }
+  }, 700)
 }
 
 async function choose(planId, candidate) {
@@ -189,6 +302,42 @@ async function trashDuplicates(work) {
   } finally {
     busy.value = null
   }
+}
+
+/**
+ * Valide l'identification proposée. C'était le geste symétrique manquant : on
+ * ne pouvait que dire « ce n'est pas ça », jamais « c'est bon ». Un plan à 78 %
+ * est très souvent correct — le score dit l'incertitude de la MACHINE, pas
+ * celle de la personne qui regarde.
+ */
+async function confirm(plan) {
+  choosing.value = true
+  try {
+    const out = await call(`/api/review/${plan.id}/confirm`, {})
+    if (out) {
+      message.value =
+        out.confirmed > 1
+          ? `${out.confirmed} épisodes confirmés — prêts à ranger.`
+          : 'Confirmé — prêt à ranger.'
+      await load()
+    }
+  } finally {
+    choosing.value = false
+  }
+}
+
+// Quel fichier a son lecteur ouvert. Un seul à la fois : deux vidéos qui
+// chargent en parallèle sur un NAS saturent la liaison pour rien.
+const playing = ref(null)
+const PLAYABLE = ['.mp4', '.m4v', '.webm', '.mov']
+
+/** Le MKV n'est lu nativement par aucun navigateur courant. Le dire vaut mieux
+ *  que d'afficher un lecteur noir sans explication. */
+const likelyPlayable = (source) =>
+  PLAYABLE.some((ext) => (source ?? '').toLowerCase().endsWith(ext))
+
+function togglePlayer(id) {
+  playing.value = playing.value === id ? null : id
 }
 
 function toggle(key) {
@@ -245,6 +394,35 @@ onUnmounted(() => clearInterval(poller))
 
     <p v-if="error" class="err-msg">{{ error }}</p>
     <p v-if="message" class="ok-msg">{{ message }}</p>
+
+    <!-- Pourquoi ça a échoué. En haut, pas enfoui : chercher la cause sous
+         trois cents lignes revient à ne pas la donner. -->
+    <section v-if="failureGroups.length" class="failures">
+      <h3>Ce qui a bloqué</h3>
+      <ul>
+        <li v-for="g in failureGroups" :key="g.key">
+          <div class="head">
+            <span class="count">{{ g.items.length }}</span>
+            <span class="label">{{ g.label }}</span>
+          </div>
+          <p class="fix">{{ g.fix }}</p>
+          <button v-if="g.action === 'evacuate'" class="act" :disabled="evacuating"
+                  @click="evacuate(g)">
+            {{ evacuating ? 'Évacuation…' : `Mettre ces ${g.items.length} copies en corbeille` }}
+          </button>
+          <div v-if="g.action === 'evacuate' && evacProgress" class="evac">
+            <div class="bar"><div class="fill" :style="{ width: evacPercent + '%' }"></div></div>
+            <div class="stats">
+              <span>{{ evacProgress.processed }} / {{ evacProgress.total }}</span>
+              <span class="ok-count">{{ evacProgress.evacuated }} en corbeille</span>
+              <span v-if="evacProgress.failed" class="ko-count">{{ evacProgress.failed }} refusée(s)</span>
+              <span v-if="evacProgress.current" class="current">{{ evacProgress.current }}</span>
+            </div>
+          </div>
+          <code class="sample">{{ g.sample }}</code>
+        </li>
+      </ul>
+    </section>
 
     <div class="filters">
       <button :class="{ active: filter === 'all' }" @click="filter = 'all'">
@@ -325,12 +503,25 @@ onUnmounted(() => clearInterval(poller))
               </button>
             </div>
             <ul class="files">
-              <li v-for="p in w.pending.ready" :key="p.id">
-                <span class="score ok">{{ (p.score * 100).toFixed(0) }}</span>
-                <code class="from">{{ shortPath(p.source) }}</code>
-                <span class="arrow">→</span>
-                <code class="to">{{ shortPath(p.destination) }}</code>
-              </li>
+              <template v-for="p in w.pending.ready" :key="p.id">
+                <li>
+                  <span class="score ok">{{ (p.score * 100).toFixed(0) }}</span>
+                  <code class="from">{{ shortPath(p.source) }}</code>
+                  <span class="arrow">→</span>
+                  <code class="to">{{ shortPath(p.destination) }}</code>
+                  <button class="small play" title="Vérifier avant de ranger"
+                          @click="togglePlayer(p.id)">
+                    {{ playing === p.id ? 'Fermer' : '▶' }}
+                  </button>
+                </li>
+                <li v-if="playing === p.id" class="player">
+                  <video controls preload="metadata" :src="`/api/media/plan/${p.id}`"></video>
+                  <p v-if="!likelyPlayable(p.source)" class="format-warn">
+                    Ce fichier est un {{ (p.source ?? '').split('.').pop().toUpperCase() }} :
+                    la plupart des navigateurs ne savent pas le lire.
+                  </p>
+                </li>
+              </template>
             </ul>
           </section>
 
@@ -338,13 +529,30 @@ onUnmounted(() => clearInterval(poller))
           <section v-if="w.pending.review.length" class="block">
             <div class="block-head"><h4>À arbitrer</h4></div>
             <ul class="files">
-              <li v-for="p in w.pending.review" :key="p.id" class="reviewable">
-                <span class="score warn">{{ (p.score * 100).toFixed(0) }}</span>
-                <code class="from">{{ shortPath(p.source) }}</code>
-                <button class="small" @click="picking = picking === p.id ? null : p.id">
-                  Ce n'est pas ça
-                </button>
-              </li>
+              <template v-for="p in w.pending.review" :key="p.id">
+                <li class="reviewable">
+                  <span class="score warn">{{ (p.score * 100).toFixed(0) }}</span>
+                  <code class="from">{{ shortPath(p.source) }}</code>
+                  <button class="small play" title="Vérifier le contenu"
+                          @click="togglePlayer(p.id)">
+                    {{ playing === p.id ? 'Fermer' : '▶ Voir' }}
+                  </button>
+                  <button class="small ok" :disabled="choosing" @click="confirm(p)">
+                    C'est bon
+                  </button>
+                  <button class="small" @click="picking = picking === p.id ? null : p.id">
+                    Ce n'est pas ça
+                  </button>
+                </li>
+                <li v-if="playing === p.id" class="player">
+                  <video controls preload="metadata" :src="`/api/media/plan/${p.id}`"></video>
+                  <p v-if="!likelyPlayable(p.source)" class="format-warn">
+                    Ce fichier est un {{ (p.source ?? '').split('.').pop().toUpperCase() }} :
+                    la plupart des navigateurs ne savent pas le lire. Si l'image reste noire,
+                    c'est le format, pas le fichier.
+                  </p>
+                </li>
+              </template>
             </ul>
             <template v-for="p in w.pending.review" :key="`pick-${p.id}`">
               <CandidatePicker
@@ -430,6 +638,32 @@ onUnmounted(() => clearInterval(poller))
 .err-msg { margin: 0; font-size: 12.5px; color: var(--err); }
 .ok-msg { margin: 0; font-size: 12.5px; color: var(--ok); }
 
+.failures {
+  background: var(--surface); border: 1px solid color-mix(in srgb, var(--err) 25%, var(--border));
+  border-radius: 10px; padding: 14px 16px;
+}
+.failures > h3 {
+  margin: 0 0 12px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .07em; color: var(--err);
+}
+.failures > ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.failures .head { display: flex; align-items: center; gap: 9px; font-size: 13.5px; }
+.failures .count {
+  font-family: var(--mono); font-size: 11.5px; padding: 1px 7px; border-radius: 4px;
+  background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err);
+}
+.failures .fix { margin: 6px 0 0; font-size: 12px; color: var(--text-dim); line-height: 1.6; max-width: 680px; }
+.failures .act { margin: 9px 0 0; font-size: 12px; padding: 4px 12px; }
+.failures .act:hover:not(:disabled) { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+.failures .sample { display: block; margin: 6px 0 0; font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.evac { margin: 10px 0 0; max-width: 680px; }
+.evac .bar { height: 3px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }
+.evac .fill { height: 100%; background: var(--warn); transition: width .3s; }
+.evac .stats { display: flex; gap: 12px; align-items: baseline; margin-top: 6px; font-size: 11.5px; color: var(--text-faint); flex-wrap: wrap; }
+.evac .ok-count { color: var(--ok); }
+.evac .ko-count { color: var(--err); }
+.evac .current { font-family: var(--mono); font-size: 10.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .filters { display: flex; gap: 7px; flex-wrap: wrap; }
 .filters button { font-size: 11.5px; padding: 3px 11px; }
 .filters button.active { border-color: var(--accent); color: var(--text); }
@@ -481,6 +715,12 @@ button.small { font-size: 11px; padding: 2px 9px; }
 .score { font-family: var(--mono); font-size: 10.5px; padding: 0 5px; border-radius: 3px; flex: none; }
 .score.ok { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
 .score.warn { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+button.small.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 28%, transparent); }
+button.small.play { color: var(--text-faint); }
+
+.files li.player { display: block; margin: 6px 0 10px; }
+.files li.player video { width: 100%; max-width: 620px; border-radius: 6px; background: #000; display: block; }
+.format-warn { margin: 6px 0 0; font-size: 11.5px; color: var(--warn); max-width: 620px; line-height: 1.5; }
 
 .seasons { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
 .seasons li { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
