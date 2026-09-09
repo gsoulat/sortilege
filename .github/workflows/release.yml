@@ -111,50 +111,40 @@ jobs:
         id: push
         if: steps.release.outputs.released == 'true'
         continue-on-error: true
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
         run: |
           # Le build Docker tourne en root et laisse des objets lui appartenant
-          # dans .git : le rebase de rattrapage echoue alors sur « insufficient
-          # permission for adding an object ». C'est une consequence directe
-          # d'avoir place le build AVANT la poussee — ce qui reste le bon
-          # ordre, l'image etant le seul artefact deployable. On rend donc la
-          # main sur .git plutot que de revenir en arriere.
+          # dans .git : sans cela git echoue sur « insufficient permission for
+          # adding an object ». C'est le prix de construire l'image AVANT de
+          # pousser, et cet ordre reste le bon : l'image est le seul artefact
+          # deployable, un incident git ne doit pas la couter.
           sudo chown -R "$(id -u):$(id -g)" "${GITHUB_WORKSPACE}/.git" || true
 
-          # Identite git OBLIGATOIRE avant tout rebase. Sans elle, le rattrapage
-          # echoue sur « empty ident name », les trois tentatives deviennent
-          # inutiles, et le push suivant annonce « Everything up-to-date » sur
-          # un depot laisse en rebase avorte. C'est ce qui a fait echouer trois
-          # releases d'affilee, pas l'erreur serveur soupconnee au depart.
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          # --atomic est ESSENTIEL, pas une precaution de style. Sans lui,
-          # GitHub a accepte refs/tags/v0.29.0 puis refuse refs/heads/main : le
-          # depot s'est retrouve avec un tag pointant hors de toute branche, et
-          # semantic-release, voyant « 0.29.0 deja publiee », a cesse de
-          # publier — en vert. Un echec silencieux vaut bien pire qu'un echec.
-          # Avec --atomic, les deux refs partent ensemble ou aucune ne part.
+          # Les deux refs sont nommees explicitement et poussees ATOMIQUEMENT :
+          # ensemble ou pas du tout. Un tag arrive sans sa branche fige toutes
+          # les releases suivantes — semantic-release voit la version comme
+          # deja publiee et ne publie plus rien, en vert.
           #
-          # Trois tentatives espacees : l'erreur observee est transitoire cote
-          # serveur, pas un refus. Une tentative unique faisait dependre la
-          # release d'un alea qu'on ne controle pas.
+          # AUCUN REBASE ICI, et c'est deliberé. Le rattrapage par rebase a ete
+          # essaye : il reecrit le commit de version, ce qui orpheline le tag
+          # pose dessus, et il entre en conflit sur le CHANGELOG — un fichier
+          # genere, que rejouer n'a aucun sens. Il transformait un echec franc
+          # en echec silencieux.
+          #
+          # Les tentatives ne servent donc qu'aux erreurs vraiment transitoires
+          # du serveur. Une branche qui a bouge est un cas pour un humain, avec
+          # une commande claire, pas pour une resolution automatique hasardeuse.
           for attempt in 1 2 3; do
-            if git push --atomic --follow-tags origin "HEAD:${GITHUB_REF_NAME}"; then
+            if git push --atomic origin "HEAD:${GITHUB_REF_NAME}" "refs/tags/${TAG}"; then
               echo "pushed=true" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            echo "::warning::poussee refusee (tentative $attempt/3), nouvel essai"
+            echo "::warning::poussee refusee (tentative $attempt/3)"
             sleep $((attempt * 5))
-            # Un autre commit a pu arriver entre-temps — typiquement une
-            # poussee faite a la main pendant que la release tournait. On
-            # rejoue par-dessus plutot que d'ecraser.
-            if ! git pull --rebase --autostash origin "${GITHUB_REF_NAME}"; then
-              # Un rebase avorte laisse le depot dans un etat ou le push
-              # suivant annonce « Everything up-to-date » sans rien faire :
-              # le nettoyer vaut mieux que de rejouer sur des ruines.
-              git rebase --abort || true
-              echo "::warning::rebase impossible, tentative suivante sur l'etat courant"
-            fi
           done
           echo "pushed=false" >> "$GITHUB_OUTPUT"
           exit 1
@@ -174,5 +164,8 @@ jobs:
         run: |
           echo "::error::Image ${{ steps.target.outputs.version }} publiee sur GHCR," \
                "mais le commit de version et le tag n'ont pas pu etre pousses." \
-               "Depuis un poste : git pull, puis git push --follow-tags origin main."
+               "Cause la plus frequente : une poussee manuelle pendant la release." \
+               "Rattrapage depuis un poste : git pull --rebase origin main," \
+               "git tag -a ${{ steps.release.outputs.tag }} -m ${{ steps.release.outputs.tag }}," \
+               "git push --atomic origin main refs/tags/${{ steps.release.outputs.tag }}"
           exit 1
