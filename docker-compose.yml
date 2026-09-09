@@ -8,17 +8,19 @@
 
 services:
   sortilege:
-    build:
-      context: .
-      args:
-        # Aligne sur le proprietaire des fichiers a deplacer.
-        UID: ${PUID:-1000}
-        GID: ${PGID:-1000}
-    image: sortilege:latest
+    image: ghcr.io/gsoulat/sortilege:latest
     container_name: sortilege
     env_file: .env
     environment:
       - TZ=${TZ:-Europe/Paris}
+      # A ALIGNER sur le proprietaire des fichiers a deplacer, pas sur toi.
+      # Les telechargements appartiennent au client qui les a ecrits ; si
+      # Sortilege tourne sous une autre identite, il ne pourra ni les deplacer
+      # ni les supprimer, et echouera en « Permission denied ».
+      #
+      #   Sur le NAS : ls -ln /volume1/Download   (la 3e colonne est l'UID)
+      - PUID=${PUID:-1000}
+      - PGID=${PGID:-1000}
     volumes:
       # Base SQLite, journal d'annulation, gabarits.
       - ./data:/app/data
@@ -28,7 +30,9 @@ services:
       - "${SORTILEGE_PORT:-8117}:8117"
     restart: unless-stopped
     # Durcissement : l'application n'a besoin d'ecrire que dans /app/data et
-    # /storage. Le reste du systeme de fichiers peut rester en lecture seule.
+    # /storage. Le reste du systeme de fichiers peut rester en lecture seule —
+    # l'entrypoint n'ecrit nulle part ailleurs, l'identite etant donnee en
+    # numerique sans toucher a /etc/passwd.
     read_only: true
     tmpfs:
       - /tmp

@@ -98,7 +98,15 @@ Deux garde-fous non négociables :
 - **Pas d'évaluation de code dans les gabarits.** FileBot exécute du Groovy —
   puissant, et une exécution de code arbitraire sur ton NAS. Ici c'est une
   substitution de jetons restreinte, sans `eval`.
-- **Conteneur non-root**, UID/GID paramétrables.
+- **Conteneur non-root.** Il démarre root le temps d'ajuster son identité sur
+  `PUID`/`PGID`, puis abandonne ces droits avant de lancer quoi que ce soit.
+  Ce détour est nécessaire : l'identité doit correspondre au propriétaire des
+  fichiers à déplacer, que seul toi connais. Un UID figé à la construction ne
+  vaudrait que pour qui reconstruit l'image ; **aligne `PUID` sur le
+  propriétaire de ton dossier de téléchargement**, pas sur toi — sinon
+  Sortilège ne pourra ni déplacer ni supprimer ce que ton client a écrit.
+
+      ls -ln /volume1/Download   # la 3e colonne est l'UID à reprendre
 - **Rien ne bouge sans un clic.** Deux boutons distincts : « Simuler » vérifie
   tout le trajet sans toucher au disque, « Exécuter » applique la sélection.
   Un plan est un objet, pas une action.

@@ -11,11 +11,11 @@ RUN npm run build
 # --- Etage 2 : execution ------------------------------------------------------
 FROM python:3.12-slim AS runtime
 
-# Non-root : l'application ecrit dans la bibliotheque de l'utilisateur, elle n'a
-# aucune raison d'etre root. UID/GID alignables sur ceux du NAS au build.
-ARG UID=1000
-ARG GID=1000
-
+# L'identite n'est PAS figee ici. Elle doit correspondre au proprietaire des
+# fichiers a deplacer, que seul l'utilisateur connait : un UID choisi a la
+# construction ne vaut que pour qui reconstruit l'image, et quiconque tire
+# l'image publiee heritait de 1000:1000. C'est l'entrypoint qui l'ajuste au
+# demarrage, a partir de PUID/PGID, puis abandonne les droits root.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
@@ -24,12 +24,11 @@ ENV PYTHONUNBUFFERED=1 \
 # ce qui permet de contredire un nom de release menteur — meme approche que
 # Plex. On installe ffmpeg pour ffprobe seul ; le code degrade proprement si le
 # binaire est absent, mais on ne veut pas de cette degradation par defaut.
+# gosu permet d'abandonner les droits root en transmettant les signaux, ce que
+# « su » ne fait pas correctement — un conteneur doit pouvoir s'arreter.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg \
+ && apt-get install -y --no-install-recommends ffmpeg gosu \
  && rm -rf /var/lib/apt/lists/*
-
-RUN groupadd -g "${GID}" sortilege \
- && useradd -u "${UID}" -g "${GID}" -m -s /usr/sbin/nologin sortilege
 
 WORKDIR /app
 
@@ -43,13 +42,15 @@ RUN pip install --no-cache-dir ".[ai]"
 # Interface compilee, servie en statique par FastAPI (pas de second port).
 COPY --from=ui /ui/dist ./sortilege/web/static
 
-RUN mkdir -p /app/data && chown -R sortilege:sortilege /app
+RUN mkdir -p /app/data
 
-USER sortilege
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 
 EXPOSE 8117
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8117/api/health', timeout=3).status==200 else 1)"
 
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["uvicorn", "sortilege.main:app", "--host", "0.0.0.0", "--port", "8117"]
