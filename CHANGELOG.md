@@ -1,6 +1,125 @@
 # CHANGELOG
 
 
+## v0.33.0 (2026-09-09)
+
+### Bug Fixes
+
+- **docker**: Appliquer PUID/PGID au demarrage, comme Radarr le fait
+  ([`b20ebb6`](https://github.com/gsoulat/sortilege/commit/b20ebb6784f7af003f25f8a2a9b8327b16834ab3))
+
+« Pourquoi Radarr y arrive » etait la bonne question, et la reponse est un defaut de cette image.
+
+L'identite etait un ARG, donc figee A LA CONSTRUCTION. L'image publiee sur GHCR est construite par
+  la CI avec la valeur par defaut : quiconque la tire tourne en 1000:1000, quoi qu'il mette dans son
+  .env. Si le client de telechargement ecrit sous une autre identite — et c'est le cas courant —
+  Sortilege ne peut ni deplacer ni supprimer ses fichiers, et echoue en « [Errno 13] Permission
+  denied ».
+
+Le README promettait « UID/GID parametrables ». C'etait faux pour tout le monde sauf ceux qui
+  reconstruisent l'image eux-memes. Encore un reglage qui ment, et celui-ci bloquait l'usage
+  principal.
+
+Radarr, Sonarr et leurs semblables ajustent l'identite AU DEMARRAGE. C'est ce que fait desormais
+  l'entrypoint : le conteneur demarre root le temps de deux commandes, puis abandonne ces droits par
+  gosu. Le compromis est assume — sans lui, PUID/PGID sont decoratifs.
+
+Deux details qui evitent des ennuis : l'identite est donnee en NUMERIQUE, donc aucun compte n'a
+  besoin d'exister et /etc/passwd n'est pas touche, ce qui permet de garder read_only ; et gosu
+  plutot que su, parce qu'il transmet les signaux et qu'un conteneur doit pouvoir s'arreter
+  proprement.
+
+Verifie par construction reelle : PUID=1027 PGID=100 donne bien « Uid: 1027 Gid: 100 » sur le
+  processus uvicorn, read_only compris, et l'application repond.
+
+Le docker-compose passe aussi a l'image publiee plutot qu'a une construction locale : c'est ce que
+  fait « docker compose pull », et les arguments de build n'y avaient de toute facon plus d'effet.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+### Continuous Integration
+
+- **release**: Retirer le rebase de rattrapage, qui aggravait les echecs
+  ([`7854476`](https://github.com/gsoulat/sortilege/commit/7854476d184bebf9d3b6394b1e579a8232fd65a9))
+
+Quatrieme cause distincte pour le meme symptome, et la derniere de la serie : le rebase de
+  rattrapage entrait en conflit sur le CHANGELOG. C'est un fichier GENERE ; rejouer un commit genere
+  par-dessus un autre commit genere ne peut pas bien se terminer.
+
+Le rattrapage automatique est donc retire. Ce n'etait pas une bonne idee au depart, et les trois
+  pannes precedentes en decoulaient toutes :
+
+- il reecrivait le commit de version, ce qui orphelinait le tag pose dessus. La branche partait
+  alors seule, --atomic n'y voyant qu'une seule ref a envoyer, et le job se declarait satisfait ; -
+  il echouait faute d'identite git sur le runner ; - il echouait faute de droits sur .git apres le
+  build Docker ; - il conflitait sur le CHANGELOG.
+
+A chaque fois, il transformait un echec franc — rattrapable en une commande — en echec obscur, quand
+  ce n'etait pas en faux succes.
+
+Les tentatives ne servent plus qu'aux erreurs vraiment transitoires du serveur. Une branche qui a
+  bouge sous le runner est un cas pour un humain : le message d'erreur donne desormais les trois
+  commandes exactes, et nomme la cause la plus frequente — une poussee manuelle pendant la release.
+
+Ce qui reste, et qui a fait ses preuves : l'image construite AVANT la poussee, donc jamais perdue ;
+  les deux refs nommees explicitement et poussees atomiquement ; un echec de poussee qui fait
+  echouer le job au lieu de le laisser vert.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+### Features
+
+- **diagnostic**: Dire quel UID possede le fichier quand l acces est refuse
+  ([`99d0f66`](https://github.com/gsoulat/sortilege/commit/99d0f6632cac168d4d4bb908b2fd4d07184a408c))
+
+Un « [Errno 13] Permission denied » nu oblige a partir en chasse : activer SSH, trouver la bonne
+  commande, la lancer au bon endroit — pour recuperer deux nombres. Or ces deux nombres sont connus
+  ici meme, a l'instant de l'echec.
+
+Le message devient donc :
+
+le fichier appartient a UID 1027:100, Sortilege tourne en UID 1000:1000. Mets PUID=1027 et PGID=100
+  dans ton docker-compose.
+
+Une enigme devient une ligne a recopier. C'est le pendant du correctif precedent : rendre PUID/PGID
+  reellement effectifs ne sert a rien si l'on ne sait pas quelles valeurs y mettre.
+
+Les trois points ou un refus peut survenir sont couverts : le rangement lui-meme, l'evacuation vers
+  la corbeille, et la suppression directe.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+- **evacuation**: Suppression directe, et nommer la vraie cause des refus
+  ([`9366c04`](https://github.com/gsoulat/sortilege/commit/9366c04e151bc23965171e1694a1eb32e5459db0))
+
+Deux choses, dont la seconde compte bien plus que la premiere.
+
+**La suppression directe, demandee.** Quand le fichier est verifie present a destination ET de meme
+  taille, la source n'est pas un fichier : c'est un doublon strict de quelque chose qu'on vient de
+  constater. Y ajouter un deplacement vers la corbeille puis une seconde corvee de vidage n'apporte
+  rien.
+
+Les deux garde-fous restent, et ce sont eux qui rendent l'operation defendable : rien n'est supprime
+  si le fichier n'est pas reellement a destination, ni si les tailles different. Rien n'est
+  journalise non plus, parce que rien ne serait annulable — l'ecrire serait moins honnete que de le
+  dire. La corbeille reste le defaut, et le bouton de suppression demande un second clic.
+
+**La vraie cause des trois cent trente-neuf refus.** Elle vient d'apparaitre dans les journaux et ce
+  n'etait ni la corbeille ni la copie :
+
+[Errno 13] Permission denied: '/storage/Download/JDownloader2/...'
+
+Sortilege n'a pas le droit d'ecrire dans le dossier de telechargement. Les fichiers appartiennent au
+  client qui les a crees, et aucun reglage de cette application ne peut le contourner : c'est une
+  permission du NAS. La suppression directe echouerait d'ailleurs exactement pareil.
+
+Le message d'aide le disait mal — il parlait du dossier de DESTINATION, alors que le cas frequent
+  est la SOURCE. Il nomme desormais le bon dossier, explique pourquoi l'application ne peut rien y
+  faire, et donne la commande de diagnostic.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.32.1 (2026-09-09)
 
 ### Bug Fixes
@@ -29,6 +148,29 @@ C'est le seul endroit ou l'evacuation supprime, et il est doublement encadre : l
 
 Les motifs de refus s'affichent enfin PENDANT l'operation. Sur trois cents fichiers, decouvrir a la
   fin que tout a ete refuse pour une seule raison fait perdre l'attente entiere.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+### Continuous Integration
+
+- **release**: Rendre .git au runner apres le build Docker
+  ([`0015c72`](https://github.com/gsoulat/sortilege/commit/0015c72a59f89cbe800c4db568d3f5b3bef23b9d))
+
+Le rattrapage de poussee echouait sur :
+
+error: insufficient permission for adding an object to repository database .git/objects
+
+C'est une consequence directe d'un choix fait plus tot, et je le maintiens : le build Docker passe
+  AVANT la poussee des refs, pour qu'un incident git ne coute pas l'image — le seul artefact
+  reellement deployable. Mais ce build tourne en root et laisse derriere lui des objets lui
+  appartenant dans .git, que le rebase suivant ne peut plus ecrire.
+
+La propriete du repertoire est donc rendue au runner juste avant la poussee, plutot que de revenir a
+  l'ordre precedent qui, lui, coutait l'image entiere a chaque alea.
+
+Troisieme cause distincte pour un meme symptome apparent, ce qui vaut d'etre note : d'abord un tag
+  pousse sans sa branche, puis une identite git absente, maintenant des droits perdus. Aucune
+  n'etait l'erreur serveur intermittente soupconnee au depart.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 
