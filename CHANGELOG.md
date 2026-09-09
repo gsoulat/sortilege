@@ -1,6 +1,38 @@
 # CHANGELOG
 
 
+## v0.38.0 (2026-09-09)
+
+### Features
+
+- **mediatheque**: Bouton « Tout effacer » pour repartir d un scan neuf
+  ([`37e968c`](https://github.com/gsoulat/sortilege/commit/37e968c94b65d01b5b7ad72502ab070344e6c591))
+
+La liste se remplissait de residus qu'aucune action ne retirait : titres illisibles tires de noms de
+  fichiers abimes, plans devenus sans objet, entrees accumulees au fil des essais. « Recommencer »
+  ne vidait que la file de plans, pas l'instantane du scan qui la nourrit.
+
+Ce qui est efface est RECONSTRUCTIBLE, et un scan le refait : l'instantane, les plans calcules,
+  l'avancement des lots, les apercus en cache.
+
+Ce qui reste ne se refait pas, et cette distinction est tout l'interet de la fonction :
+
+- **le journal d'annulation** — plus de six mille entrees dans le cas qui m'a ete montre. C'est le
+  seul chemin de retour pour tout ce qui a deja ete deplace ; l'emporter condamnerait ces fichiers a
+  rester ou ils sont, sans recours ; - **les identifications retenues**, tranchees une a une a la
+  main. Les perdre reposerait toutes les questions au scan suivant ; - **les preferences** :
+  sources, destinations, gabarits.
+
+Une purge qui emporterait le journal serait une catastrophe silencieuse — on ne s'en apercevrait
+  qu'en cherchant a revenir en arriere, c'est-a-dire trop tard. Les deux tests ecrits en premier
+  verifient donc ce qui SURVIT, pas ce qui part.
+
+Deux clics, avec l'avertissement qui dit exactement ce qui est conserve. Aucun fichier n'est deplace
+  ni supprime.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.37.0 (2026-09-09)
 
 ### Features
