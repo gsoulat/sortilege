@@ -224,10 +224,6 @@ class Pipeline:
             self._memory.note_hit(kind, decision.title_key)
         return plan
 
-    async def plan_one(self, scanned: ScannedFile) -> Plan:
-        plan, _ = await self._plan_with_match(scanned)
-        return plan
-
     async def _plan_with_match(self, scanned: ScannedFile):
         """Plan ET correspondance retenue.
 

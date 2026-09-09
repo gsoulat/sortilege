@@ -155,9 +155,3 @@ def test_un_etat_illisible_ne_bloque_pas_le_demarrage(store: Store) -> None:
             "INSERT INTO blobs (key, payload, updated_at) VALUES ('casse', 'pas du json', '')"
         )
     assert store.load_blob("casse") is None
-
-
-def test_supprimer_un_etat(store: Store) -> None:
-    store.save_blob("scan", {"x": 1})
-    store.drop_blob("scan")
-    assert store.load_blob("scan") is None

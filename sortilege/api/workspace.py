@@ -22,6 +22,7 @@ from fastapi import APIRouter
 from ..core.planner import Plan
 from ..core.workspace import HEAVY_RATIO, WorkspaceEntry, build, summarize
 from . import collection, library, review
+from .deps import get_journal
 
 logger = logging.getLogger(__name__)
 
@@ -144,6 +145,9 @@ def read_workspace(limit: int = 200) -> dict[str, object]:
     return {
         "counts": counts,
         "heavy_ratio": HEAVY_RATIO,
+        # Ce que l'on peut encore defaire. La vue en a besoin pour proposer
+        # l'annulation sans imposer un second appel a chaque rafraichissement.
+        "journal_size": len(get_journal().read_all()),
         "shown": min(limit, len(entries)),
         "works": [_entry_out(e) for e in entries[:limit]],
         # Les trois travaux qui alimentent la vue. L'interface s'en sert pour

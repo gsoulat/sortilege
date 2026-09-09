@@ -3,7 +3,6 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import LoginView from './components/LoginView.vue'
 import TemplateBuilder from './components/TemplateBuilder.vue'
 import WorkspaceView from './components/WorkspaceView.vue'
-import ReviewView from './components/ReviewView.vue'
 import SettingsView from './components/SettingsView.vue'
 
 const authenticated = ref(null) // null = on ne sait pas encore
@@ -12,12 +11,14 @@ const view = ref('workspace')
 
 // « À ranger », « Ma collection » et « File de revue » montraient trois moitiés
 // du même objet et obligeaient à des allers-retours pour répondre à « où en est
-// cette série ? ». Elles sont réunies dans « Ma médiathèque ». La file de revue
-// reste accessible : sur un lot de plusieurs centaines de fichiers ambigus, une
-// grille de jaquettes se parcourt mieux qu'une arborescence dépliée.
+// cette série ? ». Elles sont réunies dans « Ma médiathèque ».
+//
+// La file de revue avait d'abord été gardée à part, au prétexte qu'une grille
+// de jaquettes se parcourt mieux qu'une arborescence dépliée. Le prétexte ne
+// tenait pas : elle affichait les mêmes plans sous une autre forme, et deux
+// écrans qui montrent la même chose obligent à se demander lequel fait foi.
 const VIEWS = [
   { id: 'workspace', label: 'Ma médiathèque' },
-  { id: 'review', label: 'File de revue' },
   { id: 'templates', label: 'Gabarits' },
   { id: 'settings', label: 'Réglages' },
 ]
@@ -106,7 +107,6 @@ onUnmounted(() => {
 
     <main>
       <WorkspaceView v-if="view === 'workspace'" />
-      <ReviewView v-else-if="view === 'review'" />
       <TemplateBuilder v-else-if="view === 'templates'" />
       <SettingsView v-else-if="view === 'settings'" />
     </main>

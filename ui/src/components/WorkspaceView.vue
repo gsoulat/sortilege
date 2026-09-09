@@ -114,13 +114,77 @@ async function scan() {
   }
 }
 
-async function plan() {
+async function plan({ reset = false } = {}) {
   busy.value = 'plan'
   try {
-    await call('/api/review/plan?limit=100')
+    await call(`/api/review/plan?limit=100&reset=${reset}`)
     await load()
   } finally {
     busy.value = null
+  }
+}
+
+/**
+ * Vérifie tout le trajet sans rien déplacer. Distinct d'« Exécuter » parce que
+ * ce sont deux décisions : « est-ce que ça marcherait » et « fais-le ».
+ */
+async function simulate(ids = null) {
+  busy.value = 'simulate'
+  failures.value = []
+  try {
+    const out = await call('/api/review/apply', { plan_ids: ids, dry_run: true })
+    if (out) {
+      failures.value = out.results.filter((r) => !r.ok)
+      message.value = `Simulation : ${out.applied} déplacement(s) possible(s), ${out.failed} bloqué(s).`
+    }
+  } finally {
+    busy.value = null
+  }
+}
+
+// --- Annulation ciblée ----------------------------------------------------
+//
+// « Tout annuler » suppose qu'on veuille défaire une session entière, alors
+// qu'en pratique on veut défaire UNE série mal identifiée au milieu de sept
+// cents déplacements corrects.
+const journal = ref(null)
+const showUndo = ref(false)
+const undoing = ref(null)
+const WORK_KINDS = { movie: 'Film', episode: 'Série', anime: 'Anime' }
+
+async function loadJournal() {
+  try {
+    journal.value = await (await fetch('/api/review/journal')).json()
+  } catch {
+    journal.value = null
+  }
+}
+
+async function toggleUndo() {
+  showUndo.value = !showUndo.value
+  if (showUndo.value) await loadJournal()
+}
+
+async function undoWork(work) {
+  undoing.value = work.key
+  try {
+    const out = await call('/api/review/undo', { work: work.key })
+    if (out) {
+      message.value =
+        `« ${work.title} » : ${out.undone} déplacement(s) annulé(s)` +
+        (out.failed ? `, ${out.failed} en échec.` : '.')
+      await Promise.all([load(), loadJournal()])
+    }
+  } finally {
+    undoing.value = null
+  }
+}
+
+async function undoAll(count) {
+  const out = await call('/api/review/undo', { count })
+  if (out) {
+    message.value = `${out.undone} opération(s) annulée(s), ${out.failed} en échec.`
+    await Promise.all([load(), loadJournal()])
   }
 }
 
@@ -395,11 +459,65 @@ onUnmounted(() => clearInterval(poller))
       <button class="primary" :disabled="busy || !counts.ready" @click="apply()">
         Exécuter {{ counts.ready }} prêt{{ counts.ready > 1 ? 's' : '' }}
       </button>
+      <button class="ghost" :disabled="busy || !counts.ready" @click="simulate()">
+        Simuler
+      </button>
       <span class="spacer"></span>
       <button class="ghost" :disabled="busy || working" @click="index">
         Relire la bibliothèque
       </button>
+      <button
+        v-if="data.journal_size"
+        class="ghost"
+        :class="{ active: showUndo }"
+        @click="toggleUndo"
+      >Annuler… ({{ data.journal_size }})</button>
+      <button
+        v-if="counts.unplanned === 0 && counts.works"
+        class="ghost"
+        :disabled="busy || working"
+        title="Vide la file et repart du premier fichier"
+        @click="plan({ reset: true })"
+      >Recommencer</button>
     </div>
+
+    <!-- Ce qui a été rangé, par œuvre, avec une annulation par ligne -->
+    <section v-if="showUndo" class="undo-panel">
+      <div class="head">
+        <h3>Annuler un rangement</h3>
+        <button v-if="data.journal_size" class="danger" @click="undoAll(data.journal_size)">
+          Tout annuler ({{ data.journal_size }})
+        </button>
+      </div>
+      <p class="note">
+        Les fichiers retournent à leur emplacement d'origine. Rien n'est supprimé, et une
+        origine déjà occupée fait échouer le retour plutôt que d'écraser.
+      </p>
+
+      <p v-if="!journal" class="empty">Lecture du journal…</p>
+      <p v-else-if="!journal.works.length" class="empty">Aucun déplacement à annuler.</p>
+
+      <ul v-else class="undo-works">
+        <li v-for="wk in journal.works" :key="wk.key">
+          <div class="body">
+            <div class="title">
+              {{ wk.title }}
+              <span v-if="wk.work_kind" class="kind">
+                {{ WORK_KINDS[wk.work_kind] ?? wk.work_kind }}
+              </span>
+            </div>
+            <div class="meta">
+              {{ wk.files }} fichier{{ wk.files > 1 ? 's' : '' }}
+              <span v-if="wk.companions">+ {{ wk.companions }} associé{{ wk.companions > 1 ? 's' : '' }}</span>
+              <code>{{ shortPath(wk.sample) }}</code>
+            </div>
+          </div>
+          <button class="small" :disabled="undoing === wk.key" @click="undoWork(wk)">
+            {{ undoing === wk.key ? 'Annulation…' : 'Annuler' }}
+          </button>
+        </li>
+      </ul>
+    </section>
 
     <!-- Ce qui tourne, quand quelque chose tourne -->
     <div v-if="activity" class="activity">
@@ -710,6 +828,28 @@ onUnmounted(() => clearInterval(poller))
 .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .toolbar .spacer { flex: 1; }
 .toolbar .ghost { color: var(--text-faint); }
+.toolbar .ghost.active { border-color: var(--accent); color: var(--text); }
+
+.undo-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+.undo-panel .head { display: flex; align-items: center; gap: 12px; }
+.undo-panel .head h3 {
+  margin: 0; flex: 1; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim);
+}
+.undo-panel .danger { font-size: 11.5px; padding: 3px 10px; color: var(--text-faint); }
+.undo-panel .danger:hover { color: var(--err); border-color: color-mix(in srgb, var(--err) 30%, transparent); }
+.undo-panel .note { margin: 9px 0 12px; font-size: 12px; color: var(--text-faint); line-height: 1.6; max-width: 680px; }
+.undo-panel .empty { margin: 0; font-size: 12.5px; color: var(--text-faint); font-style: italic; }
+.undo-works { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto; }
+.undo-works li { display: flex; align-items: center; gap: 12px; }
+.undo-works .body { flex: 1; min-width: 0; }
+.undo-works .title { font-size: 13px; display: flex; align-items: baseline; gap: 8px; }
+.undo-works .kind {
+  font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--text-faint); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px;
+}
+.undo-works .meta { display: flex; gap: 9px; align-items: baseline; margin-top: 2px; font-size: 11px; color: var(--text-faint); flex-wrap: wrap; }
+.undo-works .meta code { font-family: var(--mono); font-size: 10.5px; }
 
 .activity { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
 .activity .bar { height: 3px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }

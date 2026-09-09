@@ -19,7 +19,7 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any
 
 import httpx
 
@@ -66,16 +66,6 @@ class Candidate:
         """
         titles = [self.title, self.original_title, *self.aliases]
         return [t for t in titles if t]
-
-
-class Provider(Protocol):
-    """Interface minimale attendue de chaque fournisseur."""
-
-    name: str
-
-    async def search_movie(self, title: str, year: int | None) -> list[Candidate]: ...
-
-    async def search_series(self, title: str, year: int | None) -> list[Candidate]: ...
 
 
 class TTLCache:

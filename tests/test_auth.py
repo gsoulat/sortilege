@@ -41,10 +41,13 @@ def logged(client: TestClient) -> TestClient:
 @pytest.mark.parametrize(
     "method,path",
     [
-        ("GET", "/api/library"),
         ("POST", "/api/library/scan"),
-        ("GET", "/api/review"),
+        ("GET", "/api/workspace"),
         ("POST", "/api/review/plan"),
+        ("POST", "/api/review/evacuate"),
+        ("GET", "/api/collection/trash"),
+        ("POST", "/api/collection/trash/purge"),
+        ("GET", "/api/media/plan/quelconque"),
         ("POST", "/api/review/apply"),
         ("POST", "/api/review/undo"),
         ("GET", "/api/review/journal"),

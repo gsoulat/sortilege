@@ -89,10 +89,6 @@ class FileProbe:
             return "576p"
         return f"{self.height}p"
 
-    @property
-    def has_declared_id(self) -> bool:
-        return bool(self.tmdb_id or self.imdb_id or self.tvdb_id)
-
 
 def ffprobe_available() -> bool:
     return shutil.which("ffprobe") is not None

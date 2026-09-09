@@ -58,8 +58,6 @@ class Settings(BaseSettings):
     auto_apply_threshold: float = 0.92
     reject_threshold: float = 0.40
 
-    database_url: str = "sqlite:///data/sortilege.db"
-
     @field_validator("source_roots", "allowed_roots", mode="before")
     @classmethod
     def _split_roots(cls, v: object) -> object:

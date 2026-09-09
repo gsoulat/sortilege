@@ -57,7 +57,7 @@ def test_nfo_uniqueid_kodi(tmp_path: Path) -> None:
     assert probe.tmdb_id == "693134"
     assert probe.imdb_id == "tt15239678"
     assert probe.nfo_year == 2024
-    assert probe.has_declared_id
+    assert probe.tmdb_id and probe.imdb_id
 
 
 def test_nfo_champs_plats_radarr(tmp_path: Path) -> None:
@@ -77,7 +77,7 @@ def test_nfo_absent_ne_leve_pas(tmp_path: Path) -> None:
     media = tmp_path / "seul.mkv"
     media.touch()
     probe = read_nfo(media)
-    assert probe.has_declared_id is False
+    assert not (probe.tmdb_id or probe.imdb_id or probe.tvdb_id)
 
 
 def test_nfo_illisible_retombe_sur_le_texte_brut(tmp_path: Path) -> None:

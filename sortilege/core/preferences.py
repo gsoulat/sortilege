@@ -476,7 +476,3 @@ class PreferenceStore:
         ):
             return resolve_within(self._library_root, over.destinations[kind])
         return resolve_within(self._library_root, prefs.destination_for(kind))
-
-    def invalidate(self) -> None:
-        with self._lock:
-            self._cache = None

@@ -268,8 +268,8 @@ def _plan_status() -> dict[str, object]:
     }
 
 
-@router.get("/plan/status")
 def plan_status() -> dict[str, object]:
+    """Etat du calcul, pour la vue unifiee. Appelee dans le processus."""
     return _plan_status()
 
 
@@ -393,11 +393,6 @@ async def build_plans(limit: int = 100, reset: bool = False) -> dict[str, object
     global _plan_task
     _plan_task = asyncio.create_task(work(), name="sortilege-plan")
     return {**_queue(), "started": True}
-
-
-@router.get("")
-def get_queue() -> dict[str, object]:
-    return _queue()
 
 
 def _queue() -> dict[str, object]:

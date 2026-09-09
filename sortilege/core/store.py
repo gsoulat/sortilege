@@ -211,7 +211,3 @@ class Store:
             # repart de zero plutot que d'echouer au demarrage.
             logger.warning("etat « %s » illisible, ignore", key)
             return None
-
-    def drop_blob(self, key: str) -> None:
-        with self._lock, self._connect() as conn:
-            conn.execute("DELETE FROM blobs WHERE key = ?", (key,))

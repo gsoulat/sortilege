@@ -38,17 +38,25 @@ def test_defauts_sans_fichier(store: PreferenceStore) -> None:
 
 
 def test_aller_retour(store: PreferenceStore) -> None:
+    """Relu depuis le DISQUE et non depuis le cache : c'est ce que fait un
+    redemarrage, et c'est la seule chose qui prouve que l'ecriture a eu lieu."""
     store.save(Preferences(destinations={**DEFAULT_DESTINATIONS, "movie": "Cinema"}))
-    store.invalidate()
-    assert store.load().destinations["movie"] == "Cinema"
+
+    relu = PreferenceStore(
+        path=store._path, library_root=store._library_root, source_roots=store._source_roots
+    )
+    assert relu.load().destinations["movie"] == "Cinema"
 
 
 def test_fichier_corrompu_retombe_sur_les_defauts(store: PreferenceStore) -> None:
     """Un JSON casse ne doit pas empecher l'application de demarrer."""
     store._path.parent.mkdir(parents=True, exist_ok=True)
     store._path.write_text("{ ceci n'est pas du json", encoding="utf-8")
-    store.invalidate()
-    assert store.load().destinations == DEFAULT_DESTINATIONS
+
+    neuf = PreferenceStore(
+        path=store._path, library_root=store._library_root, source_roots=store._source_roots
+    )
+    assert neuf.load().destinations == DEFAULT_DESTINATIONS
 
 
 # --- Confinement ------------------------------------------------------------

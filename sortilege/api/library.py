@@ -24,7 +24,6 @@ from ..config import get_settings
 from ..core.scanner import ScanResult, scan
 from ..core.snapshot import SCAN_KEY, SnapshotError, scan_in, scan_out
 from .deps import get_memory, get_store
-from .schemas import ScanOut, scan_to_out
 
 logger = logging.getLogger(__name__)
 
@@ -217,8 +216,12 @@ def start_scan(deep: bool = True, limit: int | None = None) -> dict[str, object]
     return _status()
 
 
-@router.get("/scan/status")
 def scan_status() -> dict[str, object]:
+    """Etat du scan, pour la vue unifiee.
+
+    Fonction et non route : elle est appelee dans le processus, par
+    ``/api/workspace`` qui agrege les trois travaux en une seule reponse.
+    """
     return _status()
 
 
@@ -235,11 +238,3 @@ def _status() -> dict[str, object]:
         "has_result": _job.result is not None,
         "found": _job.result.total if _job.result else 0,
     }
-
-
-@router.get("", response_model=ScanOut)
-def get_library() -> ScanOut:
-    """Dernier scan connu. Vide tant qu'aucun scan n'a abouti."""
-    if _job.result is None:
-        return ScanOut(total=0, skipped=0, errors=[], files=[], deep=_job.deep)
-    return scan_to_out(_job.result, deep=_job.deep)

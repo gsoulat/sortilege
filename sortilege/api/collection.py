@@ -58,51 +58,6 @@ def current_works() -> list[Work]:
     return list(_job.works)
 
 
-def _work_out(work: Work) -> dict[str, object]:
-    return {
-        "key": work.key,
-        "kind": work.kind,
-        "title": work.title,
-        "year": work.year,
-        "poster_url": work.poster_url,
-        "identified": work.identified,
-        "file_count": work.file_count,
-        "total_bytes": work.total_bytes,
-        "owned_count": work.owned_count,
-        "missing_count": work.missing_count,
-        "wasted_bytes": work.wasted_bytes,
-        "seasons": [
-            {
-                "number": s.number,
-                "owned": sorted(s.owned),
-                "missing": s.missing,
-                "known_count": len(s.known),
-                "complete": s.complete,
-                "missing_titles": {str(n): s.known.get(n, "") for n in s.missing},
-            }
-            for s in sorted(work.seasons.values(), key=lambda s: s.number)
-        ],
-        "duplicates": [
-            {
-                "label": g.label,
-                "wasted_bytes": g.wasted_bytes,
-                "files": [
-                    {
-                        "relative_path": f.relative_path,
-                        "size_bytes": f.size_bytes,
-                        "resolution": f.resolution,
-                        "codec": f.codec,
-                        "source": f.source,
-                        "keep": f is g.best,
-                    }
-                    for f in sorted(g.files, key=lambda f: f.rank, reverse=True)
-                ],
-            }
-            for g in work.duplicates
-        ],
-    }
-
-
 async def _enrich(works: list[Work], tmdb: TMDBProvider | None) -> None:
     """Ajoute affiche et episodes connus. Sans cle, l'index reste utilisable.
 
@@ -210,37 +165,15 @@ def _status() -> dict[str, object]:
     }
 
 
-@router.get("/status")
 def status() -> dict[str, object]:
+    """Etat de l'indexation, pour la vue unifiee.
+
+    Fonction et non route : elle est appelee dans le processus. Les trois
+    lectures qui l'accompagnaient — collection, manquants, doublons — servaient
+    l'ancienne vue « Ma collection » et sont mortes avec elle. La vue unifiee
+    les obtient par ``/api/workspace``, qui les rassemble avec le reste.
+    """
     return _status()
-
-
-@router.get("")
-def read_collection() -> dict[str, object]:
-    """Toutes les oeuvres, pour la vue en grille."""
-    return {**_status(), "works": [_work_out(w) for w in _job.works]}
-
-
-@router.get("/missing")
-def read_missing() -> dict[str, object]:
-    """Uniquement les series et animes incomplets."""
-    incomplete = [w for w in _job.works if w.has_gaps]
-    return {
-        **_status(),
-        "total_missing": sum(w.missing_count for w in incomplete),
-        "works": [_work_out(w) for w in incomplete],
-    }
-
-
-@router.get("/duplicates")
-def read_duplicates() -> dict[str, object]:
-    """Uniquement les oeuvres ayant plusieurs fichiers pour une meme place."""
-    doubled = [w for w in _job.works if w.duplicates]
-    return {
-        **_status(),
-        "wasted_bytes": sum(w.wasted_bytes for w in doubled),
-        "works": [_work_out(w) for w in doubled],
-    }
 
 
 @router.post("/duplicates/trash")
