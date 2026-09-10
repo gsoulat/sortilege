@@ -1,6 +1,34 @@
 # CHANGELOG
 
 
+## v0.43.2 (2026-09-10)
+
+### Bug Fixes
+
+- **parseur**: Ne plus eclater une serie selon l'ecriture de sa saison
+  ([`a3e102d`](https://github.com/gsoulat/sortilege/commit/a3e102dcd3116f5744947eb3ab3bf1732b8db1df))
+
+« Walker Texas Ranger Saison 2 » et « Walker.Texas.Ranger.S02 » donnaient deux titres differents — «
+  Walker Texas Ranger 2 » et « Walker Texas Ranger S02 » — donc DEUX oeuvres pour une seule serie.
+  Le mot « saison » etait bien retire comme bruit, mais le numero restait orphelin.
+
+Le retrait se fait AVANT celui du bruit, sinon le numero n'est plus rattachable a rien. Et le « s »
+  doit etre precede d'un SEPARATEUR, pas d'une simple limite de mot : « Ocean's 11 » finit par « s
+  11 » et devenait « Ocean' ». Une apostrophe fait limite de mot, pas separateur — c'est toute la
+  difference.
+
+Ajoute aussi core/reencode.py, inerte pour l'instant : l'inventaire des fichiers qui ne respectent
+  pas leur strategie de qualite, et la place que leur reencodage rendrait. Il ne touche a aucun
+  fichier — reencoder est long et perd de la qualite pour toujours, personne ne doit lancer ca sans
+  avoir vu d'abord ce que ca porte.
+
+La regle de violation ne s'y invente pas : elle se deduit de la strategie deja choisie. Un fichier
+  la viole s'il existe une resolution plus basse que la sienne que cette strategie classe mieux.
+  Consequence voulue : « Qualité maximale » ne propose jamais rien.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.43.1 (2026-09-10)
 
 ### Bug Fixes
