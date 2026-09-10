@@ -68,6 +68,10 @@ TOKENS: tuple[Token, ...] = (
     # Films : belongs_to_collection chez TMDB. Series : deduit du prefixe du
     # titre (« Star Trek: Discovery » -> « Star Trek »), TMDB n'exposant aucun
     # champ de franchise pour les series.
+    # Retire du prereglage des SERIES : ni Jellyfin ni Plex ne regroupent
+    # d'apres l'arborescence, et le dossier coutait un niveau pour rien. Il
+    # reste utile aux films, ou la saga vient de TMDB et ou l'on navigue
+    # souvent dans les dossiers a la main.
     Token("collection", "Saga / Franchise", "Star Trek", "identite"),
     Token("season", "Saison", "2", "episode"),
     Token("episode", "Épisode", "7", "episode"),
@@ -110,10 +114,18 @@ PRESETS: dict[str, dict[str, str]] = {
         # un segment vide, et un segment vide disparait du chemin. Le meme
         # gabarit sert donc au film isole comme au film de saga.
         "movie": ("{collection}/{title}{? year: ($)}/{title}{? year: ($)}{? resolution: [$]}"),
-        # Franchise / serie / saison. Le premier segment disparait quand la
-        # serie n'appartient a aucune franchise.
+        # Serie / saison, sans niveau de franchise.
+        #
+        # {collection} a ete retire de ce prereglage : Jellyfin ne regroupe RIEN
+        # d'apres l'arborescence. Ses collections viennent des identifiants de
+        # collection TMDB, via un plugin, et ne concernent que les films — il
+        # n'existe aucune collection de series. Le dossier de franchise ne lui
+        # apportait donc rien, et coutait un niveau de plus a traverser.
+        #
+        # Le jeton reste disponible pour qui range aussi a la main : il suffit
+        # de le remettre en tete du gabarit dans les reglages.
         "episode": (
-            "{collection}/{title}{? year: ($)}/Season {season:02}/"
+            "{title}{? year: ($)}/Season {season:02}/"
             "{title} - S{season:02}E{episode:02}{? episode_end:02:-E$}"
             "{? episode_title: - $}"
         ),
@@ -133,8 +145,10 @@ PRESETS: dict[str, dict[str, str]] = {
         # Plex accepte un identifiant entre accolades dans le nom, mais les
         # accolades sont la syntaxe des jetons : on ne l'expose pas ici.
         "movie": "{collection}/{title}{? year: ($)}/{title}{? year: ($)}",
+        # Meme raison que pour Jellyfin : Plex construit ses collections a
+        # partir des metadonnees, pas des dossiers.
         "episode": (
-            "{collection}/{title}{? year: ($)}/Season {season:02}/"
+            "{title}{? year: ($)}/Season {season:02}/"
             "{title} - s{season:02}e{episode:02}{? episode_end:02:-e$}"
         ),
         "anime": "{title}/{title} - {absolute_episode:03}",
