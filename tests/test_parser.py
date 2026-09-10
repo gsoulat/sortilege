@@ -108,3 +108,42 @@ def test_nombre_du_titre_non_pris_pour_l_annee(filename: str, title: str, year: 
 )
 def test_detection_video(name: str, expected: bool) -> None:
     assert is_video(Path(name)) is expected
+
+
+# --- Signatures de sites de telechargement ----------------------------------
+#
+# Cas reel, releve dans une vraie source : les sites de telechargement direct
+# signent les fichiers qu'ils diffusent et y collent un mot au hasard. Quand la
+# release porte une annee, la coupure a l'annee suffisait ; SANS annee, le
+# titre gardait « Wawacity ec » et aucun fournisseur ne reconnaissait rien.
+
+
+@pytest.mark.parametrize(
+    ("nom", "titre"),
+    [
+        ("ange ou démon Wawacity bz.mp4", "ange ou démon"),
+        ("Asterix Aux Jeux Olympiques Wawacity ec.avi", "Asterix Aux Jeux Olympiques"),
+        ("Bruce tout puissant Wawacity ec.mkv", "Bruce tout puissant"),
+        ("Le.Grand.Bleu.Zone-Telechargement.mkv", "Le Grand Bleu"),
+        ("Heat.1080p.x264-Torrent9.mkv", "Heat"),
+    ],
+)
+def test_la_signature_du_site_et_sa_suite_disparaissent(nom: str, titre: str) -> None:
+    """Le suffixe aleatoire n'appartient a aucune liste : il ne peut etre
+    reconnu que par sa POSITION, apres la signature. D'ou une coupure et non un
+    retrait de mot."""
+    assert parse(Path("/src") / nom).title == titre
+
+
+def test_un_titre_reduit_a_la_signature_est_conserve() -> None:
+    """Mieux vaut un fichier nomme d'apres le site que pas nomme du tout : sans
+    titre, il ne serait plus rattachable a rien."""
+    assert parse(Path("/src/Wawacity.mp4")).title == "Wawacity"
+
+
+def test_l_annee_reste_lue_malgre_la_signature() -> None:
+    nom = "Almost Family 2025 Multi WEBRIP-Wawacity motorcycles.mp4"
+    lu = parse(Path("/src") / nom)
+
+    assert lu.title == "Almost Family"
+    assert lu.year == 2025

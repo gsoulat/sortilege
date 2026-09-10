@@ -17,10 +17,15 @@ function patch(fields) {
   emit('change', fields)
 }
 
+// Enregistrer un webhook ET activer d'un seul geste. Séparer les deux laissait
+// la case « Activer » grisée tant qu'aucune URL n'était enregistrée : on ne
+// pouvait pas la cocher, et rien ne disait clairement pourquoi. Coller une URL
+// de webhook, c'est vouloir des notifications — le second clic n'apprenait rien
+// à personne.
 function saveUrl() {
   const value = draft.value.trim()
   if (!value) return
-  patch({ webhook_url: value })
+  patch({ webhook_url: value, enabled: true })
   draft.value = ''
   result.value = null
 }
@@ -61,26 +66,6 @@ async function test() {
       un message toutes les quinze minutes finirait par être ignoré.
     </p>
 
-    <label class="switch">
-      <input
-        type="checkbox"
-        :checked="notifications.enabled"
-        :disabled="!notifications.webhook_set"
-        @change="patch({ enabled: $event.target.checked })"
-      />
-      Activer les notifications
-      <span v-if="!notifications.webhook_set" class="hint">— enregistre d'abord un webhook</span>
-    </label>
-
-    <label class="switch sub">
-      <input
-        type="checkbox"
-        :checked="notifications.on_failure"
-        @change="patch({ on_failure: $event.target.checked })"
-      />
-      Prévenir aussi quand un cycle échoue
-    </label>
-
     <div class="field">
       <label for="webhook">URL du webhook</label>
       <div class="row">
@@ -101,6 +86,28 @@ async function test() {
         stockée comme une clé : saisie une fois, jamais réaffichée.
       </p>
     </div>
+
+    <label class="switch" :class="{ bloque: !notifications.webhook_set }">
+      <input
+        type="checkbox"
+        :checked="notifications.enabled"
+        :disabled="!notifications.webhook_set"
+        @change="patch({ enabled: $event.target.checked })"
+      />
+      Activer les notifications
+      <span v-if="!notifications.webhook_set" class="hint">
+        — impossible tant qu'aucun webhook n'est enregistré : il n'y aurait nulle part où écrire
+      </span>
+    </label>
+
+    <label class="switch sub">
+      <input
+        type="checkbox"
+        :checked="notifications.on_failure"
+        @change="patch({ on_failure: $event.target.checked })"
+      />
+      Prévenir aussi quand un cycle échoue
+    </label>
 
     <div v-if="notifications.webhook_set" class="test">
       <button :disabled="testing" @click="test">
@@ -125,6 +132,11 @@ h3 {
 .switch { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 8px; }
 .switch.sub { margin-left: 22px; color: var(--text-dim); }
 .switch input { accent-color: var(--accent); }
+/* Une case qu'on ne peut pas cocher doit se VOIR : sans cela, elle passe pour
+   cassée plutôt que pour indisponible. */
+.switch.bloque { color: var(--text-faint); cursor: not-allowed; }
+.switch.bloque input { cursor: not-allowed; }
+.switch .hint { margin: 0; }
 
 .field { margin-top: 14px; }
 .field > label { display: block; font-size: 11.5px; color: var(--text-dim); margin-bottom: 5px; }

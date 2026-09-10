@@ -338,12 +338,23 @@ def _run(roots, deep: bool, limit: int | None, library_root) -> None:
             _job.current = name
             _job.phase = "analyse"
 
+        def partiel(partial) -> None:
+            """Rend visible ce qui est deja analyse.
+
+            Sans cela, la liste restait VIDE pendant tout le scan — plusieurs
+            minutes sur une grosse bibliotheque — avec une barre qui avance
+            devant un ecran vide. On voyait que quelque chose se passait sans
+            rien pouvoir en faire.
+            """
+            _job.result = partial
+
         result = scan(
             roots,
             deep=deep,
             limit=limit,
             library_root=library_root,
             on_progress=progress,
+            on_partial=partiel,
         )
         _job.result = result
         _job.error = None

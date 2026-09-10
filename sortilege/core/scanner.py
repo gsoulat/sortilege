@@ -135,6 +135,12 @@ def collect(
     return found, skipped, errors
 
 
+PARTIAL_EVERY = 25
+"""Frequence de publication du resultat partiel. Assez souvent pour que la
+liste se remplisse sous les yeux, assez rare pour que le cout reste
+negligeable devant l'analyse d'un fichier."""
+
+
 def scan(
     roots: list[Path],
     *,
@@ -142,6 +148,7 @@ def scan(
     limit: int | None = None,
     library_root: Path | None = None,
     on_progress: Callable[[int, int, str], None] | None = None,
+    on_partial: Callable[[ScanResult], None] | None = None,
 ) -> ScanResult:
     """Parcourt les racines et analyse chaque fichier video.
 
@@ -152,6 +159,12 @@ def scan(
     ``on_progress(traites, total, nom_du_fichier)`` est appele apres chaque
     fichier. C'est ce qui permet a l'interface de montrer ou en est un scan qui
     dure des minutes, plutot qu'un bouton fige.
+
+    ``on_partial`` recoit le resultat EN COURS de constitution, regulierement.
+    Une barre de progression qui avance devant une liste vide ne vaut guere
+    mieux qu'un bouton fige : on voit que quelque chose se passe, sans rien
+    pouvoir en faire. Avec ce rappel, les oeuvres apparaissent au fur et a
+    mesure qu'elles sont reconnues.
     """
     result = ScanResult()
 
@@ -180,6 +193,21 @@ def scan(
         # ou « Severance/Season 02/ep07.mkv », l'information utile est plus
         # haut que le dossier direct.
         ancestors = list(path.relative_to(root).parts[:-1])
+
+        if on_partial and index % PARTIAL_EVERY == 0:
+            # Le resultat est publie par paquets, pas a chaque fichier : sur
+            # six mille fichiers, notifier a l'unite couterait plus que
+            # l'analyse elle-meme, pour un affichage que l'oeil ne suit pas.
+            #
+            # Une COPIE des listes, jamais l'objet en cours : le destinataire le
+            # lit depuis un autre fil pendant que le scan continue d'y ecrire.
+            on_partial(
+                ScanResult(
+                    files=list(result.files),
+                    skipped=result.skipped,
+                    errors=list(result.errors),
+                )
+            )
 
         parsed = parse(path, ancestors)
         probe = inspect(path) if deep else FileProbe()

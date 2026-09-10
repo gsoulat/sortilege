@@ -90,6 +90,27 @@ _NOISE = re.compile(
     re.IGNORECASE,
 )
 
+# Sites de telechargement direct qui signent les fichiers qu'ils diffusent,
+# puis y collent un mot pris au hasard : « Bruce tout puissant Wawacity ec »,
+# « Almost Family 2025 Multi WEBRIP-Wawacity motorcycles ». La signature ET ce
+# qui la suit sont du bruit — c'est une trace de diffusion, pas une information
+# sur l'oeuvre.
+#
+# On coupe au lieu de retirer le mot seul : le suffixe aleatoire n'appartient a
+# aucune liste, il ne peut donc etre reconnu que par sa POSITION, apres la
+# signature. C'est ce qui manquait : les titres sans annee gardaient « Wawacity
+# ec » et n'etaient reconnus par aucun fournisseur.
+_SITE_TAIL = re.compile(
+    r"[\s._-]*\b(?:"
+    r"wawacity|wawa|zone[\s._-]?t[ée]l[ée]chargement|zone[\s._-]?annuaire|"
+    r"extreme[\s._-]?download|annuaire[\s._-]?t[ée]l[ée]chargement|"
+    r"torrent9|cpasbien|yggtorrent|oxtorrent|gktorrent|tirexo|darkino|wiflix|"
+    r"french[\s._-]?stream|papystreaming|libertyland|"
+    r"1fichier|uptobox|rapidgator|turbobit|dl[\s._-]?protect"
+    r")\b.*$",
+    re.IGNORECASE,
+)
+
 _SEPARATORS = re.compile(r"[._]+")
 _MULTISPACE = re.compile(r"\s{2,}")
 
@@ -225,6 +246,10 @@ def _clean_title(raw: str, cut_at: int | None) -> str:
     title = raw[:cut_at] if cut_at is not None else raw
     title = _FANSUB_GROUP.sub("", title)
     title = _SEPARATORS.sub(" ", title)
+    # Le retrait n'est retenu que s'il laisse quelque chose : un fichier reduit
+    # au seul nom du site vaut mieux nomme par ce nom que pas nomme du tout.
+    if (sans_site := _SITE_TAIL.sub("", title)).strip(" -_"):
+        title = sans_site
     title = _NOISE.sub(" ", title)
     title = re.sub(r"[\[\](){}]", " ", title)
     # Les tirets cadratins sont voulus : les releases francaises et les fansubs
