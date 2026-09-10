@@ -31,6 +31,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
 from . import review
+from . import transcode as transcode_api
 from .deps import DATA_DIR
 
 logger = logging.getLogger(__name__)
@@ -73,7 +74,17 @@ def stream_plan(plan_id: str, request: Request) -> StreamingResponse:
     if plan is None:
         raise HTTPException(status_code=404, detail="Plan inconnu.")
 
-    source = plan.source
+    return _serve_range(plan.source, request)
+
+
+def _serve_range(source: Path, request: Request) -> StreamingResponse:
+    """Sert un fichier en acceptant les requetes par plage.
+
+    Extrait de la route des plans pour servir aussi les fichiers reencodes en
+    attente de verification : c'est exactement le meme besoin — regarder un
+    fichier avant de decider de son sort — et le dupliquer aurait fait diverger
+    la gestion des plages, qui est la partie delicate.
+    """
     if not source.is_file():
         raise HTTPException(status_code=404, detail="Fichier introuvable.")
 
@@ -425,12 +436,15 @@ def stream_remuxed(plan_id: str, at: float = 0.0) -> StreamingResponse:
     plan = next((p for p in review.current_plans() if p.id == plan_id), None)
     if plan is None or not plan.source.is_file():
         raise HTTPException(status_code=404, detail="Fichier introuvable.")
+    return _serve_remuxed(plan.source, at)
 
+
+def _serve_remuxed(source: Path, at: float) -> StreamingResponse:
     ffmpeg = shutil.which("ffmpeg")
     if ffmpeg is None:
         raise HTTPException(status_code=503, detail="ffmpeg absent de l'image.")
 
-    infos = _remux_plan(plan.source)
+    infos = _remux_plan(source)
     if not infos["possible"]:
         raise HTTPException(
             status_code=415,
@@ -448,7 +462,7 @@ def stream_remuxed(plan_id: str, at: float = 0.0) -> StreamingResponse:
         "error",
         *(["-ss", f"{max(0.0, at):.3f}"] if at > 0 else []),
         "-i",
-        str(plan.source),
+        str(source),
         "-map",
         "0:v:0",
         "-map",
@@ -490,6 +504,34 @@ def stream_remuxed(plan_id: str, at: float = 0.0) -> StreamingResponse:
         media_type="video/mp4",
         headers={"Cache-Control": "no-store"},
     )
+
+
+@router.get("/transcode/{job_id}")
+def stream_transcoded(job_id: str, request: Request) -> StreamingResponse:
+    """Sert un fichier REENCODE, en attente de verification.
+
+    Le controle automatique attrape un encodage tronque ; il ne dira jamais si
+    l'image est devenue laide. Cela ne se voit qu'en regardant, et c'est
+    precisement ce que le bouton « Remplacer » demande de trancher.
+    """
+    sortie = transcode_api.job_output(job_id)
+    if sortie is None:
+        raise HTTPException(status_code=404, detail="Reencodage introuvable.")
+    return _serve_range(sortie, request)
+
+
+@router.get("/transcode/{job_id}/remux")
+def stream_transcoded_remuxed(job_id: str, at: float = 0.0) -> StreamingResponse:
+    """Le meme, reemballe en MP4 pour les navigateurs.
+
+    Le resultat est un MKV — le seul conteneur qui accepte toutes les pistes
+    recopiees — et aucun navigateur courant ne le lit. L'image etant en H.264
+    par construction, la reemballer suffit.
+    """
+    sortie = transcode_api.job_output(job_id)
+    if sortie is None:
+        raise HTTPException(status_code=404, detail="Reencodage introuvable.")
+    return _serve_remuxed(sortie, at)
 
 
 @router.get("/plan/{plan_id}/positions")

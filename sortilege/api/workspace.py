@@ -153,7 +153,11 @@ def _entry_out(entry: WorkspaceEntry) -> dict[str, object]:
         "pending": {
             "ready": [_plan_out(p) for p in entry.pending.ready],
             "review": [_plan_out(p, with_alternatives=True) for p in entry.pending.review],
-            "rejected": [_plan_out(p) for p in entry.pending.rejected],
+            # Les ecartes portent AUSSI leurs alternatives : ils sont
+            # arbitrables au meme titre que les autres. Un plan ecarte sans
+            # alternative a proposer serait une impasse — le fichier resterait
+            # indefiniment dans la source, sans rien pour le sortir de la.
+            "rejected": [_plan_out(p, with_alternatives=True) for p in entry.pending.rejected],
             "unplanned_count": len(entry.pending.unplanned),
             "unplanned": [
                 f.relative_path or f.path.name

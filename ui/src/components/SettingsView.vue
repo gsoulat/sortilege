@@ -5,6 +5,7 @@ import FolderBrowser from './FolderBrowser.vue'
 import AiSettings from './AiSettings.vue'
 import AutomationSettings from './AutomationSettings.vue'
 import NotificationSettings from './NotificationSettings.vue'
+import TranscodeSettings from './TranscodeSettings.vue'
 import MaintenanceSettings from './MaintenanceSettings.vue'
 import DecisionsSettings from './DecisionsSettings.vue'
 
@@ -48,6 +49,11 @@ function onNotificationsChange(patch) {
 function onMediaServerChange(patch) {
   Object.assign(prefs.value.media_server, patch)
   save({ media_server: patch })
+}
+
+function onTranscodeChange(patch) {
+  Object.assign(prefs.value.transcode, patch)
+  save({ transcode: patch })
 }
 
 function onQualityChange(patch) {
@@ -304,6 +310,34 @@ const KINDS = ['movie', 'episode', 'anime']
       <p v-for="s in prefs.quality_strategies" :key="s.key" class="hint">
         <strong>{{ s.label }}</strong> — {{ s.summary }}
       </p>
+
+      <h4 class="sous-section">Poids maximal par fichier</h4>
+      <p class="note">
+        La résolution ne dit pas tout : deux fichiers en 1080p peuvent peser 1,2 Go et 6 Go
+        selon leur débit. Si tu raisonnes en poids — « un épisode, 500 Mo, pas plus » —
+        c'est ici. Les fichiers au-dessus apparaissent dans l'onglet
+        <strong>Réencodage</strong>, et l'encodeur vise ce poids au lieu d'une qualité
+        constante.
+      </p>
+      <p class="note">
+        <strong>0 = aucune limite.</strong> Rien n'est imposé par défaut : un budget posé
+        d'office ferait apparaître des centaines de fichiers à réencoder chez quelqu'un qui
+        n'a rien demandé.
+      </p>
+
+      <div v-for="k in KINDS" :key="`budget-${k}`" class="strategie">
+        <label>{{ KIND_LABELS[k] }}</label>
+        <input
+          type="number"
+          min="0"
+          step="100"
+          class="budget"
+          :placeholder="k === 'movie' ? '2000' : '500'"
+          :value="prefs.quality[`max_${k}_mb`] ?? 0"
+          @change="onQualityChange({ [`max_${k}_mb`]: Number($event.target.value) })"
+        />
+        <span class="ordre">Mo par fichier</span>
+      </div>
     </section>
 
     <MaintenanceSettings
@@ -316,6 +350,12 @@ const KINDS = ['movie', 'episode', 'anime']
     <!-- ===== Automatisation : ce que l'outil fait sans personne devant ===== -->
     <template v-if="onglet === 'automatisation'">
     <AutomationSettings :automation="prefs.automation" @change="onAutomationChange" />
+
+    <TranscodeSettings
+      v-if="prefs.transcode"
+      :transcode="prefs.transcode"
+      @change="onTranscodeChange"
+    />
 
     <NotificationSettings :notifications="prefs.notifications" @change="onNotificationsChange" />
 
@@ -394,6 +434,14 @@ const KINDS = ['movie', 'episode', 'anime']
 </template>
 
 <style scoped>
+.sous-section {
+  margin: 20px 0 8px; font-size: 11px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim);
+}
+input.budget {
+  width: 90px; font-size: 12px; padding: 4px 8px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 6px; color: var(--text);
+}
 .settings { display: flex; flex-direction: column; gap: 18px; }
 
 .onglets { display: flex; gap: 6px; flex-wrap: wrap; }

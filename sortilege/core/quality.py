@@ -141,6 +141,29 @@ class QualitySettings:
     episode: str = DEFAULT
     anime: str = DEFAULT
 
+    # Budget de poids par fichier, en mega-octets. 0 = aucune limite.
+    #
+    # La resolution ne dit pas tout : deux fichiers en 1080p peuvent peser 1,2
+    # Go et 6 Go selon l'encodage et le debit. Quelqu'un qui garde deux cents
+    # episodes sur un NAS raisonne en poids par episode — « 500 Mo, pas plus » —
+    # et cette phrase-la ne se traduit pas en resolution.
+    #
+    # Zero par defaut, et non une valeur « raisonnable » : un budget impose
+    # d'office ferait apparaitre des centaines de fichiers a reencoder chez
+    # quelqu'un qui n'a rien demande.
+    max_movie_mb: int = 0
+    max_episode_mb: int = 0
+    max_anime_mb: int = 0
+
+    def budget_bytes(self, kind: str) -> int:
+        """Poids maximal souhaite pour un fichier de ce type. 0 = aucun."""
+        champ = {
+            "movie": self.max_movie_mb,
+            "episode": self.max_episode_mb,
+            "anime": self.max_anime_mb,
+        }.get(kind, 0)
+        return max(0, int(champ)) * 1024 * 1024
+
     def for_kind(self, kind: str) -> Strategy:
         if kind not in ("movie", "episode", "anime"):
             return strategy(None)

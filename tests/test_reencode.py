@@ -187,3 +187,69 @@ def test_une_bibliotheque_conforme_ne_propose_rien() -> None:
     works = [oeuvre("movie", "Bon", fichier("1080p", 8 * GB))]
 
     assert audit(works, QualitySettings(movie="balanced")) == []
+
+
+# --- Le budget de poids -----------------------------------------------------
+#
+# « Un episode doit peser 500 Mo au plus » est une phrase qui ne se traduit pas
+# en resolution : deux fichiers en 1080p peuvent peser 1,2 Go et 6 Go selon
+# leur debit. C'est une contrainte a part entiere, et elle attrape des fichiers
+# que la strategie de resolution laisse passer.
+
+MO = 1024**2
+
+
+def test_un_fichier_au_bon_format_mais_trop_lourd_est_signale() -> None:
+    """Le cas que la resolution seule ne voit pas : 1080p accepte par la
+    strategie, mais quatre fois le budget."""
+    works = [oeuvre("episode", "Serie", fichier("1080p", 2 * GB))]
+    reglage = QualitySettings(episode="quality", max_episode_mb=500)
+
+    candidats = audit(works, reglage)
+
+    assert len(candidats) == 1
+    assert candidats[0].over_budget is True
+    assert candidats[0].target == "1080p", "on ne redimensionne pas ce qui est deja au format"
+
+
+def test_sans_budget_le_meme_fichier_ne_bouge_pas() -> None:
+    """Zero = aucune limite. Un budget impose d'office ferait apparaitre des
+    centaines de fichiers a reencoder chez quelqu'un qui n'a rien demande."""
+    works = [oeuvre("episode", "Serie", fichier("1080p", 2 * GB))]
+
+    assert audit(works, QualitySettings(episode="quality")) == []
+
+
+def test_le_budget_borne_l_estimation() -> None:
+    """Le budget est une CONSIGNE, pas une prevision : l'encodeur visera ce
+    poids, l'estimation par pixels ne peut pas l'emporter."""
+    works = [oeuvre("episode", "Serie", fichier("1080p", 4 * GB))]
+    reglage = QualitySettings(episode="quality", max_episode_mb=500)
+
+    candidat = audit(works, reglage)[0]
+
+    assert candidat.estimated_bytes == 500 * MO
+
+
+def test_le_motif_dit_le_poids_et_le_budget() -> None:
+    works = [oeuvre("episode", "Serie", fichier("1080p", 2 * GB))]
+
+    motif = audit(works, QualitySettings(episode="quality", max_episode_mb=500))[0].reason
+
+    assert "500 Mo" in motif
+    assert "debit" in motif
+
+
+def test_un_fichier_dans_le_budget_reste_tranquille() -> None:
+    works = [oeuvre("episode", "Serie", fichier("720p", 400 * MO))]
+
+    assert audit(works, QualitySettings(episode="quality", max_episode_mb=500)) == []
+
+
+def test_chaque_type_a_son_budget() -> None:
+    """Un film et un episode n'ont aucune raison de peser pareil."""
+    reglage = QualitySettings(max_movie_mb=2000, max_episode_mb=500)
+
+    assert reglage.budget_bytes("movie") == 2000 * MO
+    assert reglage.budget_bytes("episode") == 500 * MO
+    assert reglage.budget_bytes("anime") == 0

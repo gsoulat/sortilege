@@ -105,6 +105,13 @@ class Candidate:
     size_bytes: int
     estimated_bytes: int
     strategy_label: str
+    budget_bytes: int = 0
+    """Poids maximal souhaite pour ce type. 0 = aucun."""
+
+    over_budget: bool = False
+    """Le fichier depasse le budget SANS forcement violer la resolution. Deux
+    fichiers en 1080p peuvent peser 1,2 Go et 6 Go : la resolution ne dit rien
+    du debit, et c'est souvent le debit qu'on veut borner."""
 
     @property
     def savings_bytes(self) -> int:
@@ -112,7 +119,23 @@ class Candidate:
 
     @property
     def reason(self) -> str:
-        return f"{self.resolution} alors que « {self.strategy_label} » prefere {self.target}"
+        if self.over_budget and self.target == self.resolution:
+            return (
+                f"{_lisible(self.size_bytes)} alors que le budget est "
+                f"{_lisible(self.budget_bytes)} — meme resolution, debit reduit"
+            )
+        motif = f"{self.resolution} alors que « {self.strategy_label} » prefere {self.target}"
+        if self.over_budget:
+            motif += (
+                f", et {_lisible(self.size_bytes)} pour un budget de {_lisible(self.budget_bytes)}"
+            )
+        return motif
+
+
+def _lisible(octets: int) -> str:
+    if octets >= 1024**3:
+        return f"{octets / 1024**3:.1f} Go".replace(".", ",")
+    return f"{octets // (1024 * 1024)} Mo"
 
 
 def audit(
@@ -132,22 +155,40 @@ def audit(
 
     for work in works:
         strat = reglage.for_kind(work.kind)
+        budget = reglage.budget_bytes(work.kind)
         for fichiers in work.slots.values():
             for ref in fichiers:
                 vise = target_for(strat, ref.resolution)
-                if not vise:
+                trop_lourd = bool(budget) and ref.size_bytes > budget
+
+                # Un fichier peut etre a la bonne resolution ET trop lourd : on
+                # le reencode alors SANS changer de resolution, en abaissant le
+                # debit. Redimensionner ce qui est deja au bon format ferait
+                # perdre du detail sans necessite.
+                if not vise and not trop_lourd:
                     continue
-                estime = estimate_bytes(ref.size_bytes, ref.resolution, vise)
+                cible = vise or normalise(ref.resolution)
+                if not cible:
+                    continue
+
+                estime = estimate_bytes(ref.size_bytes, ref.resolution, cible)
+                if budget:
+                    # Le budget FAIT FOI sur l'estimation par pixels : c'est une
+                    # consigne, pas une prevision. L'encodeur visera ce poids.
+                    estime = min(estime, budget)
+
                 candidat = Candidate(
                     relative_path=ref.relative_path,
                     title=work.title,
                     kind=work.kind,
                     resolution=normalise(ref.resolution),
-                    target=vise,
+                    target=cible,
                     codec=ref.codec,
                     size_bytes=ref.size_bytes,
                     estimated_bytes=estime,
                     strategy_label=strat.label,
+                    budget_bytes=budget,
+                    over_budget=trop_lourd,
                 )
                 if candidat.savings_bytes >= min_savings_bytes:
                     candidats.append(candidat)

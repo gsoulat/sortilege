@@ -27,6 +27,7 @@ from .api import (
     review,
     settings,
     templates,
+    transcode,
     workspace,
 )
 from .config import get_settings
@@ -80,6 +81,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
 
     await automation.stop()
+    # Le fil de reencodage laisse son ffmpeg finir : le resultat est ecrit a
+    # part, donc au pire on laisse un fichier partiel que le menage ramassera au
+    # demarrage suivant. Tuer l'encodage jetterait des heures de calcul.
+    transcode.stop_worker()
 
 
 app = FastAPI(
@@ -101,6 +106,7 @@ app.include_router(automation.router)
 app.include_router(collection.router)
 app.include_router(workspace.router)
 app.include_router(media.router)
+app.include_router(transcode.router)
 
 # Routes accessibles sans session. Liste blanche et non liste noire : oublier
 # d'ajouter une exception rend une page inaccessible, ce qui se voit

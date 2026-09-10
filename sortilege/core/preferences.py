@@ -95,6 +95,41 @@ class OversizeSettings:
 
 
 @dataclass
+class TranscodeSettings:
+    """Reencodage differe des fichiers qui ne respectent pas la strategie.
+
+    Desactive par defaut, et c'est deliberé : c'est la seule fonction de
+    Sortilege qui degrade volontairement de la qualite. Elle doit etre demandee,
+    jamais subie.
+    """
+
+    enabled: bool = False
+
+    start_hour: int = 23
+    end_hour: int = 7
+    """Plage horaire d'encodage. Traverse minuit dans le cas normal. Bornes
+    egales = aucune restriction.
+
+    Un encodage DEJA COMMENCE va a son terme meme si la plage se ferme :
+    l'interrompre a six heures du matin jetterait une nuit de calcul."""
+
+    codec: str = "libx264"
+    """H.264 par defaut, pas HEVC : il gagne moins de place mais se lit
+    partout, y compris sur les televiseurs et boitiers anciens. Une
+    bibliotheque qu'on ne peut plus lire n'a pas gagne de place, elle a perdu
+    des films."""
+
+    crf: int = 21
+    """Qualite constante. Plus bas = meilleure image et fichier plus gros. 21
+    est le compromis courant pour un reencodage qu'on ne veut pas voir."""
+
+    preset: str = "medium"
+    """Compromis vitesse/compression de x264. « slow » gagne environ dix pour
+    cent de place pour deux fois plus de temps — rarement rentable sur un NAS
+    qui a des nuits, pas des semaines."""
+
+
+@dataclass
 class AutomationSettings:
     """Traitement automatique de bout en bout."""
 
@@ -172,6 +207,7 @@ class Preferences:
     notifications: NotificationSettings = field(default_factory=NotificationSettings)
     media_server: MediaServerSettings = field(default_factory=MediaServerSettings)
     quality: QualitySettings = field(default_factory=QualitySettings)
+    transcode: TranscodeSettings = field(default_factory=TranscodeSettings)
 
     def template_for(self, kind: str) -> str:
         return self.templates.get(kind) or PRESETS["jellyfin"].get(kind, "")
@@ -240,6 +276,9 @@ class PreferenceStore:
                 ),
                 quality=QualitySettings(
                     **{**asdict(QualitySettings()), **(raw.get("quality") or {})}
+                ),
+                transcode=TranscodeSettings(
+                    **{**asdict(TranscodeSettings()), **(raw.get("transcode") or {})}
                 ),
             )
             return self._cache

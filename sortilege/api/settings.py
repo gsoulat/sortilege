@@ -35,6 +35,7 @@ from ..core.preferences import (
     PreferenceError,
     Preferences,
     QualitySettings,
+    TranscodeSettings,
 )
 from ..core.probe import ffprobe_available
 from ..core.quality import STRATEGIES as QUALITY_STRATEGIES
@@ -87,11 +88,24 @@ class QualityIn(BaseModel):
     episode: str | None = None
     anime: str | None = None
 
+    max_movie_mb: int | None = None
+    max_episode_mb: int | None = None
+    max_anime_mb: int | None = None
+
 
 class OversizeIn(BaseModel):
     enabled: bool | None = None
     threshold_gb: float | None = None
     destinations: dict[str, str] | None = None
+
+
+class TranscodeIn(BaseModel):
+    enabled: bool | None = None
+    start_hour: int | None = None
+    end_hour: int | None = None
+    codec: str | None = None
+    crf: int | None = None
+    preset: str | None = None
 
 
 class PreferencesIn(BaseModel):
@@ -105,6 +119,7 @@ class PreferencesIn(BaseModel):
     notifications: NotificationsIn | None = None
     media_server: MediaServerIn | None = None
     quality: QualityIn | None = None
+    transcode: TranscodeIn | None = None
 
 
 @router.get("/preferences")
@@ -155,6 +170,14 @@ def read_preferences() -> dict[str, object]:
             "base_url": prefs.media_server.base_url,
             # La cle ne sort jamais : elle donne acces au serveur multimedia.
             "api_key_set": bool(prefs.media_server.api_key),
+        },
+        "transcode": {
+            "enabled": prefs.transcode.enabled,
+            "start_hour": prefs.transcode.start_hour,
+            "end_hour": prefs.transcode.end_hour,
+            "codec": prefs.transcode.codec,
+            "crf": prefs.transcode.crf,
+            "preset": prefs.transcode.preset,
         },
         "notifications": {
             "enabled": prefs.notifications.enabled,
@@ -219,6 +242,25 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
             **{**asdict(current.oversize), **patch, "destinations": destinations}
         )
 
+    trans = current.transcode
+    if body.transcode is not None:
+        patch = body.transcode.model_dump(exclude_none=True)
+        # Les bornes sont ramenees dans le cadran plutot que refusees : une
+        # heure a 25 est une faute de frappe, pas une intention, et bloquer
+        # l'enregistrement entier pour ca serait disproportionne.
+        for champ in ("start_hour", "end_hour"):
+            if champ in patch:
+                patch[champ] = max(0, min(23, int(patch[champ])))
+        if "crf" in patch:
+            # Hors de cette plage, x264 produit soit un fichier enorme, soit une
+            # image inutilisable.
+            patch["crf"] = max(14, min(30, int(patch["crf"])))
+        if patch.get("codec") not in (None, "libx264", "libx265"):
+            patch.pop("codec")
+        if patch.get("preset") not in (None, "veryfast", "fast", "medium", "slow"):
+            patch.pop("preset")
+        trans = TranscodeSettings(**{**asdict(current.transcode), **patch})
+
     notif = current.notifications
     if body.notifications is not None:
         patch = body.notifications.model_dump(exclude_none=True)
@@ -241,6 +283,13 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
 
     qualite = current.quality
     if body.quality is not None:
+        # Un budget negatif n'a pas de sens et un budget minuscule rendrait
+        # tous les fichiers fautifs : on ramene dans le cadran plutot que de
+        # refuser l'enregistrement entier.
+        for champ in ("max_movie_mb", "max_episode_mb", "max_anime_mb"):
+            valeur = getattr(body.quality, champ, None)
+            if valeur is not None:
+                setattr(body.quality, champ, max(0, min(200_000, int(valeur))))
         qualite = QualitySettings(
             **{**asdict(current.quality), **body.quality.model_dump(exclude_none=True)}
         )
@@ -258,6 +307,7 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
         automation=auto,
         oversize=over,
         notifications=notif,
+        transcode=trans,
         media_server=server,
         quality=qualite,
     )

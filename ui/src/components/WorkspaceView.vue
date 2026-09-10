@@ -37,6 +37,21 @@ const filter = ref('all')
 
 const KINDS = { movie: 'Film', episode: 'Série', anime: 'Anime' }
 
+/**
+ * Ce qui demande un arbitrage : les plans douteux ET les plans écartés.
+ *
+ * Les écartés n'étaient affichés NULLE PART. Ils comptaient dans « à traiter »,
+ * la ligne apparaissait dans la liste, et l'ouvrir ne montrait rien : ni le
+ * fichier, ni un lecteur, ni un bouton. Le fichier restait donc dans la source
+ * pour toujours, sans que rien ne dise pourquoi ni quoi en faire.
+ *
+ * Un score bas dit l'incertitude de la MACHINE, pas celle de la personne qui
+ * regarde. C'est exactement pour ces fichiers-là que le lecteur vidéo existe.
+ */
+function arbitrables(w) {
+  return [...w.pending.review, ...(w.pending.rejected ?? [])]
+}
+
 const jobs = computed(() => data.value?.jobs ?? {})
 const counts = computed(() => data.value?.counts ?? {})
 const working = computed(
@@ -56,6 +71,7 @@ const working = computed(
  * ni les autres.
  */
 const onglet = ref('source')
+const reenc = ref(null)
 const recherche = ref('')
 const tri = ref('defaut')
 
@@ -123,6 +139,9 @@ watch(onglet, () => {
   tri.value = onglet.value === 'source' ? 'defaut' : 'titre'
   recherche.value = ''
   charge.value = PALIER
+  // Sans cet appel, l'onglet réencodage resterait vide jusqu'au prochain
+  // rafraîchissement automatique : deux secondes d'écran blanc pour rien.
+  load()
 })
 
 const kindCounts = computed(() => {
@@ -164,6 +183,68 @@ async function load() {
   } catch {
     error.value = 'Serveur injoignable.'
   }
+  // La file de réencodage n'est chargée que quand on la regarde : elle recalcule
+  // les candidats depuis l'index, et le faire toutes les deux secondes sur une
+  // médiathèque entière coûterait cher pour un onglet fermé.
+  if (onglet.value === 'transcode') {
+    try {
+      reenc.value = await (await fetch('/api/transcode')).json()
+    } catch {
+      reenc.value = null
+    }
+  }
+}
+
+async function enfiler(paths = null) {
+  busy.value = 'queue'
+  try {
+    const out = await call('/api/transcode/queue', paths ? { paths } : { all: true })
+    if (out) {
+      message.value = `${out.queued} fichier(s) en file.` +
+        (out.rejected?.length ? ` ${out.rejected.length} ignoré(s).` : '')
+      reenc.value = out
+    }
+  } finally {
+    busy.value = null
+  }
+}
+
+/**
+ * Installe le fichier réencodé. L'original part en corbeille, jamais à la
+ * suppression : un réencodage peut être visuellement décevant sans que le
+ * contrôle automatique l'ait vu — cela ne se découvre qu'en regardant.
+ */
+async function remplacer(job) {
+  busy.value = 'replace'
+  try {
+    const out = await call(`/api/transcode/${job.id}/replace`)
+    if (out) {
+      reenc.value = out
+      message.value = `Remplacé — ${gb(job.savings_bytes)} Go rendus.`
+      await load()
+    }
+  } finally {
+    busy.value = null
+  }
+}
+
+async function jeter(job) {
+  const out = await call(`/api/transcode/${job.id}/discard`)
+  if (out) reenc.value = out
+}
+
+async function retirer(job) {
+  const out = await call(`/api/transcode/${job.id}/cancel`)
+  if (out) reenc.value = out
+}
+
+const ETATS = {
+  queued: 'en attente',
+  running: 'en cours',
+  done: 'à vérifier',
+  failed: 'échec',
+  replaced: 'remplacé',
+  discarded: 'jeté',
 }
 
 async function chargerPlus() {
@@ -856,7 +937,99 @@ onUnmounted(() => clearInterval(poller))
       <button :class="{ actif: onglet === 'library' }" @click="onglet = 'library'">
         Ma médiathèque <span class="pastille">{{ counts.library_works ?? 0 }}</span>
       </button>
+      <button :class="{ actif: onglet === 'transcode' }" @click="onglet = 'transcode'">
+        Réencodage
+        <span v-if="counts.off_strategy" class="pastille">{{ counts.off_strategy }}</span>
+      </button>
     </div>
+
+    <!-- Réencodage : la nuit, un fichier à la fois, sans rien remplacer. -->
+    <section v-if="onglet === 'transcode'" class="reenc">
+      <div class="reenc-head">
+        <div>
+          <h3>Réencodage différé</h3>
+          <p class="note">
+            Ce que ta stratégie voudrait plus léger est encodé <strong>la nuit</strong>, un
+            fichier à la fois, <strong>à côté</strong> de l'original. Rien n'est remplacé sans
+            ton accord : le lendemain tu regardes le résultat et tu décides. C'est la seule
+            opération que rien ne défait — l'original part en corbeille, mais les détails
+            perdus à l'encodage ne reviennent pas.
+          </p>
+        </div>
+      </div>
+
+      <div v-if="reenc" class="reenc-etat">
+        <span class="puce" :class="reenc.ffmpeg ? 'ok' : 'ko'">
+          {{ reenc.ffmpeg ? 'ffmpeg présent' : 'ffmpeg absent — rien ne pourra être encodé' }}
+        </span>
+        <span class="puce" :class="reenc.settings.enabled ? 'ok' : 'ko'">
+          {{ reenc.settings.enabled ? 'activé' : 'désactivé dans les réglages' }}
+        </span>
+        <span class="puce">
+          fenêtre {{ reenc.settings.start_hour }} h → {{ reenc.settings.end_hour }} h
+          <template v-if="reenc.in_window">(on y est)</template>
+          <template v-else>(hors plage, la file attend l'heure)</template>
+        </span>
+        <span class="puce">{{ reenc.settings.codec }} · CRF {{ reenc.settings.crf }}</span>
+      </div>
+
+      <div v-if="reenc?.candidates?.count" class="lot">
+        <span class="warn-text">
+          {{ reenc.candidates.count }} fichier(s) ne respectent pas ta stratégie —
+          environ {{ gb(reenc.candidates.recoverable_bytes) }} Go récupérables.
+        </span>
+        <button class="small" :disabled="busy === 'queue'" @click="enfiler()">
+          Tout mettre en file
+        </button>
+      </div>
+      <p v-else-if="reenc" class="empty">
+        Rien à réencoder : tous tes fichiers respectent la stratégie de leur type.
+      </p>
+
+      <ul v-if="reenc?.jobs?.length" class="jobs">
+        <li v-for="j in reenc.jobs" :key="j.id" :class="j.state">
+          <div class="job-line">
+            <span class="etat">{{ ETATS[j.state] ?? j.state }}</span>
+            <span class="job-titre">{{ j.title || j.path }}</span>
+            <span class="etiquette cible">→ {{ j.target }}</span>
+            <span class="poids">
+              {{ gb(j.source_bytes) }} Go
+              <template v-if="j.output_bytes">
+                → {{ gb(j.output_bytes) }} Go
+                <strong class="gain">−{{ gb(j.savings_bytes) }} Go</strong>
+              </template>
+            </span>
+
+            <span v-if="j.state === 'running'" class="barre">
+              <span class="jauge" :style="{ width: `${Math.round(j.progress * 100)}%` }"></span>
+            </span>
+
+            <span class="job-actions">
+              <button v-if="j.state === 'queued'" class="small" @click="retirer(j)">Retirer</button>
+              <template v-if="j.state === 'done'">
+                <button class="small play" @click="togglePlayer(`re:${j.id}`)">
+                  {{ playing === `re:${j.id}` ? 'Fermer' : '▶ Vérifier' }}
+                </button>
+                <button class="small ok" :disabled="busy === 'replace'" @click="remplacer(j)">
+                  Remplacer
+                </button>
+                <button class="small" @click="jeter(j)">Jeter</button>
+              </template>
+            </span>
+          </div>
+          <p v-if="j.error" class="format-warn">{{ j.error }}</p>
+          <!-- Le contrôle automatique attrape un encodage tronqué ; il ne dira
+               jamais si l'image est devenue laide. Ça ne se voit qu'en regardant. -->
+          <div v-if="playing === `re:${j.id}`" class="player">
+            <video controls preload="none" :src="`/api/media/transcode/${j.id}/remux`"></video>
+            <p class="thumb-note">
+              Réemballé en MP4 à la volée. Regarde une scène sombre et une scène chargée :
+              c'est là que la compression se voit.
+            </p>
+          </div>
+        </li>
+      </ul>
+    </section>
 
     <div v-if="onglet === 'source'" class="filters">
       <button :class="{ active: filter === 'all' }" @click="filter = 'all'">
@@ -875,7 +1048,7 @@ onUnmounted(() => clearInterval(poller))
       </button>
     </div>
 
-    <div v-else class="filters">
+    <div v-else-if="onglet === 'library'" class="filters">
       <button :class="{ active: filter === 'all' }" @click="filter = 'all'">
         Tout ({{ parOnglet.length }})
       </button>
@@ -911,7 +1084,7 @@ onUnmounted(() => clearInterval(poller))
       <button v-if="confirmingPrune" class="small" @click="confirmingPrune = false">Renoncer</button>
     </div>
 
-    <div class="outils">
+    <div v-if="onglet !== 'transcode'" class="outils">
       <input
         v-model="recherche"
         type="search"
@@ -931,7 +1104,7 @@ onUnmounted(() => clearInterval(poller))
       <span v-if="recherche && works.length" class="compte">{{ works.length }} résultat(s)</span>
     </div>
 
-    <div class="filters kinds">
+    <div v-if="onglet !== 'transcode'" class="filters kinds">
       <button :class="{ active: kind === 'all' }" @click="kind = 'all'">Tous types</button>
       <button v-if="kindCounts.movie" :class="{ active: kind === 'movie' }" @click="kind = 'movie'">
         Films ({{ kindCounts.movie }})
@@ -947,7 +1120,7 @@ onUnmounted(() => clearInterval(poller))
       </span>
     </div>
 
-    <p v-if="!works.length" class="empty">
+    <p v-if="!works.length && onglet !== 'transcode'" class="empty">
       <template v-if="recherche">Aucun titre ne correspond à « {{ recherche }} ».</template>
       <template v-else-if="onglet === 'source'">
         Rien ne traîne dans la source. C'est l'état recherché — lance « Analyser les sources »
@@ -958,7 +1131,7 @@ onUnmounted(() => clearInterval(poller))
       </template>
     </p>
 
-    <ul class="works">
+    <ul v-if="onglet !== 'transcode'" class="works">
       <li v-for="w in listed" :key="w.key" :class="{ open: open.has(w.key) }">
         <button class="row" @click="toggle(w.key)">
           <span class="chev" :class="{ closed: !open.has(w.key) }">▾</span>
@@ -988,7 +1161,7 @@ onUnmounted(() => clearInterval(poller))
             <span v-if="w.owned?.missing_count" class="badge gap">{{ w.owned.missing_count }} manquant{{ w.owned.missing_count > 1 ? 's' : '' }}</span>
             <span v-if="w.owned?.duplicates?.length" class="badge dupe">{{ w.owned.duplicates.length }} doublon{{ w.owned.duplicates.length > 1 ? 's' : '' }}</span>
             <span v-if="w.pending.ready.length" class="badge ready">{{ w.pending.ready.length }} prêt{{ w.pending.ready.length > 1 ? 's' : '' }}</span>
-            <span v-if="w.pending.review.length" class="badge review">{{ w.pending.review.length }} à arbitrer</span>
+            <span v-if="arbitrables(w).length" class="badge review">{{ arbitrables(w).length }} à arbitrer</span>
             <span v-if="w.pending.unplanned_count" class="badge wait">{{ w.pending.unplanned_count }} en attente</span>
           </span>
         </button>
@@ -1065,26 +1238,37 @@ onUnmounted(() => clearInterval(poller))
           </section>
 
           <!-- Arbitrage : les jaquettes tranchent en une seconde -->
-          <section v-if="w.pending.review.length" class="block">
+          <section v-if="arbitrables(w).length" class="block">
             <div class="block-head">
-              <h4>À arbitrer</h4>
+              <h4>
+                À arbitrer
+                <span v-if="w.pending.rejected?.length" class="sous-titre">
+                  dont {{ w.pending.rejected.length }} écarté(s) par le score — à vérifier
+                  soi-même
+                </span>
+              </h4>
               <!-- La portée est écrite sur le bouton. Un bouton par ligne qui
                    agirait en douce sur toute la série serait pire qu'absent :
                    on ne saurait pas ce qu'on vient de valider. -->
               <button
                 class="small ok"
                 :disabled="choosing"
-                @click="confirm(w.pending.review[0], { ids: w.pending.review.map((p) => p.id) })"
+                @click="confirm(arbitrables(w)[0], { ids: arbitrables(w).map((p) => p.id) })"
               >
-                C'est bon pour {{ w.pending.review.length > 1
-                  ? `les ${w.pending.review.length}`
+                C'est bon pour {{ arbitrables(w).length > 1
+                  ? `les ${arbitrables(w).length}`
                   : 'celui-ci' }}
               </button>
             </div>
             <ul class="files">
-              <template v-for="p in w.pending.review" :key="p.id">
+              <template v-for="p in arbitrables(w)" :key="p.id">
                 <li class="reviewable">
-                  <span class="score warn">{{ (p.score * 100).toFixed(0) }}</span>
+                  <span class="score" :class="p.decision === 'reject' ? 'bad' : 'warn'"
+                        :title="p.decision === 'reject'
+                          ? 'Écarté automatiquement : score trop bas'
+                          : 'Score de confiance'">
+                    {{ (p.score * 100).toFixed(0) }}
+                  </span>
                   <code class="from">{{ shortPath(p.source) }}</code>
                   <button class="small play" title="Vérifier le contenu"
                           @click="togglePlayer(p.id)">
@@ -1286,6 +1470,34 @@ onUnmounted(() => clearInterval(poller))
 </template>
 
 <style scoped>
+.reenc { display: flex; flex-direction: column; gap: 12px; }
+.reenc h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim); }
+.reenc-etat { display: flex; gap: 7px; flex-wrap: wrap; }
+.reenc-etat .puce {
+  font-size: 11px; padding: 2px 9px; border-radius: 20px;
+  background: var(--surface-2); color: var(--text-dim);
+}
+.reenc-etat .puce.ok { color: var(--accent); }
+.reenc-etat .puce.ko { color: var(--warn); }
+.jobs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.jobs > li { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; }
+.jobs > li.done { border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.jobs > li.failed { border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
+.job-line { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.job-line .etat { font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-faint); min-width: 74px; }
+.job-line .job-titre { font-weight: 500; }
+.job-line .gain { color: var(--accent); font-family: var(--mono); }
+.job-line .barre { flex: 1; min-width: 90px; height: 4px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.job-line .jauge { display: block; height: 100%; background: var(--accent); transition: width .4s linear; }
+.job-actions { margin-left: auto; display: flex; gap: 6px; }
+.block-head .sous-titre {
+  font-size: 11px; font-weight: 400; text-transform: none; letter-spacing: 0;
+  color: var(--text-faint); margin-left: 8px;
+}
+.score.bad {
+  background: color-mix(in srgb, var(--warn) 22%, transparent);
+  color: var(--warn);
+}
 .lot {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
   padding: 9px 12px; border-radius: 8px;
