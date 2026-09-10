@@ -138,10 +138,8 @@ const onglet = ref(props.espace)
 // l'autre, il n'est pas remonté et son état interne survivrait tel quel.
 watch(() => props.espace, (espace) => { onglet.value = espace })
 
-const reenc = ref(null)
 // La panne de la file de réencodage, séparée de son contenu. Les confondre
 // dans un même `null` faisait passer un serveur muet pour un onglet vide.
-const reencErreur = ref(null)
 const recherche = ref('')
 const tri = ref('defaut')
 
@@ -354,77 +352,12 @@ async function load() {
   } finally {
     chargement.value = false
   }
-  // La file de réencodage n'est chargée que quand on la regarde : elle recalcule
-  // les candidats depuis l'index, et le faire toutes les deux secondes sur une
-  // médiathèque entière coûterait cher pour un onglet fermé.
-  if (onglet.value === 'transcode') {
-    try {
-      const res = await fetch('/api/transcode')
-      if (!res.ok) throw new Error(`réponse ${res.status}`)
-      reenc.value = await res.json()
-      reencErreur.value = null
-    } catch (e) {
-      // Remettre `reenc` à null vidait l'onglet ENTIER — état de ffmpeg, fenêtre
-      // horaire, files en cours — et le vide se lit comme « rien à réencoder ».
-      // Le contenu part, le motif reste : c'est la seule différence entre un
-      // onglet au repos et un serveur qui ne répond plus.
-      reenc.value = null
-      reencErreur.value = e.message ?? 'sans réponse'
-    }
-  }
 }
 
-async function enfiler(paths = null) {
-  busy.value = 'queue'
-  try {
-    const out = await call('/api/transcode/queue', paths ? { paths } : { all: true })
-    if (out) {
-      message.value = `${out.queued} fichier(s) en file.` +
-        (out.rejected?.length ? ` ${out.rejected.length} ignoré(s).` : '')
-      reenc.value = out
-    }
-  } finally {
-    busy.value = null
-  }
-}
 
-/**
- * Installe le fichier réencodé. L'original part en corbeille, jamais à la
- * suppression : un réencodage peut être visuellement décevant sans que le
- * contrôle automatique l'ait vu — cela ne se découvre qu'en regardant.
- */
-async function remplacer(job) {
-  busy.value = 'replace'
-  try {
-    const out = await call(`/api/transcode/${job.id}/replace`)
-    if (out) {
-      reenc.value = out
-      message.value = `Remplacé — ${gb(job.savings_bytes)} Go rendus.`
-      await load()
-    }
-  } finally {
-    busy.value = null
-  }
-}
 
-async function jeter(job) {
-  const out = await call(`/api/transcode/${job.id}/discard`)
-  if (out) reenc.value = out
-}
 
-async function retirer(job) {
-  const out = await call(`/api/transcode/${job.id}/cancel`)
-  if (out) reenc.value = out
-}
 
-const ETATS = {
-  queued: 'en attente',
-  running: 'en cours',
-  done: 'à vérifier',
-  failed: 'échec',
-  replaced: 'remplacé',
-  discarded: 'jeté',
-}
 
 async function chargerPlus() {
   charge.value += PALIER
@@ -456,15 +389,50 @@ async function scan() {
   } finally {
     busy.value = null
   }
+  // Un scan qui trouve des fichiers appelle une identification : les séparer
+  // obligeait à revenir cliquer une fois l'analyse finie, sans que rien ne le
+  // dise. On enchaîne, et l'utilisateur peut arrêter quand il veut.
+  if (counts.value.unplanned) await plan()
 }
+
+/**
+ * Identifie, par lots de cent, jusqu'au bout.
+ *
+ * Le serveur travaille par lot borné — sur une bibliothèque constituée, tout
+ * planifier d'un tenant, c'est des heures d'appels au fournisseur pendant
+ * lesquelles rien n'est applicable. Mais rendre la main entre deux lots faisait
+ * porter le rythme à l'utilisateur : mille fichiers, dix clics, sans que le
+ * bouton dise jamais qu'il en restait.
+ *
+ * La boucle enchaîne donc les lots elle-même, et s'arrête à trois conditions :
+ * plus rien à identifier, un lot qui n'avance plus (le serveur refuse ou
+ * échoue — sans cette garde on tournerait à l'infini), ou une demande d'arrêt.
+ */
+const stopPlan = ref(false)
 
 async function plan({ reset = false } = {}) {
   busy.value = 'plan'
+  stopPlan.value = false
   try {
-    await call(`/api/review/plan?limit=100&reset=${reset}`)
-    await load()
+    let premier = true
+    while (premier || (!stopPlan.value && counts.value.unplanned > 0)) {
+      const restantAvant = counts.value.unplanned
+      const out = await call(`/api/review/plan?limit=100&reset=${premier && reset}`)
+      await load()
+      premier = false
+      if (!out) break
+      if (counts.value.unplanned >= restantAvant) {
+        // Le lot n'a rien retiré de la file : insister ne ferait que répéter
+        // le même appel. Mieux vaut s'arrêter et le dire.
+        message.value =
+          `Identification interrompue : ${counts.value.unplanned} fichier(s) n'ont pas pu ` +
+          `être planifiés. Le bandeau ci-dessus dit ce qui bloque.`
+        break
+      }
+    }
   } finally {
     busy.value = null
+    stopPlan.value = false
   }
 }
 
@@ -472,64 +440,10 @@ async function plan({ reset = false } = {}) {
  * Vérifie tout le trajet sans rien déplacer. Distinct d'« Exécuter » parce que
  * ce sont deux décisions : « est-ce que ça marcherait » et « fais-le ».
  */
-// --- Annulation ciblée ----------------------------------------------------
-//
-// « Tout annuler » suppose qu'on veuille défaire une session entière, alors
-// qu'en pratique on veut défaire UNE série mal identifiée au milieu de sept
-// cents déplacements corrects.
-const journal = ref(null)
-// La panne de lecture, distincte du journal lui-même. `journal` à null signifie
-// « pas encore lu » et rien d'autre : il ne peut pas porter en plus le sens
-// « lu, et ça a échoué ».
-const journalErreur = ref(null)
-const showUndo = ref(false)
-const undoing = ref(null)
-// Les livres sont arrivés dans le pipeline sans être ajoutés ici : une œuvre
-// livre affichait son code brut, « book », au milieu de libellés français.
-const WORK_KINDS = { movie: 'Film', episode: 'Série', anime: 'Anime', book: 'Livre' }
-
-async function loadJournal() {
-  journalErreur.value = null
-  try {
-    const res = await fetch('/api/review/journal')
-    // Une 502 arrive en HTML : `res.json()` lèverait, et l'échec se rangeait
-    // sous le même `null` que l'attente — le panneau annonçait « Lecture du
-    // journal… » pour toujours. Personne ne réessaie ce qu'il croit en cours.
-    if (!res.ok) throw new Error(`réponse ${res.status}`)
-    journal.value = await res.json()
-  } catch (e) {
-    journal.value = null
-    journalErreur.value = e.message ?? 'sans réponse'
-  }
-}
-
-async function toggleUndo() {
-  showUndo.value = !showUndo.value
-  if (showUndo.value) await loadJournal()
-}
-
-async function undoWork(work) {
-  undoing.value = work.key
-  try {
-    const out = await call('/api/review/undo', { work: work.key })
-    if (out) {
-      message.value =
-        `« ${work.title} » : ${out.undone} déplacement(s) annulé(s)` +
-        (out.failed ? `, ${out.failed} en échec.` : '.')
-      await Promise.all([load(), loadJournal()])
-    }
-  } finally {
-    undoing.value = null
-  }
-}
-
-async function undoAll(count) {
-  const out = await call('/api/review/undo', { count })
-  if (out) {
-    message.value = `${out.undone} opération(s) annulée(s), ${out.failed} en échec.`
-    await Promise.all([load(), loadJournal()])
-  }
-}
+// L'annulation vit désormais sur sa propre page, où chaque ligne se défait
+// seule. Elle était ici en panneau replié derrière un bouton de barre : deux
+// chemins vers le même geste obligent à se demander lequel fait foi, et le
+// panneau ne montrait jamais que les dernières opérations.
 
 async function index() {
   busy.value = 'index'
@@ -546,6 +460,34 @@ async function index() {
  * d'exécuter pendant que le calcul continue : ce qui n'est pas encore identifié
  * le sera au prochain clic.
  */
+/**
+ * Supprime les dossiers vides laissés par le rangement.
+ *
+ * Silencieux quand il n'y a rien à faire — c'est le cas le plus fréquent, et
+ * annoncer « 0 dossier supprimé » après chaque rangement serait du bruit. Un
+ * échec, lui, se dit : il signale presque toujours un problème de droits.
+ */
+async function nettoyerVides() {
+  try {
+    const res = await fetch('/api/library/empty-dirs/prune', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true }),
+    })
+    if (!res.ok) return
+    const out = await res.json()
+    if (out.removed) {
+      message.value += ` ${out.removed} dossier(s) vide(s) supprimé(s).`
+    }
+    if (out.failed?.length) {
+      message.value += ` ${out.failed.length} dossier(s) n'ont pas pu être supprimés.`
+    }
+  } catch {
+    // Le rangement, lui, a réussi : un ménage raté ne doit pas le faire passer
+    // pour un échec.
+  }
+}
+
 async function apply(ids = null) {
   busy.value = 'apply'
   failures.value = []
@@ -565,6 +507,11 @@ async function apply(ids = null) {
         message.value += ` — ${part} : ${first.label.toLowerCase()}.`
       }
       await load()
+      // Ranger laisse derrière lui le dossier de la release, vide. Le proposer
+      // dans un écran de réglages revenait à demander un second geste pour
+      // finir le premier — et personne ne va le chercher. Un dossier vide ne
+      // contient rien à récupérer : le supprimer ne peut rien coûter.
+      if (!blanc) await nettoyerVides()
     }
   } finally {
     busy.value = null
@@ -990,10 +937,19 @@ onUnmounted(() => {
 
   <div v-else class="workspace">
     <!-- Barre d'action : les compteurs portent sur TOUT, pas sur la page -->
-    <div class="toolbar">
+    <!-- Elle appartient au RANGEMENT. Dans la médiathèque, aucun de ces
+         boutons n'a d'objet : on n'y analyse pas une source, on y regarde ce
+         qu'on possède — et les voir là laissait croire qu'ils portaient sur
+         elle. -->
+    <div v-if="espace === 'source'" class="toolbar">
       <button :disabled="busy || working" @click="scan">Analyser les sources</button>
-      <button :disabled="busy || working || !counts.unplanned" @click="plan">
-        Identifier {{ counts.unplanned ? `(${Math.min(100, counts.unplanned)})` : '' }}
+      <!-- Pendant la boucle, le bouton devient sa propre sortie : une action
+           longue sans moyen de l'arrêter oblige à recharger la page. -->
+      <button v-if="busy === 'plan'" class="ghost" @click="stopPlan = true">
+        {{ stopPlan ? 'Arrêt après ce lot…' : `Arrêter (${counts.unplanned} restants)` }}
+      </button>
+      <button v-else :disabled="busy || working || !counts.unplanned" @click="plan">
+        Identifier {{ counts.unplanned ? `(${counts.unplanned})` : '' }}
       </button>
       <button class="primary" :disabled="busy || !counts.ready" @click="apply()">
         {{ sansToucher ? 'Essayer' : 'Ranger' }} {{ counts.ready }} prêt{{ counts.ready > 1 ? 's' : '' }}
@@ -1006,14 +962,6 @@ onUnmounted(() => {
         essai à blanc
       </label>
       <span class="spacer"></span>
-      <!-- Le filet de sécurité reste visible : c'est le bouton qu'on cherche
-           dans l'urgence, pas celui qu'on va chercher dans un menu. -->
-      <button
-        v-if="data.journal_size"
-        class="ghost"
-        :class="{ active: showUndo }"
-        @click="toggleUndo"
-      >Annuler… ({{ data.journal_size }})</button>
 
       <!-- Quatre boutons de même poids visuel ne disaient pas lequel sert tous
            les jours. Ceux d'entretien passent derrière un menu : on les cherche
@@ -1060,7 +1008,16 @@ onUnmounted(() => {
          cause est commune à presque tous ces boutons, et un `title` par bouton
          n'existe ni au doigt ni au clavier. `role="status"` pour qu'un
          changement d'état soit annoncé sans voler le focus. -->
-    <p v-if="raisonIndispo" class="indispo" role="status">{{ raisonIndispo }}</p>
+    <p v-if="espace === 'source' && raisonIndispo" class="indispo" role="status">
+      {{ raisonIndispo }}
+    </p>
+
+    <!-- Une seule action porte sur la médiathèque : la relire. Le reste de
+         l'entretien vit avec le rangement, qui le produit. -->
+    <div v-if="espace === 'library'" class="toolbar">
+      <button :disabled="busy || working" @click="index">Relire la bibliothèque</button>
+      <span class="quoi-inline">reconstruit l'index depuis le disque</span>
+    </div>
 
     <!-- Au FUTUR, et en disant ce qu'il reste à faire. La formulation au
          présent laissait croire que l'action avait déjà eu lieu, alors que le
@@ -1068,51 +1025,6 @@ onUnmounted(() => {
 
 
     <!-- Ce qui a été rangé, par œuvre, avec une annulation par ligne -->
-    <section v-if="showUndo" class="undo-panel">
-      <div class="head">
-        <h3>Annuler un rangement</h3>
-        <button v-if="data.journal_size" class="danger" @click="undoAll(data.journal_size)">
-          Tout annuler ({{ data.journal_size }})
-        </button>
-      </div>
-      <p class="note">
-        Les fichiers retournent à leur emplacement d'origine. Rien n'est supprimé, et une
-        origine déjà occupée fait échouer le retour plutôt que d'écraser.
-      </p>
-
-      <!-- L'échec passe AVANT l'attente, sans quoi il s'y cacherait : les deux
-           états valaient un même `journal` à null, et une lecture ratée
-           annonçait « Lecture du journal… » jusqu'à la fin des temps. -->
-      <p v-if="journalErreur" class="panne-inline">
-        Le journal n'a pas pu être lu ({{ journalErreur }}). Rien n'est perdu : les
-        {{ data.journal_size }} opérations restent annulables dès que le serveur
-        répond à nouveau.
-        <button class="small" @click="loadJournal">Réessayer</button>
-      </p>
-      <p v-else-if="!journal" class="empty">Lecture du journal…</p>
-      <p v-else-if="!journal.works.length" class="empty">Aucun déplacement à annuler.</p>
-
-      <ul v-else class="undo-works">
-        <li v-for="wk in journal.works" :key="wk.key">
-          <div class="body">
-            <div class="title">
-              {{ wk.title }}
-              <span v-if="wk.work_kind" class="kind">
-                {{ WORK_KINDS[wk.work_kind] ?? wk.work_kind }}
-              </span>
-            </div>
-            <div class="meta">
-              {{ wk.files }} fichier{{ wk.files > 1 ? 's' : '' }}
-              <span v-if="wk.companions">+ {{ wk.companions }} associé{{ wk.companions > 1 ? 's' : '' }}</span>
-              <code>{{ shortPath(wk.sample) }}</code>
-            </div>
-          </div>
-          <button class="small" :disabled="undoing === wk.key" @click="undoWork(wk)">
-            {{ undoing === wk.key ? 'Annulation…' : 'Annuler' }}
-          </button>
-        </li>
-      </ul>
-    </section>
 
     <!-- Ce qui tourne, quand quelque chose tourne -->
     <div v-if="activity" class="activity">
@@ -1225,145 +1137,6 @@ onUnmounted(() => {
               … et {{ g.items.length - MAX_LISTE }} autres
             </li>
           </ul>
-        </li>
-      </ul>
-    </section>
-
-    <!-- « Source » et « Ma médiathèque » sont remontées dans la barre du haut :
-         ce sont deux intentions, et on choisissait entre elles APRÈS être
-         entré, une fois l'écran chargé. Le réencodage reste ici, où il est né :
-         c'est une file d'attente qu'on ouvre pour vérifier le travail de la
-         nuit, pas une troisième médiathèque. -->
-    <div class="onglets">
-      <button
-        :class="{ actif: onglet === 'transcode' }"
-        :aria-pressed="onglet === 'transcode'"
-        @click="onglet = onglet === 'transcode' ? espace : 'transcode'"
-      >
-        Réencodage
-        <span v-if="counts.off_strategy" class="pastille">{{ counts.off_strategy }}</span>
-      </button>
-      <!-- La sortie est écrite. Un onglet solitaire qu'on referme en le
-           recliquant est un piège muet : rien, sur l'écran, ne dit comment
-           revenir à la liste qu'il a remplacée. -->
-      <span v-if="onglet === 'transcode'" class="onglet-retour">
-        clique à nouveau pour revenir à
-        {{ espace === 'source' ? '« Ranger »' : '« Ma médiathèque »' }}
-      </span>
-    </div>
-
-    <!-- Réencodage : la nuit, un fichier à la fois, sans rien remplacer. -->
-    <section v-if="onglet === 'transcode'" class="reenc">
-      <div class="reenc-head">
-        <div>
-          <h3>Réencodage différé</h3>
-          <p class="note">
-            Ce que ta stratégie voudrait plus léger est encodé <strong>la nuit</strong>, un
-            fichier à la fois, <strong>à côté</strong> de l'original. Rien n'est remplacé sans
-            ton accord : le lendemain tu regardes le résultat et tu décides. C'est la seule
-            opération que rien ne défait — l'original part en corbeille, mais les détails
-            perdus à l'encodage ne reviennent pas.
-          </p>
-        </div>
-      </div>
-
-      <!-- Sans ce bloc, une file injoignable rendait un onglet vide — et un
-           onglet vide se lit « rien à réencoder », c'est-à-dire l'inverse de
-           ce qui se passe. -->
-      <p v-if="reencErreur" class="panne-inline">
-        La file de réencodage n'a pas pu être lue ({{ reencErreur }}). Ce qui est déjà
-        en file continue de tourner côté serveur : c'est l'affichage qui manque, pas
-        le travail.
-        <button class="small" :disabled="chargement" @click="load">Réessayer</button>
-      </p>
-
-      <div v-if="reenc" class="reenc-etat">
-        <span class="puce" :class="reenc.ffmpeg ? 'ok' : 'ko'">
-          {{ reenc.ffmpeg ? 'ffmpeg présent' : 'ffmpeg absent — rien ne pourra être encodé' }}
-        </span>
-        <span class="puce" :class="reenc.settings.enabled ? 'ok' : 'ko'">
-          {{ reenc.settings.enabled ? 'activé' : 'désactivé dans les réglages' }}
-        </span>
-        <span class="puce">
-          fenêtre {{ reenc.settings.start_hour }} h → {{ reenc.settings.end_hour }} h
-          <template v-if="reenc.in_window">(on y est)</template>
-          <template v-else>(hors plage, la file attend l'heure)</template>
-        </span>
-        <span class="puce">{{ reenc.settings.codec }} · CRF {{ reenc.settings.crf }}</span>
-      </div>
-
-      <div v-if="reenc?.candidates?.count" class="lot">
-        <span class="warn-text">
-          {{ reenc.candidates.count }} fichier(s) ne respectent pas ta stratégie —
-          environ {{ gb(reenc.candidates.recoverable_bytes) }} Go récupérables.
-        </span>
-        <button class="small" :disabled="busy === 'queue'" @click="enfiler()">
-          Tout mettre en file
-        </button>
-      </div>
-      <div v-else-if="reenc" class="rien">
-        <p class="empty">Rien à réencoder pour l'instant.</p>
-        <!-- « Rien à réencoder » est vrai mais inutile : quelqu'un qui vient de
-             régler ses séries et n'en voit aucune proposée ne peut pas savoir si
-             ses fichiers sont conformes ou si sa stratégie ne demandera jamais
-             rien. Le cas le plus fréquent est le second. -->
-        <ul class="par-type">
-          <li v-for="r in reenc.candidates?.by_kind ?? []" :key="r.kind">
-            <strong>{{ r.label }}</strong>
-            <span class="puce">{{ r.strategy }}</span>
-            <span class="puce" v-if="r.budget_mb">{{ r.budget_mb }} Mo max</span>
-            <span v-if="r.why" class="motif">{{ r.why }}</span>
-            <span v-else class="motif ok">rien à réduire : les fichiers sont conformes</span>
-          </li>
-        </ul>
-        <p class="hint-reenc">
-          Une stratégie « Qualité maximale » ne propose jamais de réduire quoi que ce soit —
-          c'est sa définition. Pour que des fichiers apparaissent ici : change la stratégie du
-          type dans <em>Réglages → Bibliothèque</em>, ou fixe-lui un poids maximal.
-        </p>
-      </div>
-
-      <ul v-if="reenc?.jobs?.length" class="jobs">
-        <li v-for="j in reenc.jobs" :key="j.id" :class="j.state">
-          <div class="job-line">
-            <span class="etat">{{ ETATS[j.state] ?? j.state }}</span>
-            <span class="job-titre">{{ j.title || j.path }}</span>
-            <span class="etiquette cible">→ {{ j.target }}</span>
-            <span class="poids">
-              {{ gb(j.source_bytes) }} Go
-              <template v-if="j.output_bytes">
-                → {{ gb(j.output_bytes) }} Go
-                <strong class="gain">−{{ gb(j.savings_bytes) }} Go</strong>
-              </template>
-            </span>
-
-            <span v-if="j.state === 'running'" class="barre">
-              <span class="jauge" :style="{ width: `${Math.round(j.progress * 100)}%` }"></span>
-            </span>
-
-            <span class="job-actions">
-              <button v-if="j.state === 'queued'" class="small" @click="retirer(j)">Retirer</button>
-              <template v-if="j.state === 'done'">
-                <button class="small play" @click="togglePlayer(`re:${j.id}`)">
-                  {{ playing === `re:${j.id}` ? 'Fermer' : '▶ Vérifier' }}
-                </button>
-                <button class="small ok" :disabled="busy === 'replace'" @click="remplacer(j)">
-                  Remplacer
-                </button>
-                <button class="small" @click="jeter(j)">Jeter</button>
-              </template>
-            </span>
-          </div>
-          <p v-if="j.error" class="format-warn">{{ j.error }}</p>
-          <!-- Le contrôle automatique attrape un encodage tronqué ; il ne dira
-               jamais si l'image est devenue laide. Ça ne se voit qu'en regardant. -->
-          <div v-if="playing === `re:${j.id}`" class="player">
-            <video controls preload="none" :src="`/api/media/transcode/${j.id}/remux`"></video>
-            <p class="thumb-note">
-              Réemballé en MP4 à la volée. Regarde une scène sombre et une scène chargée :
-              c'est là que la compression se voit.
-            </p>
-          </div>
         </li>
       </ul>
     </section>
@@ -1485,7 +1258,7 @@ onUnmounted(() => {
       />
     </div>
 
-    <div v-if="onglet !== 'transcode'" class="outils">
+    <div class="outils">
       <input
         v-model="recherche"
         type="search"
@@ -1508,7 +1281,7 @@ onUnmounted(() => {
     <!-- Livres et animes rejoignent films et séries. Le type existait dans les
          données depuis toujours ; seuls deux des quatre avaient un bouton, et
          rien ne disait que les deux autres étaient filtrables. -->
-    <div v-if="onglet !== 'transcode'" class="filters kinds">
+    <div class="filters kinds">
       <button :class="{ active: kind === 'all' }" @click="kind = 'all'">Tous types</button>
       <button
         v-for="k in KIND_FILTRES"
@@ -1527,13 +1300,13 @@ onUnmounted(() => {
     <!-- La raison des boutons grisés, écrite plutôt que cachée dans un
          `title`. Elle nomme la LISTE et non la médiathèque : le type existe
          peut-être ailleurs, il n'est simplement pas ici. -->
-    <p v-if="onglet !== 'transcode' && typesVides.length" class="indispo">
+    <p v-if="typesVides.length" class="indispo">
       Aucun résultat de ce type dans cette liste : {{ typesVides.join(', ') }}. Le filtre
       reste affiché — un compte à zéro dit qu'on a mesuré, un bouton absent ne dit rien.
     </p>
 
     <p
-      v-if="!works.length && onglet !== 'transcode' && !(onglet === 'library' && sousVue === 'place')"
+      v-if="!works.length && !(onglet === 'library' && sousVue === 'place')"
       class="empty"
     >
       <template v-if="recherche">Aucun titre ne correspond à « {{ recherche }} ».</template>
@@ -1546,7 +1319,7 @@ onUnmounted(() => {
       </template>
     </p>
 
-    <ul v-if="onglet !== 'transcode'" class="works">
+    <ul class="works">
       <li v-for="w in listed" :key="w.key" :class="{ open: open.has(w.key) }">
         <!-- La jaquette a QUITTÉ le bouton qui l'enveloppait. Un élément
              cliquable imbriqué dans un bouton est invalide, et le navigateur
@@ -1963,6 +1736,7 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.quoi-inline { font-size: var(--t-xs); color: var(--text-faint); }
 .badge.ia {
   background: color-mix(in srgb, var(--accent) 20%, transparent);
   color: var(--accent);
@@ -2051,17 +1825,7 @@ onUnmounted(() => {
 }
 .par-type .motif { font-size: 11.5px; color: var(--text-faint); }
 .par-type .motif.ok { color: var(--accent); }
-.hint-reenc { margin: 0; font-size: 11.5px; color: var(--text-faint); line-height: 1.6; max-width: 660px; }
 .fichiers.livres code { color: var(--text-dim); }
-.reenc { display: flex; flex-direction: column; gap: 12px; }
-.reenc h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim); }
-.reenc-etat { display: flex; gap: 7px; flex-wrap: wrap; }
-.reenc-etat .puce {
-  font-size: 11px; padding: 2px 9px; border-radius: 20px;
-  background: var(--surface-2); color: var(--text-dim);
-}
-.reenc-etat .puce.ok { color: var(--accent); }
-.reenc-etat .puce.ko { color: var(--warn); }
 .jobs { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .jobs > li { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 9px 12px; }
 .jobs > li.done { border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
@@ -2148,27 +1912,6 @@ button.small.danger:hover:not(:disabled) {
 .toolbar .ghost { color: var(--text-faint); }
 .toolbar .ghost.active { border-color: var(--accent); color: var(--text); }
 .toolbar .ghost.danger:hover:not(:disabled) { color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, transparent); }
-
-.undo-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
-.undo-panel .head { display: flex; align-items: center; gap: 12px; }
-.undo-panel .head h3 {
-  margin: 0; flex: 1; font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim);
-}
-.undo-panel .danger { font-size: 11.5px; padding: 3px 10px; color: var(--text-faint); }
-.undo-panel .danger:hover { color: var(--err); border-color: color-mix(in srgb, var(--err) 30%, transparent); }
-.undo-panel .note { margin: 9px 0 12px; font-size: 12px; color: var(--text-faint); line-height: 1.6; max-width: 680px; }
-.undo-panel .empty { margin: 0; font-size: 12.5px; color: var(--text-faint); font-style: italic; }
-.undo-works { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; max-height: 420px; overflow-y: auto; }
-.undo-works li { display: flex; align-items: center; gap: 12px; }
-.undo-works .body { flex: 1; min-width: 0; }
-.undo-works .title { font-size: 13px; display: flex; align-items: baseline; gap: 8px; }
-.undo-works .kind {
-  font-size: 10px; text-transform: uppercase; letter-spacing: .05em;
-  color: var(--text-faint); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px;
-}
-.undo-works .meta { display: flex; gap: 9px; align-items: baseline; margin-top: 2px; font-size: 11px; color: var(--text-faint); flex-wrap: wrap; }
-.undo-works .meta code { font-family: var(--mono); font-size: 10.5px; }
 
 .activity { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; }
 .activity .bar { height: 3px; background: var(--surface-2); border-radius: 2px; overflow: hidden; }
@@ -2390,9 +2133,7 @@ button.small.play { color: var(--text-faint); }
 
   /* Un chemin monospace ne se coupe nulle part : sans cela il impose sa
      largeur à la carte entière. */
-  .fautifs .chemin, .refus code, .undo-works .meta code { overflow-wrap: anywhere; }
-
-  .undo-works li { flex-wrap: wrap; row-gap: 6px; }
-  .detail { padding: 4px 10px 12px; }
+  .fautifs .chemin, .refus code, 
+    .detail { padding: 4px 10px 12px; }
 }
 </style>

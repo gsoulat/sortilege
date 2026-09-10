@@ -1352,6 +1352,36 @@ def journal_entries(
     }
 
 
+class JournalPurgeRequest(BaseModel):
+    confirm: bool = False
+    """Obligatoire. Vider le journal supprime la seule facon de revenir en
+    arriere : cela ne doit pas pouvoir arriver par un champ oublie."""
+
+
+@router.post("/journal/purge")
+def purge_journal(body: JournalPurgeRequest) -> dict[str, object]:
+    """Valide definitivement les rangements et vide le journal.
+
+    Aucun fichier n'est touche : ce qui est range reste range, exactement la ou
+    il est. Ce qu'on perd, c'est la possibilite de le DEFAIRE — le journal est
+    la seule trace du chemin inverse.
+
+    C'est le geste qui manquait au bout du parcours. Le journal grossit a chaque
+    rangement et ne diminue jamais ; passe quelques milliers d'entrees, il ne se
+    consulte plus, et personne ne va annuler un deplacement d'il y a six mois.
+    Le vider quand on est satisfait, c'est refermer un chantier — pas nettoyer
+    un cache.
+    """
+    if not body.confirm:
+        raise HTTPException(400, "purge non confirmee")
+
+    journal = get_journal()
+    efface = len(journal.read_all())
+    journal.rewrite([])
+    logger.info("journal vide sur demande : %s entree(s) validees definitivement", efface)
+    return {"purged": efface}
+
+
 @router.get("/journal")
 def read_journal(limit: int = 50) -> dict[str, object]:
     records = get_journal().read_all()

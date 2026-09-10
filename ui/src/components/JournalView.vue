@@ -55,6 +55,39 @@ const echecs = ref([])
 
 const WORK_KINDS = { movie: 'Film', episode: 'Série', anime: 'Anime', book: 'Livre' }
 
+const purge = ref(false)
+
+/**
+ * Referme le chantier : les rangements deviennent définitifs, le journal part.
+ *
+ * Ce n'est pas un nettoyage de cache. Ce qu'on perd, c'est la seule trace du
+ * chemin inverse — d'où la confirmation, et d'où le fait que rien sur le disque
+ * ne bouge.
+ */
+async function validerDefinitivement() {
+  purge.value = true
+  try {
+    const res = await fetch('/api/review/journal/purge', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true }),
+    })
+    const lu = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      echecs.value = [lu.detail ?? `Échec (${res.status}).`]
+      return
+    }
+    message.value = `${lu.purged} entrée(s) validées. Les rangements sont définitifs.`
+    echecs.value = []
+    page.value = 1
+    await charger()
+  } catch {
+    echecs.value = ['Serveur injoignable.']
+  } finally {
+    purge.value = false
+  }
+}
+
 async function charger() {
   chargement.value = true
   try {
@@ -418,6 +451,24 @@ onMounted(charger)
         <button class="petit" :disabled="chargement" @click="charger">
           {{ chargement ? 'Relecture…' : 'Actualiser' }}
         </button>
+
+        <!-- Le geste qui manquait au bout du parcours. Le journal grossit à
+             chaque rangement et ne diminue jamais : passé quelques milliers
+             d'entrées il ne se consulte plus, et personne ne va annuler un
+             déplacement d'il y a six mois. -->
+        <ConfirmAction
+          label="Valider définitivement"
+          confirm-label="Confirmer : vider le journal"
+          :detail="`Les ${data.journal_size} entrée(s) disparaissent et plus rien ne pourra `
+            + `être annulé. Aucun fichier n'est touché : ce qui est rangé reste exactement `
+            + `où il est — c'est le chemin du retour qu'on perd.`"
+          :busy="purge"
+          :disabled="!data.journal_size || purge || chargement"
+          :disabled-reason="data.journal_size
+            ? ''
+            : 'Le journal est déjà vide : il n\'y a rien à valider.'"
+          @confirm="validerDefinitivement"
+        />
       </div>
 
       <p v-if="requete" class="note-compteurs">

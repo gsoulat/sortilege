@@ -16,7 +16,9 @@ navigateur.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import asdict
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -395,6 +397,80 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return read_preferences()
+
+
+@router.post("/ai/test")
+async def test_ai() -> dict[str, object]:
+    """Soumet un cas fabrique au resolveur, et rapporte ce qu'il repond.
+
+    Une cle peut etre valide de forme et refusee par le service, un modele peut
+    ne plus exister, un serveur local peut ne pas repondre. Rien de tout cela ne
+    se voit dans les reglages : le resolveur degradant vers la revue manuelle
+    par construction, une configuration morte ressemble a une configuration qui
+    n'a simplement rien eu a faire.
+
+    Le cas soumis est un vrai cas difficile — un nom de release abime, sans
+    annee — et la reponse est rendue telle quelle. Ce qui compte n'est pas
+    qu'elle soit juste, c'est que le service reponde quelque chose.
+    """
+    from ..core.ai import build_resolver
+    from ..core.ai.base import AmbiguousItem
+    from ..core.parser import parse
+
+    prefs = get_store().load().ai
+    if not prefs.enabled:
+        raise HTTPException(400, "Le resolveur est desactive : active-le d'abord.")
+
+    ok, motif = resolver_status(prefs.provider, prefs.api_key, prefs.model, prefs.base_url)
+    if not ok:
+        raise HTTPException(400, motif)
+
+    resolveur = build_resolver(prefs.provider, prefs.api_key, prefs.model, prefs.base_url)
+    if resolveur is None:
+        raise HTTPException(400, "Resolveur inutilisable avec ces reglages.")
+
+    nom = "epz-the.vampire.diaries.109.le.cristal.de.la.discorde-Wawacity.avi"
+    item = AmbiguousItem(
+        index=0,
+        filename=nom,
+        parent_folder="JDownloader2",
+        parsed=parse(Path(nom)),
+        candidates=[],
+    )
+
+    try:
+        propositions = await asyncio.to_thread(resolveur.resolve, [item])
+    except Exception as exc:
+        raise HTTPException(
+            502,
+            f"Le service n'a pas repondu : {type(exc).__name__} — {exc}",
+        ) from exc
+    finally:
+        fermer = getattr(resolveur, "close", None)
+        if callable(fermer):
+            fermer()
+
+    proposition = propositions.get(0)
+    if proposition is None or not proposition.title:
+        return {
+            "ok": False,
+            "detail": "Le service a repondu, mais sans identification exploitable.",
+            "sent": nom,
+        }
+    return {
+        "ok": True,
+        "detail": (
+            f"« {proposition.title} »"
+            + (f" ({proposition.year})" if proposition.year else "")
+            + (
+                f" S{proposition.season:02}E{proposition.episode:02}"
+                if proposition.season and proposition.episode
+                else ""
+            )
+            + f" — confiance {proposition.confidence:.0%}"
+        ),
+        "sent": nom,
+    }
 
 
 @router.post("/notifications/test")

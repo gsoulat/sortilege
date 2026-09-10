@@ -277,3 +277,36 @@ def test_les_filtres_se_combinent(client: TestClient, journal: Journal) -> None:
 
     assert reponse["total"] == 1
     assert reponse["entries"][0]["destination"] == "/lib/Dune.srt"
+
+
+# --- Valider definitivement -------------------------------------------------
+#
+# Le journal grossit a chaque rangement et ne diminue jamais. Passe quelques
+# milliers d'entrees il ne se consulte plus, et personne ne va annuler un
+# deplacement d'il y a six mois. Le vider quand on est satisfait, c'est
+# refermer un chantier.
+
+
+def test_la_purge_vide_le_journal(client, journal) -> None:
+    entree(journal, plan_id="p1", title="Severance")
+    entree(journal, plan_id="p2", title="Dune")
+    avant = client.get("/api/review/journal/entries").json()["total"]
+    assert avant == 2, "le test n'a plus d'objet si le journal est vide"
+
+    sortie = client.post("/api/review/journal/purge", json={"confirm": True})
+
+    assert sortie.status_code == 200
+    assert sortie.json()["purged"] == avant
+    assert client.get("/api/review/journal/entries").json()["total"] == 0
+
+
+def test_la_purge_doit_etre_confirmee(client, journal) -> None:
+    """Vider le journal supprime la seule facon de revenir en arriere : cela ne
+    doit pas pouvoir arriver par un champ oublie."""
+    entree(journal, plan_id="p1", title="Severance")
+    avant = client.get("/api/review/journal/entries").json()["total"]
+
+    refus = client.post("/api/review/journal/purge", json={})
+
+    assert refus.status_code == 400
+    assert client.get("/api/review/journal/entries").json()["total"] == avant

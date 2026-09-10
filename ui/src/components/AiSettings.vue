@@ -51,6 +51,32 @@ const current = computed(
 // mise à jour de Sortilège.
 const currentModels = computed(() => models.value[props.ai.provider] ?? [])
 
+const essai = ref(false)
+const resultat = ref(null)
+
+/** Un appel RÉEL au service, avec un cas que le déterministe ne sait pas lire. */
+async function testerIa() {
+  essai.value = true
+  resultat.value = null
+  try {
+    const res = await fetch('/api/settings/ai/test', { method: 'POST' })
+    const lu = await res.json().catch(() => ({}))
+    if (!res.ok) {
+      resultat.value = { ok: false, texte: lu.detail ?? `Échec (${res.status}).` }
+      return
+    }
+    resultat.value = {
+      ok: lu.ok,
+      texte: lu.ok ? `Le service a répondu : ${lu.detail}` : lu.detail,
+      envoye: lu.sent,
+    }
+  } catch {
+    resultat.value = { ok: false, texte: 'Serveur injoignable.' }
+  } finally {
+    essai.value = false
+  }
+}
+
 // Le modèle enregistré ne fait pas toujours partie de la liste : il peut venir
 // d'une version antérieure, ou avoir été saisi à la main. Le menu bascule alors
 // sur « Autre » plutôt que d'afficher un choix qui ne correspond pas à ce qui
@@ -129,6 +155,28 @@ function saveKey() {
       <span class="dot"></span>
       <span v-if="ready.ok">Résolveur opérationnel.</span>
       <span v-else>Inutilisable en l'état : {{ ready.reason }}.</span>
+    </p>
+
+    <!-- « Opérationnel » ne dit que la forme des réglages. Une clé peut être
+         valide et refusée par le service, un modèle avoir disparu, un serveur
+         local ne pas répondre — et comme le résolveur dégrade vers la revue
+         manuelle par construction, une configuration morte ressemble à une
+         configuration qui n'a rien eu à faire. Seul un appel réel tranche. -->
+    <div v-if="ai.enabled" class="essai">
+      <button :disabled="essai || !ready?.ok" @click="testerIa">
+        {{ essai ? 'Interrogation…' : "Tester l'IA" }}
+      </button>
+      <span v-if="!ready?.ok" class="indispo">
+        Rien à tester tant que les réglages ne sont pas complets.
+      </span>
+      <span v-else-if="!resultat" class="indispo">
+        Soumet un vrai cas difficile au service et montre sa réponse.
+      </span>
+      <span v-else :class="['resultat', resultat.ok ? 'ok' : 'ko']">{{ resultat.texte }}</span>
+    </div>
+    <p v-if="resultat?.envoye" class="precision">
+      Cas soumis : <code>{{ resultat.envoye }}</code> — un nom abîmé, sans année. Ce qui
+      compte n'est pas que la réponse soit juste, c'est que le service réponde.
     </p>
 
     <p class="precision">
@@ -231,6 +279,11 @@ function saveKey() {
 </template>
 
 <style scoped>
+.essai { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0 0 26px; }
+.essai .indispo { font-size: 11.5px; color: var(--text-faint); }
+.essai .resultat { font-size: 12px; }
+.essai .resultat.ok { color: var(--ok); }
+.essai .resultat.ko { color: var(--warn); }
 section {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 10px; padding: 16px 18px;

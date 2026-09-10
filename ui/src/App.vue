@@ -4,6 +4,7 @@ import LoginView from './components/LoginView.vue'
 import WorkspaceView from './components/WorkspaceView.vue'
 import SettingsView from './components/SettingsView.vue'
 import JournalView from './components/JournalView.vue'
+import TranscodeView from './components/TranscodeView.vue'
 
 const authenticated = ref(null) // null = on ne sait pas encore
 const health = ref(null)
@@ -37,6 +38,7 @@ const view = ref('source')
 const VIEWS = [
   { id: 'source', label: 'Ranger' },
   { id: 'library', label: 'Ma médiathèque' },
+  { id: 'transcode', label: 'Réencodage' },
   { id: 'journal', label: 'Journal' },
   { id: 'settings', label: 'Réglages' },
 ]
@@ -134,6 +136,7 @@ onUnmounted(() => {
 
     <main>
       <WorkspaceView v-if="ESPACES.includes(view)" :espace="view" />
+      <TranscodeView v-else-if="view === 'transcode'" />
       <JournalView v-else-if="view === 'journal'" />
       <SettingsView v-else-if="view === 'settings'" />
     </main>
