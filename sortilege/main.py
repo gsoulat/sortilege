@@ -21,6 +21,7 @@ from . import __version__
 from .api import (
     auth,
     automation,
+    books,
     collection,
     library,
     media,
@@ -106,6 +107,7 @@ app.include_router(automation.router)
 app.include_router(collection.router)
 app.include_router(workspace.router)
 app.include_router(media.router)
+app.include_router(books.router)
 app.include_router(transcode.router)
 
 # Routes accessibles sans session. Liste blanche et non liste noire : oublier

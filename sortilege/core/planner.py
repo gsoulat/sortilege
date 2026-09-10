@@ -27,6 +27,7 @@ KIND_KEYS: dict[MediaKind, str] = {
     MediaKind.MOVIE: "movie",
     MediaKind.EPISODE: "episode",
     MediaKind.ANIME: "anime",
+    MediaKind.BOOK: "book",
     MediaKind.UNKNOWN: "movie",
 }
 
@@ -245,4 +246,121 @@ def build_plan(
         companions=[(c.path, c.destination_for(destination)) for c in companions],
         leftovers=leftovers,
         alternatives=_alternatives(match, all_candidates),
+    )
+
+
+# --- Livres -----------------------------------------------------------------
+
+
+def build_book_values(scanned: ScannedFile) -> dict[str, Any]:
+    """Valeurs du gabarit pour un livre.
+
+    Aucun fournisseur n'intervient : le fichier fait autorite. Un EPUB porte un
+    manifeste renseigne par son editeur, la ou un nom de release ment. Aller
+    interroger une base pour confirmer ce que l'editeur a lui-meme inscrit
+    serait depenser un appel reseau pour rien.
+    """
+    livre = scanned.book
+    parsed = scanned.parsed
+    return {
+        "title": (livre.title if livre else "") or parsed.title,
+        "original_title": parsed.title,
+        "author": (livre.author if livre else "") or "",
+        "series": (livre.series if livre else "") or "",
+        "volume": (livre.volume if livre else None),
+        "publisher": (livre.publisher if livre else "") or "",
+        "isbn": (livre.isbn if livre else "") or "",
+        "year": (livre.year if livre else None) or parsed.year,
+        "language": (livre.language if livre else "") or "",
+        # Jetons video : vides, mais presents. Un gabarit de livre qui
+        # mentionnerait {resolution} par erreur produira un segment vide plutot
+        # qu'une erreur de rendu.
+        "collection": "",
+        "season": None,
+        "episode": None,
+        "episode_end": None,
+        "absolute_episode": None,
+        "episode_title": "",
+        "resolution": "",
+        "source": "",
+        "codec": "",
+        "edition": "",
+        "tmdb_id": "",
+        "imdb_id": "",
+    }
+
+
+def build_book_plan(
+    scanned: ScannedFile,
+    *,
+    template: str,
+    destination_root: Path,
+    with_cleanup: bool = True,
+) -> Plan:
+    """Plan de rangement d'un livre, sans identification distante.
+
+    Le verdict ne vient pas d'un score de correspondance — il n'y a rien a
+    faire correspondre — mais de la QUALITE de ce que le fichier declare :
+
+    - titre ET auteur lus dans le fichier : rien de plus a apprendre ailleurs,
+      le rangement peut partir seul ;
+    - titre seul, ou devine d'apres le nom : il manque de quoi ranger sous le
+      bon auteur, donc un humain regarde ;
+    - rien du tout : refuse, avec le motif.
+    """
+    plan_id = plan_id_for(scanned.path)
+    livre = scanned.book
+    valeurs = build_book_values(scanned)
+
+    if not valeurs["title"]:
+        return Plan(
+            id=plan_id,
+            source=scanned.path,
+            destination=None,
+            kind="book",
+            score=0.0,
+            decision=Decision.REJECT,
+            reasons=["aucun titre lisible, ni dans le fichier ni dans son nom"],
+            error="non identifie",
+        )
+
+    sur = bool(livre and livre.read and livre.trustworthy)
+    score = 0.95 if sur else 0.6
+    motifs = (
+        ["titre et auteur lus dans le fichier"]
+        if sur
+        else ["metadonnees incompletes : le nom de fichier a servi de secours"]
+    )
+
+    try:
+        validate(template)
+        relative = render(template, valeurs)
+        destination = resolve_within(destination_root, relative)
+    except (TemplateError, PathConfinementError) as exc:
+        return Plan(
+            id=plan_id,
+            source=scanned.path,
+            destination=None,
+            kind="book",
+            score=score,
+            decision=Decision.REJECT,
+            reasons=[*motifs, f"chemin impossible : {exc}"],
+            title=valeurs["title"],
+            error=str(exc),
+        )
+
+    destination = destination.with_suffix(scanned.path.suffix)
+    compagnons = find_companions(scanned.path, artwork=False)
+    return Plan(
+        id=plan_id,
+        source=scanned.path,
+        destination=destination,
+        kind="book",
+        score=score,
+        decision=Decision.AUTO if sur else Decision.REVIEW,
+        reasons=motifs,
+        title=valeurs["title"],
+        year=valeurs["year"],
+        companions=compagnons,
+        leftovers=find_leftovers(scanned.path, compagnons) if with_cleanup else [],
     )

@@ -12,6 +12,9 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
+from .ebook import BOOK_EXTENSIONS
+from .ebook import from_name as book_from_name
+
 VIDEO_EXTENSIONS = {
     ".mkv",
     ".mp4",
@@ -30,6 +33,14 @@ class MediaKind(StrEnum):
     MOVIE = "movie"
     EPISODE = "episode"
     ANIME = "anime"
+    BOOK = "book"
+    """Un livre numerique.
+
+    Type a part et non variante de film, parce que TOUT y est different : le
+    fichier porte ses propres metadonnees et fait autorite, il n'y a pas de
+    fournisseur a interroger, pas de saison, pas de resolution — et il se lit
+    dans le navigateur au lieu de se regarder."""
+
     UNKNOWN = "unknown"
 
 
@@ -221,6 +232,37 @@ class ParsedName:
 
 def is_video(path: Path) -> bool:
     return path.suffix.lower() in VIDEO_EXTENSIONS
+
+
+def is_book(path: Path) -> bool:
+    return path.suffix.lower() in BOOK_EXTENSIONS
+
+
+def is_media(path: Path) -> bool:
+    return is_video(path) or is_book(path)
+
+
+def parse_book(path: Path, ancestors: list[str] | None = None) -> ParsedName:
+    """Lecture d'un nom de LIVRE, sans ouvrir le fichier.
+
+    Ne sert que de filet. Les metadonnees du fichier lui-meme sont bien
+    meilleures — un EPUB porte un manifeste renseigne par son editeur — et
+    c'est le scanner qui les lit. Mais un EPUB casse, un MOBI ou un CBZ n'en
+    ont pas, et il faut bien les ranger quelque part.
+
+    Le detail — auteur, tome — est extrait par ``ebook.from_name``, qui rend un
+    BookMeta comme la lecture du fichier. Un seul type porte l'information sur
+    un livre, quelle qu'en soit la provenance.
+    """
+    meta = book_from_name(path)
+    return ParsedName(
+        raw=path.stem,
+        title=meta.title,
+        kind=MediaKind.BOOK,
+        year=meta.year,
+        signals=["nom de fichier"],
+        quality=0.5 if meta.title else 0.0,
+    )
 
 
 def _find_year(context: str) -> tuple[int | None, str]:

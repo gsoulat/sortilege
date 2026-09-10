@@ -81,6 +81,13 @@ TOKENS: tuple[Token, ...] = (
     Token("codec", "Codec", "x265", "technique"),
     Token("language", "Langue", "multi", "technique"),
     Token("edition", "Édition", "Director's Cut", "technique"),
+    # Livres. L'auteur est le premier niveau de rangement d'une bibliotheque :
+    # on cherche « du Rothfuss », pas « un livre de 2007 ».
+    Token("author", "Auteur", "Patrick Rothfuss", "livre"),
+    Token("series", "Série", "Chronique du Tueur de Roi", "livre"),
+    Token("volume", "Tome", "1", "livre"),
+    Token("publisher", "Éditeur", "Bragelonne", "livre"),
+    Token("isbn", "ISBN", "9782266021196", "livre"),
     Token("tmdb_id", "Identifiant TMDB", "194", "identifiants"),
     Token("imdb_id", "Identifiant IMDb", "tt0211915", "identifiants"),
 )
@@ -114,6 +121,13 @@ PRESETS: dict[str, dict[str, str]] = {
         # {episode} est souvent absent tant que la correspondance saison/episode
         # n'a pas ete resolue chez le provider.
         "anime": "{title}/{title} - {absolute_episode:03}{? episode_title: - $}",
+        # Auteur, puis serie, puis titre. La serie produit un segment vide quand
+        # le livre n'en fait pas partie, et un segment vide disparait — le meme
+        # gabarit range donc un roman isole et une saga en sept tomes.
+        #
+        # Le tome est PREFIXE au titre plutot que suffixe : c'est ce qui fait
+        # que l'ordre alphabetique d'un dossier suit l'ordre de lecture.
+        "book": "{author}/{series}/{? volume:02:$ - }{title}{? year: ($)}",
     },
     "plex": {
         # Plex accepte un identifiant entre accolades dans le nom, mais les
@@ -124,6 +138,7 @@ PRESETS: dict[str, dict[str, str]] = {
             "{title} - s{season:02}e{episode:02}{? episode_end:02:-e$}"
         ),
         "anime": "{title}/{title} - {absolute_episode:03}",
+        "book": "{author}/{series}/{? volume:02:$ - }{title}",
     },
 }
 

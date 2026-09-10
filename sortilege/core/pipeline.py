@@ -29,9 +29,10 @@ from .ai import AIProposal, AmbiguousItem
 from .franchise import franchise_for
 from .matching import MatchResult, best_match, build_signals
 from .parser import MediaKind, ParsedName
-from .planner import Plan, build_plan
+from .planner import Plan, build_book_plan, build_plan
 from .scanner import ScannedFile
 from .scoring import Decision, Policy
+from .template import PRESETS
 
 logger = logging.getLogger(__name__)
 
@@ -233,6 +234,13 @@ class Pipeline:
         """
         async with self._semaphore:
             try:
+                # Un livre ne passe par AUCUN fournisseur. Le fichier fait
+                # autorite — un EPUB porte le manifeste renseigne par son
+                # editeur — et interroger une base pour confirmer ce qu'on a
+                # deja sous la main serait payer un appel reseau pour rien.
+                if scanned.parsed.kind is MediaKind.BOOK:
+                    return self._render_book(scanned), None
+
                 # Une decision deja prise court-circuite tout : ni recherche,
                 # ni score, ni arbitrage. C'est ce qui fait qu'une file de
                 # revue converge vers le vide au lieu de reposer eternellement
@@ -270,6 +278,13 @@ class Pipeline:
                     reasons=[f"erreur interne : {type(exc).__name__}"],
                     error=str(exc),
                 ), None
+
+    def _render_book(self, scanned: ScannedFile) -> Plan:
+        return build_book_plan(
+            scanned,
+            template=self._templates.get("book", "") or PRESETS["jellyfin"]["book"],
+            destination_root=self._destination_for("book", scanned.size_bytes),
+        )
 
     def _render(self, scanned: ScannedFile, match, candidates) -> Plan:
         """Fabrique le plan a partir d'une correspondance deja etablie.
@@ -583,4 +598,5 @@ def _kind_key(kind: MediaKind) -> str:
         MediaKind.MOVIE: "movie",
         MediaKind.EPISODE: "episode",
         MediaKind.ANIME: "anime",
+        MediaKind.BOOK: "book",
     }.get(kind, "movie")

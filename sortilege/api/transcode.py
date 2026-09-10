@@ -194,7 +194,46 @@ def _resume_candidats() -> dict[str, object]:
         "count": len(candidats),
         "recoverable_bytes": reencode.recoverable_bytes(candidats),
         "by_target": reencode.by_target(candidats),
+        "by_kind": _reglages_par_type(),
     }
+
+
+def _reglages_par_type() -> list[dict[str, object]]:
+    """Ce que chaque type peut donner, et POURQUOI il ne donne rien.
+
+    « Rien a reencoder » est vrai mais inutile : quelqu'un qui vient de regler
+    ses series et ne voit aucune serie proposee ne peut pas savoir si c'est
+    parce que ses fichiers sont deja conformes, ou parce que sa strategie ne
+    demandera jamais rien.
+
+    Le cas le plus frequent est le second : « Qualité maximale » ne classe
+    AUCUNE resolution inferieure devant la resolution courante, donc elle ne
+    propose jamais de reduire quoi que ce soit. C'est voulu — mais il faut le
+    dire, sinon cela ressemble a une panne.
+    """
+    reglage = get_store().load().quality
+    libelles = {"movie": "Films", "episode": "Séries", "anime": "Animes"}
+    sortie = []
+    for kind, libelle in libelles.items():
+        strat = reglage.for_kind(kind)
+        budget = reglage.budget_bytes(kind)
+        reduit = any(reencode.target_for(strat, palier) for palier in ("2160p", "1080p", "720p"))
+        sortie.append(
+            {
+                "kind": kind,
+                "label": libelle,
+                "strategy": strat.label,
+                "budget_mb": budget // (1024 * 1024),
+                "proposes": bool(reduit or budget),
+                "why": (
+                    ""
+                    if reduit or budget
+                    else f"« {strat.label} » ne demande jamais de réduire, "
+                    "et aucun poids maximal n'est fixé"
+                ),
+            }
+        )
+    return sortie
 
 
 def _get(job_id: str) -> Job:

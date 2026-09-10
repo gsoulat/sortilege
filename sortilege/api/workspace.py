@@ -126,6 +126,19 @@ def _entry_out(entry: WorkspaceEntry) -> dict[str, object]:
                 }
                 for s in sorted(owned.seasons.values(), key=lambda s: s.number)
             ],
+            # Les fichiers eux-memes, pour les livres seulement : c'est ce qui
+            # permet d'ouvrir le lecteur. Les exposer pour tous les types
+            # gonflerait la reponse — interrogee toutes les deux secondes — de
+            # milliers de chemins que personne n'affiche.
+            "books": (
+                [
+                    {"path": f.relative_path, "size_bytes": f.size_bytes}
+                    for refs in owned.slots.values()
+                    for f in refs
+                ]
+                if owned.kind == "book"
+                else []
+            ),
             "duplicates": [
                 {
                     "label": g.label,

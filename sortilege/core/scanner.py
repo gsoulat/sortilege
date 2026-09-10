@@ -13,7 +13,10 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .parser import ParsedName, is_video, parse
+from .ebook import BookMeta
+from .ebook import from_name as book_from_name
+from .ebook import read as read_book
+from .parser import MediaKind, ParsedName, is_book, is_media, parse, parse_book
 from .probe import FileProbe, inspect
 from .safety import PathConfinementError, assert_readable_source
 
@@ -22,6 +25,11 @@ logger = logging.getLogger(__name__)
 # Un fichier plus petit que ca est un echantillon, une bande-annonce ou un
 # telechargement avorte : le ranger polluerait la bibliotheque.
 MIN_SIZE_BYTES = 50 * 1024 * 1024
+
+# Un livre pese quelques mega-octets : le seuil video l'ecarterait TOUJOURS.
+# Le seuil reste utile pour la meme raison — un fichier de trois kilo-octets est
+# un telechargement avorte, pas un roman.
+MIN_BOOK_BYTES = 4 * 1024
 
 # Dossiers a ne jamais parcourir : residus de clients de telechargement et
 # metadonnees systeme.
@@ -49,6 +57,15 @@ class ScannedFile:
     parsed: ParsedName
     probe: FileProbe
 
+    book: BookMeta | None = None
+    """Metadonnees lues DANS le livre. None pour une video.
+
+    Renversement complet par rapport a la video : ici le fichier fait autorite.
+    Un EPUB porte un manifeste renseigne par son editeur — titre, auteur,
+    editeur, ISBN, parfois la serie — la ou un nom de release ment. Aucun
+    fournisseur n'est donc interroge pour un livre : ce serait payer un appel
+    reseau pour confirmer ce qu'on a deja sous la main."""
+
     # Relatif a la racine source : c'est ce qu'on affiche, un chemin absolu de
     # conteneur ne parle a personne.
     relative_path: str = ""
@@ -62,8 +79,13 @@ class ScannedFile:
     serait une operation nulle qui salit le journal d'annulation."""
 
     @property
+    def is_book(self) -> bool:
+        return self.parsed.kind is MediaKind.BOOK
+
+    @property
     def skipped_reason(self) -> str | None:
-        if self.size_bytes < MIN_SIZE_BYTES:
+        plancher = MIN_BOOK_BYTES if self.is_book else MIN_SIZE_BYTES
+        if self.size_bytes < plancher:
             return "fichier trop petit (echantillon ou telechargement incomplet)"
         return None
 
@@ -124,7 +146,7 @@ def collect(
 
             if any(_should_skip_dir(part) for part in path.relative_to(root).parts[:-1]):
                 continue
-            if not path.is_file() or not is_video(path):
+            if not path.is_file() or not is_media(path):
                 continue
             if _should_skip_file(path):
                 skipped += 1
@@ -216,8 +238,27 @@ def scan(
                 )
             )
 
-        parsed = parse(path, ancestors)
-        probe = inspect(path) if deep else FileProbe()
+        livre: BookMeta | None = None
+        if is_book(path):
+            # Le fichier d'abord, son nom ensuite : l'inverse de la video. Un
+            # manifeste d'editeur bat toujours un nom de fichier, et quand il
+            # manque quelque chose le nom complete plutot qu'il ne remplace.
+            livre = read_book(path)
+            secours = book_from_name(path)
+            livre.title = livre.title or secours.title
+            livre.authors = livre.authors or secours.authors
+            livre.year = livre.year or secours.year
+            livre.volume = livre.volume if livre.volume is not None else secours.volume
+            parsed = parse_book(path, ancestors)
+            if livre.title:
+                parsed.title = livre.title
+                parsed.year = livre.year
+                parsed.quality = 0.95 if livre.trustworthy else 0.7
+                parsed.signals = ["metadonnees du fichier" if livre.read else "nom de fichier"]
+            probe = FileProbe()
+        else:
+            parsed = parse(path, ancestors)
+            probe = inspect(path) if deep else FileProbe()
 
         # Une ligne par fichier, en DEBUG : c'est le seul endroit ou l'on peut
         # voir ce que Sortilege a compris d'un nom, et donc pourquoi une oeuvre
@@ -247,6 +288,7 @@ def scan(
                 probe=probe,
                 relative_path=str(path.relative_to(root)),
                 in_library=_under(path, library_root),
+                book=livre,
             )
         )
 

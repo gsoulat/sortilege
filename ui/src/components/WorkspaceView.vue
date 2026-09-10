@@ -2,6 +2,7 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import CandidatePicker from './CandidatePicker.vue'
 import ImageZoom from './ImageZoom.vue'
+import BookReader from './BookReader.vue'
 
 /**
  * Vue unique de la médiathèque.
@@ -30,6 +31,7 @@ const busy = ref(null)
 const dupeMessage = ref({})
 const confirmingDelete = ref(null)
 const confirmingPrune = ref(false)
+const lecture = ref(null)
 const open = ref(new Set())
 const picking = ref(null)
 const choosing = ref(false)
@@ -982,9 +984,27 @@ onUnmounted(() => clearInterval(poller))
           Tout mettre en file
         </button>
       </div>
-      <p v-else-if="reenc" class="empty">
-        Rien à réencoder : tous tes fichiers respectent la stratégie de leur type.
-      </p>
+      <div v-else-if="reenc" class="rien">
+        <p class="empty">Rien à réencoder pour l'instant.</p>
+        <!-- « Rien à réencoder » est vrai mais inutile : quelqu'un qui vient de
+             régler ses séries et n'en voit aucune proposée ne peut pas savoir si
+             ses fichiers sont conformes ou si sa stratégie ne demandera jamais
+             rien. Le cas le plus fréquent est le second. -->
+        <ul class="par-type">
+          <li v-for="r in reenc.candidates?.by_kind ?? []" :key="r.kind">
+            <strong>{{ r.label }}</strong>
+            <span class="puce">{{ r.strategy }}</span>
+            <span class="puce" v-if="r.budget_mb">{{ r.budget_mb }} Mo max</span>
+            <span v-if="r.why" class="motif">{{ r.why }}</span>
+            <span v-else class="motif ok">rien à réduire : les fichiers sont conformes</span>
+          </li>
+        </ul>
+        <p class="hint-reenc">
+          Une stratégie « Qualité maximale » ne propose jamais de réduire quoi que ce soit —
+          c'est sa définition. Pour que des fichiers apparaissent ici : change la stratégie du
+          type dans <em>Réglages → Bibliothèque</em>, ou fixe-lui un poids maximal.
+        </p>
+      </div>
 
       <ul v-if="reenc?.jobs?.length" class="jobs">
         <li v-for="j in reenc.jobs" :key="j.id" :class="j.state">
@@ -1333,7 +1353,11 @@ onUnmounted(() => clearInterval(poller))
                 </li>
               </template>
             </ul>
-            <template v-for="p in w.pending.review" :key="`pick-${p.id}`">
+            <!-- La MEME liste que celle des boutons. Elle etait restee sur les
+                 seuls plans « a arbitrer » quand les ecartes les ont rejoints :
+                 « Ce n'est pas ça » armait alors un sélecteur que rien
+                 n'affichait, et le clic ne faisait plus rien. -->
+            <template v-for="p in arbitrables(w)" :key="`pick-${p.id}`">
               <CandidatePicker
                 v-if="picking === p.id"
                 :candidates="p.alternatives ?? []"
@@ -1426,6 +1450,17 @@ onUnmounted(() => clearInterval(poller))
               </button>
               <span v-if="dupeMessage[w.key]" class="dupe-msg">{{ dupeMessage[w.key] }}</span>
             </div>
+            <!-- Un livre rangé n'est pas un livre lu : sans lecteur, vérifier
+                 qu'un fichier est bien ce qu'il prétend demanderait de le
+                 télécharger et d'ouvrir une autre application. -->
+            <ul v-if="w.owned.books?.length" class="fichiers livres">
+              <li v-for="b in w.owned.books" :key="b.path">
+                <button class="small play" @click="lecture = b.path">Lire</button>
+                <span class="poids">{{ (b.size_bytes / 1024 ** 2).toFixed(1) }} Mo</span>
+                <code>{{ b.path }}</code>
+              </li>
+            </ul>
+
             <ul v-if="w.owned.duplicates.length" class="dupes">
               <li v-for="d in w.owned.duplicates" :key="d.label">
                 <div class="dupe-line">
@@ -1453,6 +1488,8 @@ onUnmounted(() => clearInterval(poller))
       </li>
     </ul>
 
+    <BookReader v-if="lecture" :path="lecture" @close="lecture = null" />
+
     <ImageZoom
       v-if="zoom"
       :src="zoom.src"
@@ -1470,6 +1507,18 @@ onUnmounted(() => clearInterval(poller))
 </template>
 
 <style scoped>
+.rien { display: flex; flex-direction: column; gap: 10px; }
+.par-type { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.par-type li { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; font-size: 12px; }
+.par-type strong { min-width: 70px; }
+.par-type .puce {
+  font-size: 10.5px; padding: 1px 8px; border-radius: 20px;
+  background: var(--surface-2); color: var(--text-dim);
+}
+.par-type .motif { font-size: 11.5px; color: var(--text-faint); }
+.par-type .motif.ok { color: var(--accent); }
+.hint-reenc { margin: 0; font-size: 11.5px; color: var(--text-faint); line-height: 1.6; max-width: 660px; }
+.fichiers.livres code { color: var(--text-dim); }
 .reenc { display: flex; flex-direction: column; gap: 12px; }
 .reenc h3 { margin: 0 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim); }
 .reenc-etat { display: flex; gap: 7px; flex-wrap: wrap; }

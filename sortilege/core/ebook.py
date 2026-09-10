@@ -231,3 +231,55 @@ def _int(texte: str) -> int | None:
         return int(float(texte))
     except (TypeError, ValueError):
         return None
+
+
+# --- Quand le fichier ne dit rien -------------------------------------------
+
+
+_ANNEE = re.compile(r"[(\[]?(?P<annee>1[5-9]\d{2}|20\d{2})[)\]]?")
+_BRUIT = re.compile(
+    r"\b(?:epub|pdf|mobi|azw3|french|fr|vf|ebook|livre numerique|retail|scan)\b",
+    re.IGNORECASE,
+)
+
+
+def from_name(path: Path) -> BookMeta:
+    """Metadonnees devinees d'apres le NOM, quand le fichier n'en porte pas.
+
+    Filet de securite pour les formats qu'on ne sait pas ouvrir — MOBI, CBZ —
+    et pour les EPUB casses. La convention la plus repandue est
+    « Auteur - Titre », qu'on suit sans l'inventer : en cas de doute, tout va
+    dans le titre.
+
+    Se tromper d'auteur ferait ranger un livre sous le nom de quelqu'un
+    d'autre, ce qui est PIRE que de n'avoir pas d'auteur du tout — le livre
+    deviendrait introuvable pour qui le cherche au bon endroit.
+    """
+    texte = re.sub(r"[._]+", " ", path.stem)
+    meta = BookMeta()
+
+    if trouve := _ANNEE.search(texte):
+        meta.year = int(trouve.group("annee"))
+        texte = texte[: trouve.start()] + texte[trouve.end() :]
+
+    texte = _BRUIT.sub(" ", texte)
+    texte = re.sub(r"[\[\](){}]", " ", texte)
+    texte = re.sub(r"\s{2,}", " ", texte).strip(" -_")
+
+    if trouve := _TOME.search(texte):
+        meta.volume = _int(trouve.group("numero"))
+        # Le marqueur de tome n'appartient pas au titre : « Fondation - Tome 3 »
+        # est le tome 3 de « Fondation », et garder le marqueur ferait de chaque
+        # tome une oeuvre distincte.
+        texte = (texte[: trouve.start()] + texte[trouve.end() :]).strip(" -_")
+
+    if " - " in texte:
+        gauche, droite = texte.split(" - ", 1)
+        # Un « auteur » de six mots n'en est pas un : c'est un titre qui
+        # contient un tiret.
+        if gauche.strip() and droite.strip() and len(gauche.split()) <= 5:
+            meta.authors = [gauche.strip()]
+            texte = droite.strip()
+
+    meta.title = re.sub(r"\s{2,}", " ", texte).strip(" -_")
+    return meta

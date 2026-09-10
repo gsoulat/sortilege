@@ -32,12 +32,20 @@ from .template import PRESETS, TemplateError, validate
 
 logger = logging.getLogger(__name__)
 
-KINDS = ("movie", "episode", "anime")
+KINDS = ("movie", "episode", "anime", "book")
+
+VIDEO_KINDS = ("movie", "episode", "anime")
+"""Les types auxquels une notion de RESOLUTION s'applique.
+
+Un livre n'a ni resolution, ni debit, ni strategie de qualite : lui en demander
+une n'aurait aucun sens, et l'y forcer bloquerait l'enregistrement des
+preferences."""
 
 DEFAULT_DESTINATIONS: dict[str, str] = {
     "movie": "Films",
     "episode": "Series",
     "anime": "Animes",
+    "book": "Livres",
 }
 
 
@@ -418,7 +426,7 @@ class PreferenceStore:
                     "Renseigne l'adresse du serveur avant d'activer le rafraichissement."
                 )
 
-        for kind in KINDS:
+        for kind in VIDEO_KINDS:
             choix = getattr(prefs.quality, kind, None)
             if choix not in QUALITY_KEYS:
                 raise PreferenceError(f"strategie de qualite inconnue pour « {kind} » : {choix}")

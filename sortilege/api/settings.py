@@ -22,7 +22,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from ..config import get_settings
-from ..core.ai import PROVIDERS
+from ..core.ai import PROVIDERS, resolver_status
 from ..core.mediaserver import refresh_library
 from ..core.notify import Notification, send
 from ..core.preferences import (
@@ -122,6 +122,15 @@ class PreferencesIn(BaseModel):
     transcode: TranscodeIn | None = None
 
 
+def _ai_ready(prefs: Preferences) -> dict[str, object]:
+    if not prefs.ai.enabled:
+        return {"ok": False, "reason": "résolveur désactivé"}
+    ok, motif = resolver_status(
+        prefs.ai.provider, prefs.ai.api_key, prefs.ai.model, prefs.ai.base_url
+    )
+    return {"ok": ok, "reason": motif}
+
+
 @router.get("/preferences")
 def read_preferences() -> dict[str, object]:
     """Preferences courantes, et les choix possibles pour les alimenter."""
@@ -161,6 +170,7 @@ def read_preferences() -> dict[str, object]:
         },
         "automation": asdict(prefs.automation),
         "quality": asdict(prefs.quality),
+        "ai_models": {p.key: list(p.models) for p in PROVIDERS},
         "quality_strategies": [
             {"key": s.key, "label": s.label, "summary": s.summary, "order": list(s.order)}
             for s in QUALITY_STRATEGIES
@@ -171,6 +181,10 @@ def read_preferences() -> dict[str, object]:
             # La cle ne sort jamais : elle donne acces au serveur multimedia.
             "api_key_set": bool(prefs.media_server.api_key),
         },
+        # Pourquoi le resolveur ne fait rien, le cas echeant. Cocher « activer »
+        # et ne rien voir se passer ne laisse aucun moyen de distinguer une cle
+        # manquante d'un lot de fichiers trop clairs pour meriter un appel.
+        "ai_ready": _ai_ready(prefs),
         "transcode": {
             "enabled": prefs.transcode.enabled,
             "start_hour": prefs.transcode.start_hour,
