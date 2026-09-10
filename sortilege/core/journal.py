@@ -16,6 +16,7 @@ C'est le seul module qui ecrit sur le disque. Trois regles y sont absolues :
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
@@ -245,7 +246,7 @@ def apply_plan(
             str(plan.destination),
             f"deplacement impossible : {exc}"
             + (_permission_hint(plan.source) if isinstance(exc, PermissionError) else ""),
-            reason="permission_denied" if isinstance(exc, PermissionError) else "move_failed",
+            reason=_os_reason(exc),
         )
 
     _record(journal, plan, plan.source, plan.destination, method, "video")
@@ -305,6 +306,20 @@ def _why_not_writable(plan: Plan) -> str | None:
         if not os.access(cible, os.W_OK):
             return f"impossible d'ecrire dans « {cible} »" + _permission_hint(cible / "x")
     return None
+
+
+def _os_reason(exc: OSError) -> str:
+    """Traduit une erreur systeme en motif regroupable.
+
+    Un « Errno 36 » range sous « deplacement impossible » se lit comme un
+    disque plein, alors que c'est un nom trop long — et l'utilisateur cherche
+    de la place qu'il a deja.
+    """
+    if isinstance(exc, PermissionError):
+        return "permission_denied"
+    if exc.errno == errno.ENAMETOOLONG:
+        return "name_too_long"
+    return "move_failed"
 
 
 def _permission_hint(path: Path) -> str:
@@ -415,7 +430,7 @@ def delete_ranged_source(plan: Plan) -> ApplyResult:
             str(plan.destination),
             f"suppression impossible : {exc}"
             + (_permission_hint(plan.source) if isinstance(exc, PermissionError) else ""),
-            reason="permission_denied" if isinstance(exc, PermissionError) else "move_failed",
+            reason=_os_reason(exc),
         )
 
     return ApplyResult(
@@ -526,7 +541,7 @@ def evacuate_ranged_source(plan: Plan, journal: Journal, trash_root: Path | None
                 str(target),
                 f"suppression impossible : {exc}"
                 + (_permission_hint(plan.source) if isinstance(exc, PermissionError) else ""),
-                reason="permission_denied" if isinstance(exc, PermissionError) else "move_failed",
+                reason=_os_reason(exc),
             )
         return ApplyResult(
             plan.id,
@@ -547,7 +562,7 @@ def evacuate_ranged_source(plan: Plan, journal: Journal, trash_root: Path | None
             str(target),
             f"evacuation impossible : {exc}"
             + (_permission_hint(plan.source) if isinstance(exc, PermissionError) else ""),
-            reason="permission_denied" if isinstance(exc, PermissionError) else "move_failed",
+            reason=_os_reason(exc),
         )
 
     _record(journal, plan, plan.source, target, how, "trash")

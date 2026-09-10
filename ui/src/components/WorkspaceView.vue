@@ -263,7 +263,11 @@ const REASONS = {
   },
   move_failed: {
     label: 'Déplacement impossible',
-    fix: 'Erreur système — disque plein, volume en lecture seule, ou chemin trop long.',
+    fix: "Erreur système au moment du déplacement — le message exact ci-dessous dit laquelle : disque plein, volume en lecture seule, ou nom de fichier trop long.",
+  },
+  name_too_long: {
+    label: 'Nom de fichier trop long',
+    fix: "La corbeille aplatit le chemin d'origine dans le nom du fichier, et une release au titre à rallonge dépassait la limite du système. Ce n'est pas un problème de place. Corrigé : les noms trop longs sont désormais raccourcis en gardant leur fin, celle qui identifie le fichier.",
   },
   no_destination: {
     label: 'Aucune destination calculée',
@@ -561,11 +565,18 @@ onUnmounted(() => clearInterval(poller))
       >{{ confirmReset ? 'Confirmer : tout effacer' : 'Tout effacer' }}</button>
     </div>
 
+    <!-- Au FUTUR, et en disant ce qu'il reste à faire. La formulation au
+         présent laissait croire que l'action avait déjà eu lieu, alors que le
+         bouton attend un second clic. -->
     <p v-if="confirmReset" class="reset-avert">
-      La liste entière est effacée pour repartir d'un scan neuf : plans, avancement,
-      aperçus. <strong>Ton journal d'annulation ({{ data.journal_size }}) et tes
-      identifications retenues sont conservés</strong> — aucun fichier n'est déplacé
+      <strong>Rien n'est encore effacé.</strong> Clique à nouveau sur
+      « Confirmer : tout effacer » pour vider la liste — plans, avancement, aperçus —
+      et repartir d'un scan neuf.
+      <br />
+      Ton journal d'annulation ({{ data.journal_size }}) et tes identifications retenues
+      seront <strong class="garde">conservés</strong>, et aucun fichier ne sera déplacé
       ni supprimé.
+      <button class="renoncer" @click="confirmReset = false">Renoncer</button>
     </p>
 
     <!-- Ce qui a été rangé, par œuvre, avec une annulation par ligne -->
@@ -988,8 +999,10 @@ onUnmounted(() => clearInterval(poller))
 .toolbar .ghost { color: var(--text-faint); }
 .toolbar .ghost.active { border-color: var(--accent); color: var(--text); }
 .toolbar .ghost.danger:hover:not(:disabled) { color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, transparent); }
-.reset-avert { margin: 0; font-size: 12px; color: var(--warn); line-height: 1.6; max-width: 720px; }
-.reset-avert strong { color: var(--ok); }
+.reset-avert { margin: 0; font-size: 12px; color: var(--warn); line-height: 1.7; max-width: 720px; }
+.reset-avert strong { color: var(--warn); }
+.reset-avert strong.garde { color: var(--ok); }
+.renoncer { margin-left: 10px; font-size: 11.5px; padding: 2px 10px; color: var(--text-faint); }
 
 .undo-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
 .undo-panel .head { display: flex; align-items: center; gap: 12px; }

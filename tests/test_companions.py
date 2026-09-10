@@ -483,3 +483,66 @@ def test_une_racine_n_est_jamais_une_coquille(tmp_path: Path) -> None:
     (tmp_path / "poster.jpg").write_text("x", encoding="utf-8")
 
     assert tmp_path not in [o.path for o in find_orphan_dirs([tmp_path])]
+
+
+# --- Longueur du nom en corbeille -------------------------------------------
+#
+# La corbeille aplatit le chemin d'origine dans le nom. Sur une release 4K au
+# titre a rallonge, cela depassait les 255 octets qu'un systeme de fichiers
+# accorde a un composant, et l'evacuation echouait sur « File name too long » —
+# un echec d'autant plus deroutant qu'il ressemble a un manque de place.
+
+EXORCISTE = (
+    "/storage/Download/JDownloader2/The Exorcist Believer 2023 MULTi VFF 2160p 10bit "
+    "4KLight DV HDR BluRay TrueHD 7 1 Atmos x265-QTZ-Wawacity boats/"
+    "The.Exorcist.Believer.2023.MULTi.VFF.2160p.10bit.4KLight.DV.HDR.BluRay.TrueHD.7.1."
+    "Atmos.x265-QTZ-Wawacity.boats.mkv"
+)
+
+
+def test_un_nom_trop_long_est_borne() -> None:
+    from sortilege.core.companions import MAX_NAME_BYTES, trash_destination
+
+    cible = trash_destination(Path("/lib/.corbeille"), "2026-09-10", Path(EXORCISTE))
+
+    assert len(cible.name.encode("utf-8")) <= MAX_NAME_BYTES
+
+
+def test_la_fin_du_nom_est_preservee() -> None:
+    """C'est elle qui identifie le fichier ; le debut n'est que le chemin des
+    dossiers parents."""
+    from sortilege.core.companions import trash_destination
+
+    cible = trash_destination(Path("/lib/.corbeille"), "2026-09-10", Path(EXORCISTE))
+
+    assert cible.name.endswith("Wawacity.boats.mkv")
+
+
+def test_un_nom_court_n_est_pas_touche() -> None:
+    from sortilege.core.companions import trash_destination
+
+    cible = trash_destination(Path("/t"), "j", Path("/storage/Download/film.mkv"))
+
+    assert cible.name == "storage_Download_film.mkv"
+
+
+def test_deux_chemins_tronques_ne_se_recouvrent_pas() -> None:
+    """Sans empreinte, deux fichiers de meme fin ecraseraient l'un l'autre en
+    corbeille — exactement la perte qu'elle existe pour eviter."""
+    from sortilege.core.companions import trash_destination
+
+    a = Path("/storage/Download/" + "A" * 150 + "/meme-fin.mkv")
+    b = Path("/storage/Download/" + "B" * 150 + "/meme-fin.mkv")
+
+    assert trash_destination(Path("/t"), "j", a).name != trash_destination(Path("/t"), "j", b).name
+
+
+def test_un_nom_accentue_reste_valide() -> None:
+    """La coupe se fait sur les OCTETS : tronquer au milieu d'un accent
+    produirait un nom invalide."""
+    from sortilege.core.companions import trash_destination
+
+    chemin = Path("/storage/Download/" + "é" * 200 + "/film.mkv")
+    cible = trash_destination(Path("/t"), "j", chemin)
+
+    cible.name.encode("utf-8").decode("utf-8")  # ne doit pas lever

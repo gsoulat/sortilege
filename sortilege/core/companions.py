@@ -15,6 +15,7 @@ Deux notions distinctes, deliberement separees :
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -216,14 +217,42 @@ def find_leftovers(video: Path, companions: list[Companion]) -> list[Path]:
     return leftovers
 
 
+MAX_NAME_BYTES = 200
+"""Plafond du nom aplati, en OCTETS.
+
+La limite des systemes de fichiers courants est de 255 octets par composant —
+pas par caractere, ce qui compte des qu'un titre porte des accents. On garde
+une marge : le nom traverse ensuite des couches (SMB, sauvegardes) dont les
+limites sont parfois plus basses."""
+
+
 def trash_destination(trash_root: Path, batch: str, original: Path) -> Path:
     """Emplacement d'un reste dans la corbeille.
 
     Le chemin d'origine est aplati dans le nom : la corbeille reste plate et
     lisible, et on voit d'ou venait chaque fichier sans avoir a recreer une
     arborescence.
+
+    Ce nom est BORNE. Une release 4K au titre a rallonge produisait un nom de
+    plus de deux cent cinquante octets, et l'evacuation echouait sur
+    « File name too long » — un echec d'autant plus deroutant qu'il ressemble a
+    un probleme de place.
+
+    Quand il faut couper, on garde la FIN : elle porte le nom reel du fichier,
+    celui qui permet de le reconnaitre. Le debut, lui, n'est que le chemin des
+    dossiers parents. Une empreinte du chemin complet est prefixee pour que
+    deux fichiers tronques au meme endroit ne se recouvrent pas.
     """
     flat = re.sub(r"[/\\]+", "_", str(original).lstrip("/"))
+
+    if len(flat.encode("utf-8")) > MAX_NAME_BYTES:
+        empreinte = hashlib.blake2s(str(original).encode("utf-8"), digest_size=4).hexdigest()
+        garde = MAX_NAME_BYTES - len(empreinte) - 1
+        # Decoupe sur les OCTETS puis on ignore un eventuel caractere coupe en
+        # deux : tronquer au milieu d'un accent produirait un nom invalide.
+        queue = flat.encode("utf-8")[-garde:].decode("utf-8", errors="ignore")
+        flat = f"{empreinte}_{queue}"
+
     return trash_root / batch / flat
 
 
