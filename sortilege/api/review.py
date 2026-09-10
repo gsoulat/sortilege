@@ -42,6 +42,7 @@ from ..core.snapshot import PLANS_KEY, SnapshotError, plans_in, plans_out
 from ..core.store import Decision as RememberedDecision
 from ..core.store import title_key
 from ..providers.anilist import AniListProvider
+from ..providers.base import last_auth_error
 from ..providers.tmdb import TMDBProvider
 from .deps import get_journal, get_memory, get_store
 from .library import last_scan
@@ -494,7 +495,7 @@ def _queue() -> dict[str, object]:
 
     return {
         "ready": bool(plans),
-        "blockers": _blockers(),
+        "blockers": blockers(),
         "counts": {str(d): len(v) for d, v in by_decision.items()},
         "auto": [_plan_out(p) for p in by_decision[Decision.AUTO]],
         "items": [_plan_out(p) for p in by_decision[Decision.REVIEW]],
@@ -521,30 +522,67 @@ def _remaining() -> int:
     )
 
 
-def _blockers() -> list[dict[str, str]]:
+def blockers() -> list[dict[str, str]]:
+    """Ce qui empeche l'outil de produire quoi que ce soit, et ou le corriger.
+
+    Publique et non privee : ces diagnostics existaient deja mais ne sortaient
+    que par ``/api/review/queue``, que plus aucun ecran n'interroge. Ils
+    n'atteignaient donc personne, et chacune de ces pannes se lisait comme
+    « aucun candidat » sur tous les fichiers a la fois.
+
+    Chaque entree porte un ``code`` stable — l'interface s'en sert de cle de
+    liste et pourrait un jour y accrocher un bouton, ce qu'un libelle traduit ne
+    permet pas — un ``message`` qui dit la consequence, et un ``where`` qui
+    nomme l'ecran ou agir. Un blocage sans adresse laisse chercher.
+    """
     conf = get_settings()
-    blockers: list[dict[str, str]] = []
+    found: list[dict[str, str]] = []
 
     if not conf.tmdb_api_key:
-        blockers.append(
+        found.append(
             {
-                "title": "Aucune clé TheMovieDB",
-                "detail": "Sans fournisseur de métadonnées, il n'y a aucun candidat "
-                "à comparer, donc rien à scorer.",
-                "where": "TMDB_API_KEY dans le .env",
+                "code": "tmdb_key_missing",
+                "message": "Aucune clé TheMovieDB : sans fournisseur de métadonnées, "
+                "aucun candidat n'est proposé, donc rien n'est identifié.",
+                "where": "Réglages → Système (TMDB_API_KEY dans le .env)",
+            }
+        )
+    elif refus := last_auth_error("tmdb"):
+        # Distinct de l'absence de cle : une cle presente mais refusee produit
+        # exactement le meme silence, et c'est le cas qu'on ne pouvait pas
+        # diagnostiquer depuis l'interface.
+        found.append(
+            {
+                "code": "tmdb_key_refused",
+                "message": refus,
+                "where": "Réglages → Système (TMDB_API_KEY dans le .env)",
+            }
+        )
+
+    if not any(root.is_dir() for root in get_store().resolved_sources()):
+        # Monter une source est une chose, la trouver a l'execution en est une
+        # autre : un volume mal declare donne un scan qui reussit sur zero
+        # fichier, ce qui ressemble a une source propre.
+        found.append(
+            {
+                "code": "no_source_root",
+                "message": "Aucune racine source accessible : le conteneur ne voit "
+                "aucun des dossiers déclarés, un scan n'y trouvera jamais rien.",
+                "where": "Réglages → Bibliothèque (sources à scanner)",
             }
         )
 
     if last_scan() is None:
-        blockers.append(
+        found.append(
             {
-                "title": "Aucun scan effectué",
-                "detail": "La file se remplit à partir des fichiers trouvés par un scan.",
-                "where": "Onglet Bibliothèque → Lancer un scan",
+                "code": "no_scan",
+                "message": "Aucun scan effectué : la liste se remplit à partir des "
+                "fichiers trouvés par un scan.",
+                "where": "Médiathèque → Analyser les sources",
             }
         )
 
-    return blockers
+    return found
 
 
 async def _tell_media_server() -> None:

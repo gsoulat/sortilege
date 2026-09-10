@@ -52,8 +52,63 @@ async function loadCatalog() {
   const data = await res.json()
   tokens.value = data.tokens
   presets.value = data.presets
-  applyPreset('jellyfin')
+  await chargerEnregistres()
 }
+
+/**
+ * Le gabarit RÉELLEMENT en vigueur, pas un préréglage.
+ *
+ * L'écran partait systématiquement du préréglage Jellyfin : on croyait
+ * modifier son gabarit alors qu'on en composait un autre par-dessus, et le
+ * sien n'était visible nulle part.
+ */
+const enregistres = ref({})
+
+async function chargerEnregistres() {
+  try {
+    const prefs = await (await fetch('/api/settings/preferences')).json()
+    enregistres.value = prefs.templates ?? {}
+  } catch {
+    enregistres.value = {}
+  }
+  template.value = enregistres.value[kind.value] || presets.value.jellyfin?.[kind.value] || ''
+}
+
+const modifie = computed(() => template.value !== (enregistres.value[kind.value] ?? ''))
+
+/**
+ * Enregistre le gabarit du type courant.
+ *
+ * Il manquait purement et simplement : on composait, l'aperçu marchait, on
+ * changeait d'onglet, tout était perdu. Le serveur savait pourtant le
+ * conserver — la préférence était envoyée vide à chaque sauvegarde.
+ */
+async function enregistrer() {
+  if (!preview.value?.valid) return
+  sauvegarde.value = true
+  retour.value = null
+  try {
+    const res = await fetch('/api/settings/preferences', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ templates: { [kind.value]: template.value } }),
+    })
+    const corps = await res.json()
+    if (res.ok) {
+      enregistres.value = { ...enregistres.value, [kind.value]: template.value }
+      retour.value = { ok: true, texte: 'Gabarit enregistré. Il servira au prochain rangement.' }
+    } else {
+      retour.value = { ok: false, texte: corps.detail ?? 'Enregistrement refusé.' }
+    }
+  } catch {
+    retour.value = { ok: false, texte: 'Serveur injoignable.' }
+  } finally {
+    sauvegarde.value = false
+  }
+}
+
+const sauvegarde = ref(false)
+const retour = ref(null)
 
 function applyPreset(family) {
   template.value = presets.value[family]?.[kind.value] ?? ''
@@ -84,7 +139,12 @@ watch([template, kind], () => {
   timer = setTimeout(refreshPreview, 220)
 })
 
-watch(kind, () => applyPreset('jellyfin'))
+// Changer de type recharge le gabarit ENREGISTRÉ pour ce type, pas le
+// préréglage : sinon on écrase sans le voir ce qu'on avait posé.
+watch(kind, () => {
+  retour.value = null
+  template.value = enregistres.value[kind.value] || presets.value.jellyfin?.[kind.value] || ''
+})
 
 function insert(text) {
   const el = editor.value
@@ -126,7 +186,24 @@ onMounted(loadCatalog)
         <button v-for="(_, family) in presets" :key="family" @click="applyPreset(family)">
           {{ family }}
         </button>
+        <span class="spacer"></span>
+        <button
+          class="primary"
+          :disabled="sauvegarde || !modifie || !preview?.valid"
+          @click="enregistrer"
+        >
+          {{ sauvegarde ? 'Enregistrement…' : 'Enregistrer ce gabarit' }}
+        </button>
       </div>
+      <!-- Un bouton désactivé dit pourquoi : la règle vaut ici comme ailleurs. -->
+      <p v-if="retour" :class="['retour', retour.ok ? 'ok' : 'ko']">{{ retour.texte }}</p>
+      <p v-else-if="!modifie" class="hint">
+        Ce gabarit est celui qui sert aujourd'hui à ranger les {{ KINDS.find((k) => k.id === kind)?.label.toLowerCase() }}.
+      </p>
+      <p v-else-if="!preview?.valid" class="hint">
+        Corrige le gabarit avant d'enregistrer : l'aperçu ci-dessous dit ce qui cloche.
+      </p>
+      <p v-else class="hint">Modifié — enregistre pour que ça serve au prochain rangement.</p>
     </div>
 
     <div class="grid">
@@ -190,6 +267,10 @@ onMounted(loadCatalog)
 </template>
 
 <style scoped>
+.presets .spacer { flex: 1; }
+.retour { margin: 8px 0 0; font-size: 12.5px; }
+.retour.ok { color: var(--ok, var(--accent)); }
+.retour.ko { color: var(--warn); }
 .builder { display: flex; flex-direction: column; gap: 20px; }
 
 .toolbar {

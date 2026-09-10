@@ -97,6 +97,17 @@ class Resolver(Protocol):
 
     def resolve(self, items: list[AmbiguousItem]) -> dict[int, AIProposal]: ...
 
+    def close(self) -> None:
+        """Libere le transport.
+
+        Dans le CONTRAT et pas seulement dans les implementations : un resolveur
+        est construit a chaque calcul de plans et a chaque cycle automatique —
+        toutes les quinze minutes. Tant que la fermeture n'etait declaree nulle
+        part, aucun appelant ne la voyait, et chaque cycle laissait derriere lui
+        un client HTTP et ses connexions ouvertes.
+        """
+        ...
+
 
 def render_batch(items: list[AmbiguousItem]) -> str:
     lines: list[str] = []

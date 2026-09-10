@@ -27,6 +27,41 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT = 10.0
 
+AUTH_STATUSES = frozenset({401, 403})
+"""Codes qui accusent l'identifiant lui-meme, pas la requete.
+
+Distingues des autres erreurs HTTP parce qu'ils ne se resolvent pas en
+patientant : un 429 passera au prochain scan, un 401 ne passera jamais tant que
+personne n'aura touche la cle."""
+
+_AUTH_ERRORS: dict[str, str] = {}
+"""Dernier refus d'authentification, par nom de fournisseur.
+
+Au niveau du module et non du seul objet : un fournisseur est construit puis
+ferme a chaque calcul de plans, alors que la question « pourquoi rien ne sort ? »
+se pose plus tard, depuis une autre requete. Garde sur l'instance, la reponse
+mourrait avec elle."""
+
+
+def last_auth_error(provider_name: str) -> str:
+    """Pourquoi ce fournisseur a refuse l'identifiant, ou chaine vide.
+
+    Le principe 1 veut qu'une panne de fournisseur ne soit jamais fatale ; il ne
+    dit pas qu'elle doive etre invisible. Une cle invalide degrade EXACTEMENT
+    comme une bibliotheque exotique — « aucun candidat » sur tous les fichiers —
+    et rien ne permettait de distinguer les deux.
+    """
+    return _AUTH_ERRORS.get(provider_name, "")
+
+
+def forget_auth_errors() -> None:
+    """Efface la memoire des refus.
+
+    Le registre est global au processus : sans remise a zero, un test qui
+    simule un 401 contaminerait ceux qui suivent.
+    """
+    _AUTH_ERRORS.clear()
+
 
 @dataclass(slots=True)
 class Candidate:
@@ -208,6 +243,28 @@ class BaseHTTPProvider:
             await self._client.aclose()
             self._client = None
 
+    @property
+    def last_auth_error(self) -> str:
+        """Le refus memorise pour ce fournisseur, ou chaine vide."""
+        return last_auth_error(self.name)
+
+    def _auth_message(self, status_code: int) -> str:
+        """Ce qu'un humain doit lire pour corriger. Surcharge par les
+        fournisseurs qui connaissent un piege precis a signaler."""
+        return f"Identifiant {self.name} refusé ({status_code}) : vérifie la clé configurée."
+
+    def _note_auth(self, status_code: int | None) -> None:
+        """Tient a jour le registre des refus.
+
+        ``None`` signale une reponse acceptee, et efface un refus anterieur :
+        laisser le message apres correction de la cle ferait signaler un
+        blocage deja resolu, ce qui use la confiance dans les diagnostics.
+        """
+        if status_code is None:
+            _AUTH_ERRORS.pop(self.name, None)
+        elif status_code in AUTH_STATUSES:
+            _AUTH_ERRORS[self.name] = self._auth_message(status_code)
+
     async def _get_json(self, url: str, **kwargs: Any) -> dict[str, Any] | None:
         """Requete GET tolerante : renvoie None au lieu de lever.
 
@@ -218,8 +275,10 @@ class BaseHTTPProvider:
         try:
             response = await self.client.get(url, **kwargs)
             response.raise_for_status()
+            self._note_auth(None)
             return response.json()
         except httpx.HTTPStatusError as exc:
+            self._note_auth(exc.response.status_code)
             logger.warning("%s : reponse %s pour %s", self.name, exc.response.status_code, url)
         except httpx.HTTPError as exc:
             logger.warning("%s injoignable (%s)", self.name, type(exc).__name__)
@@ -232,8 +291,10 @@ class BaseHTTPProvider:
         try:
             response = await self.client.post(url, **kwargs)
             response.raise_for_status()
+            self._note_auth(None)
             return response.json()
         except httpx.HTTPStatusError as exc:
+            self._note_auth(exc.response.status_code)
             logger.warning("%s : reponse %s pour %s", self.name, exc.response.status_code, url)
         except httpx.HTTPError as exc:
             logger.warning("%s injoignable (%s)", self.name, type(exc).__name__)

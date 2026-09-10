@@ -36,7 +36,8 @@ COPY pyproject.toml README.md ./
 COPY sortilege/ ./sortilege/
 
 # L'extra "ai" est inclus : la dependance est legere et le resolveur reste
-# desactive tant que SORTILEGE_AI_ENABLED n'est pas a true.
+# desactive tant qu'on ne l'active pas dans l'interface. L'embarquer d'office
+# evite de reconstruire l'image pour essayer une identification par IA.
 RUN pip install --no-cache-dir ".[ai]"
 
 # Interface compilee, servie en statique par FastAPI (pas de second port).

@@ -16,7 +16,6 @@ _TEST_ENV = {
     "SORTILEGE_LIBRARY_ROOT": "/tmp/sortilege-test/media",
     "SORTILEGE_SECRET_KEY": "k" * 48,
     "SORTILEGE_ADMIN_PASSWORD": "mot-de-passe-de-test",
-    "SORTILEGE_AI_ENABLED": "false",
 }
 
 

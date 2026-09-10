@@ -524,7 +524,7 @@ h3 {
 
 .vignettes { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); flex-wrap: wrap; }
 .vignettes .warn-text { flex: 1; min-width: 240px; font-size: 11.5px; color: var(--text-faint); line-height: 1.55; }
-.danger { color: var(--text-faint); }
+.danger { color: var(--err); }
 .danger.strong { border-color: color-mix(in srgb, var(--err) 30%, transparent); color: var(--err); }
 .warn-strong { display: block; margin-top: 7px; color: var(--err); }
 .danger:hover:not(:disabled) { color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, transparent); }

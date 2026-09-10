@@ -451,12 +451,10 @@ def read_settings() -> dict[str, object]:
                 "hint": "Aucune clé requise",
             },
         ],
-        "ai": {
-            "enabled": s.ai_enabled,
-            "configured": bool(s.anthropic_api_key),
-            "model": s.ai_model,
-            "batch_size": s.ai_batch_size,
-        },
+        # Pas de bloc « ai » ici : le resolveur se regle dans les preferences,
+        # pas dans l'environnement. Ce qui le concerne sort par
+        # ``GET /api/settings/preferences``, avec « ai_ready » qui dit pourquoi
+        # il ne fait rien le cas echeant.
         "diagnostics": _diagnostics(s),
     }
 

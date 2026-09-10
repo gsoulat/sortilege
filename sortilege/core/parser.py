@@ -66,6 +66,25 @@ _ABSOLUTE = re.compile(r"[\s._-]-[\s._-](?P<absolute>\d{1,4})(?!\d)")
 # 2012.
 _BARE_EPISODE = re.compile(r"^(?:[ée]p(?:isode)?[\s._-]*)?(?P<episode>\d{1,3})$", re.IGNORECASE)
 
+# Numerotation a trois chiffres : « 109 » = saison 1, episode 09. Convention
+# tres repandue dans les releases francaises — « epz-the.vampire.diaries.109 » —
+# et invisible pour tous les motifs precedents, qui cherchent un S ou un x.
+#
+# Sans elle, le fichier passe pour un FILM : le titre garde le numero, aucune
+# saison n'est lue, et si l'utilisateur corrige le type a la main la destination
+# devient « Season /Titre - SE.avi », avec ses trous.
+#
+# Les garde-fous tiennent a ce qu'on refuse, pas a ce qu'on accepte :
+#
+# - trois chiffres exactement, isoles par des separateurs — « 2049 » de « Blade
+#   Runner 2049 » en a quatre, « 11 » d'« Ocean's 11 » en a deux ;
+# - saison de 1 a 9, episode de 01 a 60 — « 300 » donnerait l'episode 00 et
+#   « 365 » l'episode 65 : tous deux refuses, et ce sont des titres de films.
+#   L'episode 00 n'existe pas, c'est ce qui sauve « 300 » ;
+# - teste EN DERNIER, apres tous les motifs explicites : un « S01E09 » present
+#   fait toujours foi.
+_TRIPLE = re.compile(r"(?:^|[\s._-])(?P<season>[1-9])(?P<episode>0[1-9]|[1-5]\d|60)(?:[\s._-]|$)")
+
 _YEAR = re.compile(r"(?<!\d)(?P<year>19\d{2}|20\d{2})(?!\d)")
 # Une annee entre parentheses ou crochets est une annee de sortie declaree,
 # jamais un nombre du titre. Elle prime sur tout le reste.
@@ -391,6 +410,24 @@ def parse(path: Path, ancestors: list[str] | None = None) -> ParsedName:
             kind = MediaKind.EPISODE
             signals.append(f"motif episodique {name}")
             break
+
+    # Numerotation a trois chiffres, en dernier recours : « 109 » vaut S01E09.
+    # Elle n'est tentee que si aucun motif explicite n'a parle, et seulement
+    # quand le contexte designe deja une serie — un dossier de saison, ou
+    # plusieurs fichiers du meme genre. Sur un fichier isole, le doute profite
+    # au film : se tromper la ferait ranger « 300 » comme un episode.
+    # Un groupe de fansub entre crochets change la lecture : « [Erai-raws]
+    # Frieren - 147 » est l'episode 147 en numerotation ABSOLUE, pas la saison 1
+    # episode 47. Les deux motifs se disputeraient les memes chiffres, et celui
+    # qui a un signal supplementaire doit gagner.
+    if season is None and episode is None and not fansub_group:
+        if trouve := _TRIPLE.search(stem):
+            season = int(trouve.group("season"))
+            episode = int(trouve.group("episode"))
+            episode_end = None
+            cut_at = trouve.start()
+            kind = MediaKind.EPISODE
+            signals.append("numerotation a trois chiffres (109 = S01E09)")
 
     # Saison portee par un dossier plutot que par le nom de fichier.
     if season is None:

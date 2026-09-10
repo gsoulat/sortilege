@@ -76,4 +76,8 @@ class AnthropicResolver:
         return out
 
     def close(self) -> None:
-        pass
+        # Le SDK tient son propre pool de connexions. Tant que personne
+        # n'appelait cette methode, un « pass » ne coutait rien ; maintenant que
+        # le pipeline la ferme a chaque cycle, ne rien faire ici laisserait
+        # exactement la fuite qu'on cherche a supprimer.
+        self._client.close()

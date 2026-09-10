@@ -85,9 +85,22 @@ class Pipeline:
         self._semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
 
     async def aclose(self) -> None:
+        """Ferme TOUT ce que le pipeline a ouvert, resolveur IA compris.
+
+        Le resolveur etait oublie : son client HTTP restait ouvert a chaque
+        calcul de plans et a chaque cycle automatique, soit quatre fuites par
+        heure pour une application qui tourne en permanence.
+        """
         for provider in (self._tmdb, self._anilist):
             if provider is not None:
                 await provider.aclose()
+
+        # getattr plutot qu'un appel direct : un resolveur factice de test peut
+        # n'implementer que resolve(), et une fermeture qui leve ferait perdre
+        # les plans deja calcules — elle est appelee depuis un bloc finally.
+        fermer = getattr(self._ai, "close", None)
+        if callable(fermer):
+            fermer()
 
     async def _candidates(self, scanned: ScannedFile) -> list[Candidate]:
         """Interroge les fournisseurs pertinents pour ce type de media.

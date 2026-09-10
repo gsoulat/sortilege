@@ -1,7 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
 import LoginView from './components/LoginView.vue'
-import TemplateBuilder from './components/TemplateBuilder.vue'
 import WorkspaceView from './components/WorkspaceView.vue'
 import SettingsView from './components/SettingsView.vue'
 
@@ -17,9 +16,12 @@ const view = ref('workspace')
 // de jaquettes se parcourt mieux qu'une arborescence dépliée. Le prétexte ne
 // tenait pas : elle affichait les mêmes plans sous une autre forme, et deux
 // écrans qui montrent la même chose obligent à se demander lequel fait foi.
+// « Gabarits » a quitté ce niveau : un gabarit n'est pas une destination
+// concurrente de la médiathèque, c'est la forme du chemin de rangement. Il vit
+// donc dans Réglages, à côté de la destination qu'il complète — et il
+// s'enregistre, ce qu'il ne faisait pas.
 const VIEWS = [
   { id: 'workspace', label: 'Ma médiathèque' },
-  { id: 'templates', label: 'Gabarits' },
   { id: 'settings', label: 'Réglages' },
 ]
 
@@ -107,7 +109,6 @@ onUnmounted(() => {
 
     <main>
       <WorkspaceView v-if="view === 'workspace'" />
-      <TemplateBuilder v-else-if="view === 'templates'" />
       <SettingsView v-else-if="view === 'settings'" />
     </main>
   </div>

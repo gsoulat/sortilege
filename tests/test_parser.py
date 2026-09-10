@@ -199,3 +199,68 @@ def test_un_dossier_de_saison_seul_garde_son_nom() -> None:
     lu = parse(Path("/src/Severance/Saison 2/S02E01.mkv"), ["Severance", "Saison 2"])
 
     assert lu.title == "Severance"
+
+
+# --- Numerotation a trois chiffres ------------------------------------------
+#
+# Cas reel : « epz-the.vampire.diaries.109.le.cristal.de.la.discorde ». « 109 »
+# vaut saison 1 episode 09, convention tres repandue dans les releases
+# francaises et invisible pour tous les motifs qui cherchent un S ou un x.
+#
+# Sans elle, le fichier passe pour un FILM. Et si l'utilisateur corrige le type
+# a la main, la destination devient « Season /Titre - SE.avi », avec ses trous.
+
+
+@pytest.mark.parametrize(
+    ("nom", "saison", "episode"),
+    [
+        ("epz-the.vampire.diaries.109.le.cristal.avi", 1, 9),
+        ("epz-the.vampire.diaries.110.le.point.de.non-retour.avi", 1, 10),
+        ("The.Wire.201.mkv", 2, 1),
+        ("Friends 610 the one with the routine.avi", 6, 10),
+    ],
+)
+def test_trois_chiffres_valent_saison_et_episode(nom: str, saison: int, episode: int) -> None:
+    lu = parse(Path("/src") / nom)
+
+    assert lu.kind is MediaKind.EPISODE
+    assert (lu.season, lu.episode) == (saison, episode)
+
+
+@pytest.mark.parametrize(
+    "nom",
+    [
+        # L'episode 00 n'existe pas : c'est ce qui sauve « 300 ».
+        "300 (2006).mkv",
+        # Quatre chiffres, donc pas le motif.
+        "Blade Runner 2049 (2017).mkv",
+        # Deux chiffres seulement.
+        "Ocean's 11 2001.mkv",
+        "Taxi 5 2018.mkv",
+        # Episode 65 : au-dela de ce qu'une saison contient.
+        "Le.Cercle.365.mkv",
+    ],
+)
+def test_un_nombre_de_titre_ne_devient_pas_un_episode(nom: str) -> None:
+    """Les garde-fous tiennent a ce qu'on REFUSE. Se tromper ici ferait ranger
+    un film parmi les episodes d'une serie qui n'existe pas."""
+    assert parse(Path("/src") / nom).kind is not MediaKind.EPISODE
+
+
+def test_un_motif_explicite_fait_toujours_foi() -> None:
+    """« S01E09 » est sans ambiguite : le motif a trois chiffres n'est tente
+    qu'en dernier recours, sans quoi il pourrait le contredire."""
+    lu = parse(Path("/src/The.Vampire.Diaries.S02E15.1080p.mkv"))
+
+    assert (lu.season, lu.episode) == (2, 15)
+
+
+def test_un_anime_en_numerotation_absolue_n_est_pas_lu_a_trois_chiffres() -> None:
+    """« [Erai-raws] Frieren - 147 » est l'episode 147 en numerotation absolue,
+    pas la saison 1 episode 47. Les deux motifs se disputent les memes chiffres,
+    et celui qui a un signal supplementaire — le groupe de fansub — gagne."""
+    lu = parse(Path("/src/[Erai-raws] Frieren - 147 [1080p][VOSTFR].mkv"))
+
+    assert lu.kind is MediaKind.ANIME
+    assert lu.absolute_episode == 147
+    assert lu.season is None

@@ -31,7 +31,9 @@ from .api import (
     transcode,
     workspace,
 )
+from .api.deps import get_store
 from .config import get_settings
+from .core import transcode as reencodage
 from .core.auth import SESSION_COOKIE, verify_session
 from .core.probe import ffprobe_available
 
@@ -73,6 +75,20 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # penible. Un instantane illisible est ignore, pas fatal.
     if library.restore_scan():
         review.restore_plans()
+
+    # Le menage promis a l'arret. Un ffmpeg interrompu laisse un fichier
+    # partiel de plusieurs gigaoctets dans le dossier d'attente ; la file de
+    # travaux, elle, ne survit pas au redemarrage — d'ou la liste vide : plus
+    # aucun travail ne reclame ces fichiers, ils sont tous orphelins.
+    #
+    # Rien de ce qui suit ne doit empecher de demarrer : liberer de la place est
+    # un confort, pas une condition de fonctionnement.
+    try:
+        efface = reencodage.purge_staging(conf.library_root, [])
+        if efface:
+            logger.info("demarrage : %s fichier(s) de reencodage orphelin(s) efface(s)", efface)
+    except OSError as exc:
+        logger.warning("menage du dossier de reencodage impossible : %s", exc)
 
     # La boucle tourne toujours ; elle consulte les preferences a chaque tour
     # et ne fait rien tant que l'automatisation est desactivee. La demarrer
@@ -136,11 +152,14 @@ async def require_session(request: Request, call_next):
 
 @app.get("/api/health")
 def health() -> dict[str, object]:
-    conf = get_settings()
     return {
         "status": "ok",
         "version": __version__,
-        "ai_enabled": conf.ai_enabled,
+        # L'etat REEL du resolveur, celui que lit le pipeline. Ce badge
+        # rapportait une variable d'environnement que plus rien ne consultait :
+        # il annoncait « IA activee » sur une installation ou elle ne tournait
+        # pas, et l'inverse des qu'on l'activait depuis l'interface.
+        "ai_enabled": get_store().load().ai.enabled,
         "ffprobe": ffprobe_available(),
     }
 

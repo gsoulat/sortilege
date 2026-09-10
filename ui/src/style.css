@@ -3,15 +3,83 @@
   --surface: #151922;
   --surface-2: #1c2130;
   --border: #262d3d;
+
+  /* ------------------------------------------------------------------ *
+   * Échelle de gris de texte — quatre tons, tous lisibles.
+   *
+   * Contrastes WCAG 2.1 mesurés (formule de luminance relative), sur les
+   * DEUX fonds où ces tons apparaissent réellement : --surface (#151922,
+   * les cartes) et --surface-2 (#1c2130, les champs et les boutons, qui
+   * est le fond le plus clair donc le cas le plus défavorable).
+   *
+   *   --text        #e4e8f1  →  14,33:1 / 13,07:1
+   *   --text-title  #f2f5fb  →  16,10:1 / 14,68:1
+   *   --text-dim    #9da6b8  →   7,19:1 /  6,55:1
+   *   --text-faint  #828ca1  →   5,21:1 /  4,75:1
+   *
+   * Le seuil AA du texte courant est 4,5:1 : les quatre tons le passent,
+   * y compris sur --surface-2.
+   * ------------------------------------------------------------------ */
+
   --text: #e4e8f1;
-  --text-dim: #8b95ab;
-  --text-faint: #5a6478;
+
+  /* Titres de section. Un titre doit être PLUS clair que ce qu'il coiffe,
+     jamais plus terne : sinon la hiérarchie s'inverse et l'œil descend
+     du titre vers le corps au lieu de l'inverse. Seul ton du jeu qui
+     dépasse --text. */
+  --text-title: #f2f5fb;
+
+  /* Second niveau : libellés de champs, unités, métadonnées. Remonté de
+     #8b95ab (5,85:1 / 5,33:1, déjà conforme) pour garder un écart visible
+     avec --text-faint une fois celui-ci relevé — deux variables qui se
+     ressemblent ne hiérarchisent plus rien. */
+  --text-dim: #9da6b8;
+
+  /* Prose explicative — le ton le plus utilisé de l'application (105
+     occurrences : notes, indices, avertissements). Valait #5a6478, soit
+     2,96:1 sur --surface et 2,69:1 sur --surface-2 : sous le seuil AA de
+     4,5:1 et même sous les 3:1 tolérés pour les grands caractères. Tout
+     le texte qui EXPLIQUE était donc le moins lisible de l'écran.
+     Remonté à #828ca1 : 5,21:1 / 4,75:1. Teinte conservée (HSL 220°,
+     14 % de saturation, comme l'ancien) — la palette reste froide, on ne
+     glisse pas vers un gris neutre. */
+  --text-faint: #828ca1;
+
   --accent: #a78bfa;
   --accent-dim: #7c5cd6;
   --ok: #4ade80;
   --warn: #fbbf24;
   --err: #f87171;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+
+  /* ------------------------------------------------------------------ *
+   * Échelle typographique — quatre pas, pas onze.
+   *
+   * L'interface comptait onze tailles entre 9,5 et 17 px, dont plus de la
+   * moitié à 11,5 px ou moins : aucune ne signifiait quoi que ce soit,
+   * elles disaient seulement à quelle heure le composant avait été écrit.
+   * Quatre pas suffisent, et 12 px est un plancher : en dessous on ne
+   * lit plus, on devine.
+   *
+   * Les composants ne sont PAS encore migrés — ces variables sont là pour
+   * qu'ils le soient, un par un.
+   * ------------------------------------------------------------------ */
+
+  /* Annotations : mentions d'état, compteurs, horodatages, tout ce qui
+     accompagne sans se lire en continu. Plancher absolu. */
+  --t-xs: 12px;
+
+  /* Appoint : libellés de champs, notes explicatives, boutons secondaires.
+     Le gros du volume de texte de l'application. */
+  --t-sm: 13px;
+
+  /* Lecture : corps de texte, valeurs, titres de section. Taille par
+     défaut de tout ce qu'on lit vraiment ligne à ligne. */
+  --t-md: 15px;
+
+  /* Titre de vue. Un seul par écran — s'il y en a deux, c'est qu'il y a
+     deux écrans. */
+  --t-lg: 20px;
 
   color-scheme: dark;
 }
@@ -36,10 +104,32 @@ button {
   background: var(--surface-2);
   border-radius: 6px;
   padding: 6px 12px;
-  transition: border-color .12s, background .12s;
+  transition: border-color .12s, background .12s, color .12s;
 }
 button:hover { border-color: var(--accent-dim); }
 button:disabled { opacity: .4; cursor: not-allowed; }
+
+/* Un bouton qui détruit doit se lire comme tel AU REPOS. Jusqu'ici `.danger`
+   valait `color: var(--text-faint)` et ne rougissait qu'au survol : le bouton
+   qui efface définitivement était donc PLUS discret que celui d'à côté qui ne
+   fait rien — et muet pour qui navigue au doigt ou au clavier, puisque le
+   survol n'existe ni sur un écran tactile ni au Tab.
+   Le rouge au repos donne 5,80:1 sur --surface-2, 4,56:1 sur le fond teinté
+   du survol : conforme AA dans les deux états.
+   Pas de fond teinté au repos, volontairement : les composants qui redéfinis-
+   sent encore `.danger` dans leur style scopé gagnent sur la couleur du texte
+   (spécificité `.danger[data-v-…]`), et un texte pâle posé sur un fond rougi
+   retomberait à 4,26:1. Bordure rouge seule = signal net, aucune régression
+   tant que la migration des composants n'est pas faite. */
+button.danger {
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 45%, var(--border));
+}
+button.danger:hover:not(:disabled) {
+  color: var(--err);
+  border-color: color-mix(in srgb, var(--err) 70%, transparent);
+  background: color-mix(in srgb, var(--err) 16%, var(--surface-2));
+}
 
 textarea, input {
   font: inherit;
@@ -52,6 +142,17 @@ textarea, input {
 textarea:focus, input:focus {
   outline: none;
   border-color: var(--accent-dim);
+}
+
+/* Un élément atteint au clavier doit se voir. Placé en dernier à dessein :
+   `input:focus { outline: none }` ci-dessus a la même spécificité et
+   l'emporterait sinon, ce qui rendrait la navigation au Tab invisible. */
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 ::selection { background: var(--accent-dim); color: #fff; }

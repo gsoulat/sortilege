@@ -432,6 +432,16 @@ def scan_status() -> dict[str, object]:
 
 
 def _status() -> dict[str, object]:
+    """Etat du scan, y compris ce qu'il n'a PAS pu faire.
+
+    ``error`` ne couvre que l'echec du travail lui-meme. Un scan qui se termine
+    normalement sur une racine demontee renvoyait donc « termine, 0 fichier »,
+    indistinguable d'une source reellement vide — et l'interface concluait « rien
+    ne traine dans la source, c'est l'etat recherche ». Les racines introuvables
+    sont dans ``errors``, les echantillons ecartes dans ``skipped`` : ce sont les
+    deux raisons pour lesquelles un scan trouve moins que ce qu'on croit y avoir.
+    """
+    result = _job.result
     return {
         "running": _job.running,
         "phase": _job.phase,
@@ -441,6 +451,10 @@ def _status() -> dict[str, object]:
         "elapsed": round(_job.elapsed, 1),
         "eta": round(_job.eta_seconds, 1) if _job.eta_seconds is not None else None,
         "error": _job.error,
-        "has_result": _job.result is not None,
-        "found": _job.result.total if _job.result else 0,
+        # Un scan a-t-il REELLEMENT eu lieu ? Zero fichier apres un scan et zero
+        # fichier avant tout scan demandent deux gestes opposes.
+        "has_result": result is not None,
+        "found": result.total if result else 0,
+        "errors": list(result.errors) if result else [],
+        "skipped": result.skipped if result else 0,
     }

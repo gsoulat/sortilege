@@ -82,6 +82,20 @@ class TMDBProvider(BaseHTTPProvider):
         """
         return self._api_key.startswith("eyJ")
 
+    def _auth_message(self, status_code: int) -> str:
+        """Nomme la confusion v3/v4, seule cause frequente d'un refus ici.
+
+        Le code sait sous quelle forme il a LU le secret ; le dire evite
+        l'aller-retour ou l'on regenere trois fois le meme identifiant sans
+        comprendre que c'est l'autre qu'il fallait copier.
+        """
+        forme = "jeton d'accès v4" if self._is_bearer else "clé API v3"
+        return (
+            f"Clé TheMovieDB refusée ({status_code}) : le secret fourni est lu comme "
+            f"un {forme}. Vérifie dans les paramètres du compte TMDB qu'il est complet "
+            "et actif — la clé API v3 et le jeton d'accès v4 ne sont pas interchangeables."
+        )
+
     def _headers(self) -> dict[str, str]:
         if self._is_bearer:
             return {"Authorization": f"Bearer {self._api_key}"}

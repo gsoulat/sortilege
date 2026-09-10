@@ -254,6 +254,19 @@ def read_workspace(limit: int = 200, offset: int = 0) -> dict[str, object]:
         "journal_size": len(get_journal().read_all()),
         "shown": len(page),
         "works": [_entry_out(e) for e in page],
+        # Ce qui empeche l'outil de produire quoi que ce soit. Joint ICI plutot
+        # que laisse a un second appel : une liste vide et sa raison doivent
+        # arriver ensemble, sinon l'ecran affirme « rien a ranger » pendant tout
+        # l'intervalle qui separe les deux requetes.
+        "blockers": review.blockers(),
+        # Ce que le dernier scan n'a PAS pu faire. Une liste vide se lit « c'est
+        # deja range » ; ces deux champs disent quand elle se lit plutot « on n'a
+        # pas regarde la ou tu crois ».
+        "diagnostics": {
+            "scanned": scan is not None,
+            "errors": list(scan.errors) if scan else [],
+            "skipped": scan.skipped if scan else 0,
+        },
         # Les trois travaux qui alimentent la vue. L'interface s'en sert pour
         # savoir s'il faut continuer a interroger — et pour dire ce qui tourne.
         "jobs": {

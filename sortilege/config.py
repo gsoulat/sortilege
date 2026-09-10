@@ -42,13 +42,11 @@ class Settings(BaseSettings):
     # --- Fournisseurs (hors prefixe SORTILEGE_) ---
     tmdb_api_key: str = Field(default="", alias="TMDB_API_KEY")
 
-    # --- Resolveur IA ---
-    ai_enabled: bool = False
-    anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
-    ai_model: str = "claude-opus-5"
-    # Taille de lot : l'IA n'est appelee que sur les cas ambigus, on les
-    # regroupe pour amortir le prompt systeme.
-    ai_batch_size: int = 12
+    # Rien ici pour le resolveur IA : fournisseur, cle, modele et taille de lot
+    # vivent dans les preferences et se changent depuis l'interface, sans
+    # redemarrer. Les avoir aussi dans l'environnement donnait des variables
+    # que le resolveur ne lisait jamais — et l'une d'elles refusait carrement
+    # le demarrage, au nom d'un reglage sans effet.
 
     # --- Securite ---
     secret_key: str = ""
@@ -87,8 +85,6 @@ class Settings(BaseSettings):
             problems.append("SORTILEGE_ADMIN_PASSWORD absent")
         if not self.source_roots:
             problems.append("SORTILEGE_SOURCE_ROOTS vide")
-        if self.ai_enabled and not self.anthropic_api_key:
-            problems.append("SORTILEGE_AI_ENABLED=true mais ANTHROPIC_API_KEY absent")
         return problems
 
 

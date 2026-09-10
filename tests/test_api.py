@@ -105,15 +105,20 @@ def test_configuration_incomplete_detectee() -> None:
     assert any("SOURCE_ROOTS" in p for p in problemes)
 
 
-def test_ia_activee_sans_cle_detectee() -> None:
-    s = Settings(
-        secret_key="x" * 40,
-        admin_password="p",
-        source_roots=["/tmp"],
-        ai_enabled=True,
-        anthropic_api_key="",
-    )
-    assert any("ANTHROPIC_API_KEY" in p for p in s.check_runtime())
+def test_le_resolveur_ia_ne_bloque_plus_le_demarrage() -> None:
+    """Un reglage sans effet ne doit jamais empecher de demarrer.
+
+    L'environnement portait un SORTILEGE_AI_ENABLED que le resolveur ne lisait
+    pas — il lit les preferences — mais dont l'absence de cle compagne faisait
+    refuser le demarrage. Un conteneur en boucle de redemarrage pour une option
+    qui n'avait aucun effet.
+    """
+    s = Settings(secret_key="x" * 40, admin_password="p", source_roots=["/tmp"])
+    assert s.check_runtime() == []
+    # Les anciennes variables sont parties, pas simplement ignorees : les
+    # laisser vivre inviterait a les renseigner de nouveau.
+    assert not hasattr(s, "ai_enabled")
+    assert not hasattr(s, "anthropic_api_key")
 
 
 def test_racines_multiples_separees_par_deux_points() -> None:

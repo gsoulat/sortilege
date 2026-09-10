@@ -29,7 +29,6 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
-import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -531,9 +530,3 @@ def next_queued(jobs: list[Job]) -> Job | None:
     if any(job.state is State.RUNNING for job in jobs):
         return None
     return next((job for job in jobs if job.state is State.QUEUED), None)
-
-
-def sleep_until_window(start_hour: int, end_hour: int, *, pas: float = 60.0) -> None:
-    """Attend, sans rien faire de couteux. Extrait pour rester testable."""
-    while not in_window(datetime.now(), start_hour, end_hour):
-        time.sleep(pas)

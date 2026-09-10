@@ -31,6 +31,7 @@ const busy = ref(null)
 const dupeMessage = ref({})
 const confirmingDelete = ref(null)
 const confirmingPrune = ref(false)
+const menuOuvert = ref(false)
 const lecture = ref(null)
 const open = ref(new Set())
 const picking = ref(null)
@@ -76,6 +77,14 @@ function arbitrables(w) {
 
 const jobs = computed(() => data.value?.jobs ?? {})
 const counts = computed(() => data.value?.counts ?? {})
+
+/**
+ * Ce qui empêche l'application de fonctionner. Calculé côté serveur — clé
+ * absente, racine non montée, aucun scan — et jusqu'ici transporté nulle part :
+ * une clé TMDB refusée se lisait comme « aucun candidat » sur trois cents
+ * fichiers, sans qu'un seul écran ne prononce le mot « clé ».
+ */
+const blocages = computed(() => data.value?.blockers ?? [])
 const working = computed(
   () => jobs.value.scan?.running || jobs.value.plan?.running || jobs.value.index?.running,
 )
@@ -108,6 +117,12 @@ const FILTERS = {
   dupes: (w) => (w.owned?.duplicates?.length ?? 0) > 0,
   heavy: (w) => w.heaviness >= (data.value?.heavy_ratio ?? 2),
   offstrat: (w) => (w.off_strategy?.length ?? 0) > 0,
+  // Les trois causes réunies : c'est la question posée — « où sont mes 600 Go »
+  // — et elle ne se décompose pas naturellement en trois listes.
+  place: (w) =>
+    (w.owned?.duplicates?.length ?? 0) > 0 ||
+    w.heaviness >= (data.value?.heavy_ratio ?? 2) ||
+    (w.off_strategy?.length ?? 0) > 0,
 }
 
 /** Sans accents ni casse : « Amelie » doit trouver « Amélie ». */
@@ -137,11 +152,37 @@ function recuperable(w) {
 const kind = ref('all')
 
 /** L'onglet décide de ce qui entre dans la liste, avant tout autre filtre. */
-const parOnglet = computed(() =>
-  (data.value?.works ?? []).filter(
-    onglet.value === 'source' ? (w) => w.pending.total > 0 : (w) => w.owned,
-  ),
-)
+const sousVue = ref('avoir')
+
+const parOnglet = computed(() => {
+  const tout = data.value?.works ?? []
+  if (onglet.value === 'source') return tout.filter((w) => w.pending.total > 0)
+  const possedees = tout.filter((w) => w.owned)
+  return sousVue.value === 'place' ? possedees.filter(FILTERS.place) : possedees
+})
+
+/**
+ * Ce que la sous-vue « place » promet, en octets : doublons plus réencodages.
+ *
+ * Les doublons se somment sur les œuvres CHARGÉES, pas sur toute la
+ * bibliothèque — d'où le « ≈ » à l'affichage. Annoncer un total exact
+ * demanderait un compteur serveur ; annoncer un total faux serait pire que de
+ * ne rien annoncer.
+ */
+const placeRecuperable = computed(() => {
+  const doublons = (data.value?.works ?? []).reduce(
+    (somme, w) =>
+      somme + (w.owned?.duplicates ?? []).reduce((s, d) => s + (d.wasted_bytes ?? 0), 0),
+    0,
+  )
+  return doublons + (counts.value.recoverable_bytes ?? 0)
+})
+
+watch(sousVue, () => {
+  filter.value = sousVue.value === 'place' ? 'place' : 'all'
+  tri.value = sousVue.value === 'place' ? 'poids' : 'titre'
+  charge.value = PALIER
+})
 
 const works = computed(() => {
   const q = pliage(recherche.value.trim())
@@ -197,13 +238,25 @@ function progress(job) {
 // les lignes précédentes obligerait à revenir en arrière pour comparer.
 const PALIER = 200
 const charge = ref(PALIER)
+const chargement = ref(false)
+
+// L'essai à blanc n'est pas une autre action : c'est le même appel serveur avec
+// un drapeau. En faire un bouton distinct laissait croire à deux traitements.
+const sansToucher = ref(false)
 
 async function load() {
+  chargement.value = true
   try {
-    data.value = await (await fetch(`/api/workspace?limit=${charge.value}`)).json()
+    const res = await fetch(`/api/workspace?limit=${charge.value}`)
+    // Une réponse 502 arrive en HTML : `res.json()` lèverait, la promesse
+    // remonterait sans être attrapée, et l'écran resterait figé sans un mot.
+    if (!res.ok) throw new Error(`réponse ${res.status}`)
+    data.value = await res.json()
     error.value = null
-  } catch {
-    error.value = 'Serveur injoignable.'
+  } catch (e) {
+    error.value = `Serveur injoignable (${e.message ?? 'sans réponse'}).`
+  } finally {
+    chargement.value = false
   }
   // La file de réencodage n'est chargée que quand on la regarde : elle recalcule
   // les candidats depuis l'index, et le faire toutes les deux secondes sur une
@@ -315,20 +368,6 @@ async function plan({ reset = false } = {}) {
  * Vérifie tout le trajet sans rien déplacer. Distinct d'« Exécuter » parce que
  * ce sont deux décisions : « est-ce que ça marcherait » et « fais-le ».
  */
-async function simulate(ids = null) {
-  busy.value = 'simulate'
-  failures.value = []
-  try {
-    const out = await call('/api/review/apply', { plan_ids: ids, dry_run: true })
-    if (out) {
-      failures.value = out.results.filter((r) => !r.ok)
-      message.value = `Simulation : ${out.applied} déplacement(s) possible(s), ${out.failed} bloqué(s).`
-    }
-  } finally {
-    busy.value = null
-  }
-}
-
 // --- Annulation ciblée ----------------------------------------------------
 //
 // « Tout annuler » suppose qu'on veuille défaire une session entière, alors
@@ -393,12 +432,14 @@ async function index() {
 async function apply(ids = null) {
   busy.value = 'apply'
   failures.value = []
+  const blanc = sansToucher.value
   try {
-    const out = await call('/api/review/apply', { plan_ids: ids, dry_run: false })
+    const out = await call('/api/review/apply', { plan_ids: ids, dry_run: blanc })
     if (out) {
       failures.value = out.results.filter((r) => !r.ok)
-      message.value =
-        `${out.applied} fichier(s) rangé(s)` + (out.failed ? `, ${out.failed} en échec.` : '.')
+      message.value = blanc
+        ? `Essai : ${out.applied} déplacement(s) possible(s), ${out.failed} bloqué(s).`
+        : `${out.applied} fichier(s) rangé(s)` + (out.failed ? `, ${out.failed} en échec.` : '.')
       // La cause domine le compte : « 340 en échec » ne dit pas quoi faire,
       // « tous parce que la destination existe déjà » si.
       const [first] = failureGroups.value
@@ -769,7 +810,25 @@ onUnmounted(() => clearInterval(poller))
 </script>
 
 <template>
-  <div v-if="data" class="workspace">
+  <!-- Trois etats, et non « donnees ou rien ». Le message d'erreur etait
+       enferme dans la condition qu'il devait remplacer : serveur injoignable,
+       et l'ecran restait vide, sans un mot et sans bouton pour reessayer. -->
+  <div v-if="!data && chargement" class="attente">
+    <span class="pulsation"></span>
+    Chargement de la médiathèque…
+  </div>
+
+  <div v-else-if="!data" class="panne">
+    <h2>Le serveur ne répond pas</h2>
+    <p>{{ error ?? 'Aucune réponse de Sortilège.' }}</p>
+    <p class="quoi-faire">
+      Vérifie que le conteneur tourne (<code>docker ps</code>), puis réessaie. Si la page
+      reste blanche, les journaux disent pourquoi : <code>docker logs sortilege</code>.
+    </p>
+    <button class="primary" :disabled="chargement" @click="load">Réessayer</button>
+  </div>
+
+  <div v-else class="workspace">
     <!-- Barre d'action : les compteurs portent sur TOUT, pas sur la page -->
     <div class="toolbar">
       <button :disabled="busy || working" @click="scan">Analyser les sources</button>
@@ -777,35 +836,51 @@ onUnmounted(() => clearInterval(poller))
         Identifier {{ counts.unplanned ? `(${Math.min(100, counts.unplanned)})` : '' }}
       </button>
       <button class="primary" :disabled="busy || !counts.ready" @click="apply()">
-        Exécuter {{ counts.ready }} prêt{{ counts.ready > 1 ? 's' : '' }}
+        {{ sansToucher ? 'Essayer' : 'Ranger' }} {{ counts.ready }} prêt{{ counts.ready > 1 ? 's' : '' }}
       </button>
-      <button class="ghost" :disabled="busy || !counts.ready" @click="simulate()">
-        Simuler
-      </button>
+      <!-- « Simuler » etait un bouton a part pour le MEME appel serveur, avec
+           un drapeau different. Devenu une case attachee au bouton principal :
+           c'est une variante de l'execution, pas une autre action. -->
+      <label class="essai" :title="'Ne déplace rien, montre seulement ce qui serait fait'">
+        <input type="checkbox" v-model="sansToucher" />
+        essai à blanc
+      </label>
       <span class="spacer"></span>
-      <button class="ghost" :disabled="busy || working" @click="index">
-        Relire la bibliothèque
-      </button>
+      <!-- Le filet de sécurité reste visible : c'est le bouton qu'on cherche
+           dans l'urgence, pas celui qu'on va chercher dans un menu. -->
       <button
         v-if="data.journal_size"
         class="ghost"
         :class="{ active: showUndo }"
         @click="toggleUndo"
       >Annuler… ({{ data.journal_size }})</button>
-      <button
-        v-if="counts.unplanned === 0 && counts.works"
-        class="ghost"
-        :disabled="busy || working"
-        title="Vide la file de plans et repart du premier fichier"
-        @click="plan({ reset: true })"
-      >Recommencer</button>
-      <button
-        v-if="counts.works"
-        class="ghost danger"
-        :disabled="busy || working"
-        title="Efface la liste entière — le journal d'annulation et les identifications retenues sont conservés"
-        @click="remiseAZero"
-      >{{ confirmReset ? 'Confirmer : tout effacer' : 'Tout effacer' }}</button>
+
+      <!-- Quatre boutons de même poids visuel ne disaient pas lequel sert tous
+           les jours. Ceux d'entretien passent derrière un menu : on les cherche
+           quand on en a besoin, ils n'encombrent pas le reste du temps. -->
+      <div class="menu-entretien">
+        <button class="ghost" :class="{ active: menuOuvert }" @click="menuOuvert = !menuOuvert">
+          Entretien ▾
+        </button>
+        <div v-if="menuOuvert" class="tiroir" @click="menuOuvert = false">
+          <button :disabled="busy || working" @click="index">
+            Relire la bibliothèque
+            <span class="quoi">reconstruit l'index depuis le disque</span>
+          </button>
+          <button
+            v-if="counts.works"
+            :disabled="busy || working"
+            @click="plan({ reset: true })"
+          >
+            Recommencer l'identification
+            <span class="quoi">vide la file de plans et repart du premier fichier</span>
+          </button>
+          <button v-if="counts.works" class="danger" :disabled="busy || working" @click="remiseAZero">
+            {{ confirmReset ? 'Confirmer : tout effacer' : 'Tout effacer' }}
+            <span class="quoi">plans et aperçus — journal et identifications conservés</span>
+          </button>
+        </div>
+      </div>
     </div>
 
     <!-- Au FUTUR, et en disant ce qu'il reste à faire. La formulation au
@@ -869,6 +944,20 @@ onUnmounted(() => clearInterval(poller))
         <span v-if="activity.current" class="current">{{ activity.current }}</span>
       </div>
     </div>
+
+    <!-- Ce qui empeche l'application de fonctionner, AVANT la liste. Ces
+         diagnostics etaient calcules cote serveur depuis toujours ; ils
+         n'etaient transportes jusqu'a aucun ecran. Une cle absente se lisait
+         donc comme « aucun candidat » sur trois cents fichiers. -->
+    <section v-if="blocages.length" class="blocages">
+      <h3>À régler avant d'aller plus loin</h3>
+      <ul>
+        <li v-for="b in blocages" :key="b.code">
+          <span class="quoi">{{ b.message }}</span>
+          <span v-if="b.where" class="ou">→ {{ b.where }}</span>
+        </li>
+      </ul>
+    </section>
 
     <p v-if="error" class="err-msg">{{ error }}</p>
     <p v-if="message" class="ok-msg">{{ message }}</p>
@@ -1088,30 +1177,59 @@ onUnmounted(() => clearInterval(poller))
       </button>
     </div>
 
-    <div v-else-if="onglet === 'library'" class="filters">
-      <button :class="{ active: filter === 'all' }" @click="filter = 'all'">
-        Tout ({{ parOnglet.length }})
-      </button>
-      <button v-if="counts.missing" :class="{ active: filter === 'gaps' }" @click="filter = 'gaps'">
-        Épisodes manquants ({{ counts.missing }})
-      </button>
-      <button v-if="counts.duplicates" :class="{ active: filter === 'dupes' }" @click="filter = 'dupes'">
-        Doublons ({{ counts.duplicates }})
-      </button>
-      <button v-if="counts.heavy" class="heavy-filter" :class="{ active: filter === 'heavy' }"
-              @click="filter = 'heavy'"
-              :title="`Au moins ${data.heavy_ratio} fois le poids habituel de leur type`">
-        Surpoids ({{ counts.heavy }})
-      </button>
-      <button v-if="counts.off_strategy" :class="{ active: filter === 'offstrat' }"
-              @click="filter = 'offstrat'"
-              :title="'Fichiers dont la résolution ne suit pas la stratégie choisie pour leur type'">
-        Hors stratégie ({{ counts.off_strategy }})
-        <span v-if="counts.recoverable_bytes" class="gain">
-          −{{ gb(counts.recoverable_bytes) }} Go
-        </span>
-      </button>
-    </div>
+    <template v-else-if="onglet === 'library'">
+      <!-- Deux questions distinctes, longtemps mélangées dans une seule rangée
+           de filtres : « qu'est-ce que je possède » et « où sont mes 600 Go ».
+           La seconde est la raison d'être de l'outil, elle méritait son écran. -->
+      <div class="sous-vues">
+        <button :class="{ actif: sousVue === 'avoir' }" @click="sousVue = 'avoir'">
+          Ce que je possède
+        </button>
+        <button :class="{ actif: sousVue === 'place' }" @click="sousVue = 'place'">
+          Récupérer de la place
+          <span v-if="placeRecuperable" class="gain">≈ {{ gb(placeRecuperable) }} Go</span>
+        </button>
+      </div>
+
+      <div v-if="sousVue === 'avoir'" class="filters">
+        <button :class="{ active: filter === 'all' }" @click="filter = 'all'">
+          Tout ({{ parOnglet.length }})
+        </button>
+        <button v-if="counts.missing" :class="{ active: filter === 'gaps' }" @click="filter = 'gaps'">
+          Épisodes manquants ({{ counts.missing }})
+        </button>
+      </div>
+
+      <div v-else class="filters">
+        <button :class="{ active: filter === 'place' }" @click="filter = 'place'">
+          Tout ce qui pèse pour rien ({{ parOnglet.length }})
+        </button>
+        <button v-if="counts.duplicates" :class="{ active: filter === 'dupes' }" @click="filter = 'dupes'">
+          Doublons ({{ counts.duplicates }})
+        </button>
+        <button v-if="counts.heavy" class="heavy-filter" :class="{ active: filter === 'heavy' }"
+                @click="filter = 'heavy'"
+                :title="`Au moins ${data.heavy_ratio} fois le poids habituel de leur type`">
+          Surpoids ({{ counts.heavy }})
+        </button>
+        <button v-if="counts.off_strategy" :class="{ active: filter === 'offstrat' }"
+                @click="filter = 'offstrat'"
+                :title="'Fichiers dont la résolution ne suit pas la stratégie choisie pour leur type'">
+          Hors stratégie ({{ counts.off_strategy }})
+          <span v-if="counts.recoverable_bytes" class="gain">
+            −{{ gb(counts.recoverable_bytes) }} Go
+          </span>
+        </button>
+      </div>
+
+      <!-- Un écran vide qui ne dit rien laisse croire à une panne. Ici il dit
+           ce qui a été cherché, et ce qui reste à régler pour trouver mieux. -->
+      <p v-if="sousVue === 'place' && !parOnglet.length" class="rien-a-gagner">
+        Rien à récupérer : aucun doublon, aucun fichier anormalement lourd, et tout
+        respecte la stratégie de son type. Les dossiers vides et la corbeille se vident
+        dans <em>Réglages → Bibliothèque</em> et <em>Réglages → Système</em>.
+      </p>
+    </template>
 
     <div v-if="onglet === 'library' && filter === 'dupes' && counts.duplicates" class="lot">
       <span class="warn-text">
@@ -1160,7 +1278,10 @@ onUnmounted(() => clearInterval(poller))
       </span>
     </div>
 
-    <p v-if="!works.length && onglet !== 'transcode'" class="empty">
+    <p
+      v-if="!works.length && onglet !== 'transcode' && !(onglet === 'library' && sousVue === 'place')"
+      class="empty"
+    >
       <template v-if="recherche">Aucun titre ne correspond à « {{ recherche }} ».</template>
       <template v-else-if="onglet === 'source'">
         Rien ne traîne dans la source. C'est l'état recherché — lance « Analyser les sources »
@@ -1227,6 +1348,17 @@ onUnmounted(() => clearInterval(poller))
                   <button class="small play" title="Vérifier avant de ranger"
                           @click="togglePlayer(p.id)">
                     {{ playing === p.id ? 'Fermer' : '▶' }}
+                  </button>
+                  <!-- Un choix ne se verrouille pas. Une fois le plan passé en
+                       « prêt », le bouton d'arbitrage disparaissait : une
+                       identification manuelle erronée n'était plus corrigeable,
+                       et il fallait tout effacer pour revenir dessus. -->
+                  <button
+                    class="small"
+                    :title="p.manual ? 'Revenir sur ton choix' : 'Choisir une autre œuvre'"
+                    @click="picking = picking === p.id ? null : p.id"
+                  >
+                    {{ p.manual ? 'Changer' : "Ce n'est pas ça" }}
                   </button>
                 </li>
                 <li v-if="playing === p.id" class="player">
@@ -1375,21 +1507,6 @@ onUnmounted(() => clearInterval(poller))
                 </li>
               </template>
             </ul>
-            <!-- La MEME liste que celle des boutons. Elle etait restee sur les
-                 seuls plans « a arbitrer » quand les ecartes les ont rejoints :
-                 « Ce n'est pas ça » armait alors un sélecteur que rien
-                 n'affichait, et le clic ne faisait plus rien. -->
-            <template v-for="p in arbitrables(w)" :key="`pick-${p.id}`">
-              <CandidatePicker
-                v-if="picking === p.id"
-                :candidates="p.alternatives ?? []"
-                :busy="choosing"
-                :plan-id="p.id"
-                :plan-kind="p.kind || w.kind"
-                @choose="(c) => choose(p.id, c)"
-                @close="picking = null"
-              />
-            </template>
           </section>
 
           <!-- Pas encore identifiés : la ligne existe dès le scan -->
@@ -1404,6 +1521,22 @@ onUnmounted(() => clearInterval(poller))
           </section>
 
           <!-- Ce qu'on possède -->
+          <!-- Le sélecteur vit au niveau du détail, pas dans une section :
+               il sert aux plans PRÊTS comme aux douteux, et ceux-ci vivent dans
+               deux blocs distincts. L'enfermer dans l'un des deux privait
+               l'autre de toute possibilité de correction. -->
+          <template v-for="p in [...w.pending.ready, ...arbitrables(w)]" :key="`pick-${p.id}`">
+            <CandidatePicker
+              v-if="picking === p.id"
+              :candidates="p.alternatives ?? []"
+              :busy="choosing"
+              :plan-id="p.id"
+              :plan-kind="p.kind || w.kind"
+              @choose="(c) => choose(p.id, c)"
+              @close="picking = null"
+            />
+          </template>
+
           <section v-if="w.owned" class="block">
             <div class="block-head">
               <h4>En bibliothèque</h4>
@@ -1530,6 +1663,67 @@ onUnmounted(() => clearInterval(poller))
 </template>
 
 <style scoped>
+.sous-vues { display: flex; gap: 6px; }
+.sous-vues button {
+  font-size: 12.5px; padding: 6px 13px; border-radius: 7px;
+  background: var(--surface); border: 1px solid var(--border); color: var(--text-dim);
+  display: flex; align-items: center; gap: 8px;
+}
+.sous-vues button.actif { border-color: var(--accent); color: var(--text); }
+.sous-vues .gain { font-family: var(--mono); font-size: 11px; color: var(--accent); }
+.rien-a-gagner {
+  font-size: 12.5px; color: var(--text-dim); line-height: 1.7;
+  max-width: 60em; margin: 4px 0 0;
+}
+.menu-entretien { position: relative; }
+.tiroir {
+  position: absolute; right: 0; top: calc(100% + 5px); z-index: 20;
+  display: flex; flex-direction: column; min-width: 250px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 5px; box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+}
+.tiroir button {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 1px;
+  text-align: left; border: 0; background: transparent; padding: 7px 9px;
+  border-radius: 6px; font-size: 12.5px; width: 100%;
+}
+.tiroir button:hover:not(:disabled) { background: var(--surface-2); }
+.tiroir button .quoi { font-size: 11px; color: var(--text-faint); }
+.tiroir button.danger { color: var(--warn); }
+/* --- Les trois etats de la page ---------------------------------------- */
+.attente, .panne {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; min-height: 40vh; text-align: center; padding: 40px 20px;
+}
+.attente { color: var(--text-dim); font-size: 13px; }
+.pulsation {
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  animation: tourne 1s linear infinite;
+}
+@keyframes tourne { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pulsation { animation: none; } }
+.panne h2 { margin: 0; font-size: 17px; }
+.panne p { margin: 0; font-size: 13px; color: var(--text-dim); max-width: 46em; }
+.panne .quoi-faire { color: var(--text-faint); font-size: 12.5px; }
+.panne code { font-family: var(--mono); font-size: 12px; }
+
+/* --- Ce qui bloque, avant tout le reste -------------------------------- */
+.blocages {
+  padding: 12px 14px; border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 32%, transparent);
+}
+.blocages h3 {
+  margin: 0 0 8px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--warn);
+}
+.blocages ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.blocages li { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font-size: 13px; }
+.blocages .ou { font-size: 11.5px; color: var(--text-dim); }
+
+.essai { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-dim); }
+.essai input { accent-color: var(--accent); }
 .origine {
   font-size: 10px; padding: 1px 7px; border-radius: 20px; white-space: nowrap;
   background: var(--surface-2); color: var(--text-faint);
@@ -1630,7 +1824,7 @@ onUnmounted(() => clearInterval(poller))
 }
 .fichiers .poids { color: var(--text-dim); }
 .dupe-msg { font-size: 11.5px; color: var(--text-dim); }
-button.small.danger { color: var(--warn); }
+button.small.danger { color: var(--err); }
 button.small.danger:hover:not(:disabled) {
   border-color: color-mix(in srgb, var(--warn) 40%, transparent);
 }

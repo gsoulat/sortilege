@@ -5,6 +5,7 @@ import FolderBrowser from './FolderBrowser.vue'
 import AiSettings from './AiSettings.vue'
 import AutomationSettings from './AutomationSettings.vue'
 import NotificationSettings from './NotificationSettings.vue'
+import TemplateBuilder from './TemplateBuilder.vue'
 import TranscodeSettings from './TranscodeSettings.vue'
 import MaintenanceSettings from './MaintenanceSettings.vue'
 import DecisionsSettings from './DecisionsSettings.vue'
@@ -350,6 +351,10 @@ const KINDS = ['movie', 'episode', 'anime']
       :media-server="prefs.media_server"
       @change="onMediaServerChange"
     />
+    <!-- Le gabarit décrit la forme du chemin sous la destination : les séparer
+         sur deux écrans obligeait à faire l'aller-retour pour comprendre où un
+         fichier allait réellement atterrir. -->
+    <TemplateBuilder />
     </template>
 
     <!-- ===== Automatisation : ce que l'outil fait sans personne devant ===== -->
