@@ -1,13 +1,16 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import ImageZoom from './ImageZoom.vue'
 
 const props = defineProps({
   candidates: { type: Array, required: true },
   busy: { type: Boolean, default: false },
-  // Nécessaire pour chercher : le serveur retrouve le type d'œuvre et le
-  // fournisseur à interroger à partir du plan, jamais à partir du client.
+  // Nécessaire pour chercher : le serveur retrouve le fournisseur à interroger
+  // à partir du plan, jamais à partir du client.
   planId: { type: String, default: '' },
+  // Le type que le parseur a cru lire. Sert de valeur de départ au sélecteur,
+  // pas de contrainte : c'est précisément lui qui peut être faux.
+  planKind: { type: String, default: 'movie' },
 })
 defineEmits(['choose', 'close'])
 
@@ -18,6 +21,25 @@ defineEmits(['choose', 'close'])
  * pouvoir le corriger. D'où la recherche à la main.
  */
 const requete = ref('')
+
+/**
+ * Le type cherché, indépendant de celui du plan — et c'est souvent la raison
+ * même de la recherche. « The Vampire Diaries » lu comme un film n'interrogeait
+ * que le catalogue des films, où la série ne figure pas : on voyait que c'était
+ * faux, on cherchait à corriger, et on ne trouvait rien. Impasse complète.
+ */
+const TYPES = [
+  { id: 'movie', label: 'Film' },
+  { id: 'episode', label: 'Série' },
+  { id: 'anime', label: 'Anime' },
+]
+const typeCherche = ref(props.planKind === 'anime' ? 'anime' : props.planKind === 'episode' ? 'episode' : 'movie')
+
+watch(typeCherche, () => {
+  // Relancer tout de suite : c'est le geste attendu quand on vient de dire
+  // « en fait, c'est une série ».
+  if (requete.value.trim().length >= 2) chercher()
+})
 const trouves = ref(null)
 const cherche = ref(false)
 const erreur = ref(null)
@@ -30,7 +52,9 @@ async function chercher() {
   cherche.value = true
   erreur.value = null
   try {
-    const res = await fetch(`/api/review/${props.planId}/search?q=${encodeURIComponent(q)}`)
+    const res = await fetch(
+      `/api/review/${props.planId}/search?q=${encodeURIComponent(q)}&kind=${typeCherche.value}`,
+    )
     const body = await res.json()
     if (res.ok) {
       trouves.value = body.results
@@ -68,6 +92,18 @@ function revenir() {
     </div>
 
     <div v-if="planId" class="recherche">
+      <!-- Le type cherché se change ici : c'est souvent LUI qui était faux. -->
+      <div class="types">
+        <button
+          v-for="ty in TYPES"
+          :key="ty.id"
+          :class="{ actif: typeCherche === ty.id }"
+          :title="`Chercher parmi les ${ty.label.toLowerCase()}s`"
+          @click="typeCherche = ty.id"
+        >
+          {{ ty.label }}
+        </button>
+      </div>
       <input
         type="search"
         placeholder="Aucune ne convient ? Cherche par titre…"
@@ -118,6 +154,12 @@ function revenir() {
 </template>
 
 <style scoped>
+.types { display: flex; gap: 3px; }
+.types button {
+  font-size: 11px; padding: 4px 10px; border-radius: 6px;
+  background: var(--surface-2); border: 1px solid var(--border); color: var(--text-dim);
+}
+.types button.actif { border-color: var(--accent); color: var(--text); }
 .picker {
   border: 1px solid var(--accent-dim); border-radius: 8px;
   background: var(--bg); padding: 12px 14px; margin: 8px 0 4px;

@@ -933,7 +933,7 @@ liste a lire — le contraire de ce qu'on cherche."""
 
 
 @router.get("/{plan_id}/search")
-async def search_candidates(plan_id: str, q: str) -> dict[str, object]:
+async def search_candidates(plan_id: str, q: str, kind: str = "") -> dict[str, object]:
     """Cherche une oeuvre par son titre, quand aucune proposition ne convient.
 
     Les candidats proposes viennent du titre LU dans le nom de fichier. Quand
@@ -966,17 +966,24 @@ async def search_candidates(plan_id: str, q: str) -> dict[str, object]:
             detail="Aucune cle TheMovieDB : la recherche ne peut rien interroger.",
         )
 
+    # Le type CHERCHE peut differer de celui du plan, et c'est souvent la
+    # raison meme de la recherche : « The Vampire Diaries » lu comme un film
+    # n'interrogeait que le catalogue des films, ou la serie ne figure pas. On
+    # avait donc une impasse — l'utilisateur voyait que c'etait faux, cherchait
+    # a corriger, et ne trouvait rien.
+    cherche = kind if kind in ("movie", "episode", "anime") else plan.kind
+
     tmdb = TMDBProvider(conf.tmdb_api_key)
     anilist = AniListProvider()
     trouves: list = []
     try:
-        if plan.kind == "movie":
+        if cherche == "movie":
             trouves += await tmdb.search_movie(requete, None)
         else:
             trouves += await tmdb.search_series(requete, None)
             # Les animes sont mal couverts par TMDB seul, et l'utilisateur qui
             # cherche a la main est precisement dans un cas difficile.
-            if plan.kind == "anime":
+            if cherche == "anime":
                 trouves += await anilist.search_anime(requete, None)
     finally:
         await tmdb.aclose()

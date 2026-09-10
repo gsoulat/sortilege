@@ -347,18 +347,38 @@ class Pipeline:
                     *others,
                 ]
 
+        # Le type du CANDIDAT CHOISI, pas celui que le parseur avait lu. C'est
+        # tout l'objet du geste : « The Vampire Diaries » pris pour un film se
+        # corrige en choisissant la serie, et le ranger malgre tout avec le
+        # gabarit des films annulerait la correction qu'on vient de faire.
+        kind = (
+            chosen.kind
+            if chosen.kind in ("movie", "episode", "anime")
+            else _kind_key(scanned.parsed.kind)
+        )
         plan = build_plan(
             scanned,
             match,
-            template=self._templates.get(_kind_key(scanned.parsed.kind), ""),
-            destination_root=self._destination_for(
-                _kind_key(scanned.parsed.kind), scanned.size_bytes
-            ),
+            template=self._templates.get(kind, ""),
+            destination_root=self._destination_for(kind, scanned.size_bytes),
             policy=self._policy,
         )
+        plan.kind = kind
         plan.alternatives = others[:8]
         plan.manual = True
         plan.identified_by = "manuel"
+
+        # Une serie sans numero d'episode ne se range pas : le gabarit produirait
+        # « Saison  / Titre - SE », un chemin que personne ne veut. On le DIT au
+        # lieu de le fabriquer, et le fichier reste a arbitrer.
+        if kind in ("episode", "anime") and scanned.parsed.episode is None:
+            if scanned.parsed.absolute_episode is None:
+                plan.decision = Decision.REVIEW
+                plan.reasons = [
+                    *plan.reasons,
+                    "aucun numero d'episode dans le nom du fichier : renomme-le en "
+                    "« ... S01E02 ... » ou range-le a la main",
+                ]
 
         if plan.destination is not None:
             plan.decision = Decision.AUTO

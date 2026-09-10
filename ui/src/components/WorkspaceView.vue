@@ -1385,6 +1385,7 @@ onUnmounted(() => clearInterval(poller))
                 :candidates="p.alternatives ?? []"
                 :busy="choosing"
                 :plan-id="p.id"
+                :plan-kind="p.kind || w.kind"
                 @choose="(c) => choose(p.id, c)"
                 @close="picking = null"
               />

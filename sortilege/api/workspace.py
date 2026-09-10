@@ -52,6 +52,10 @@ def _plan_out(plan: Plan, *, with_alternatives: bool = False) -> dict[str, objec
         "destination": str(plan.destination) if plan.destination else None,
         "score": plan.score,
         "decision": str(plan.decision),
+        # Le type LU pour ce fichier, qui peut differer de celui de l'oeuvre :
+        # c'est justement lui qu'on corrige quand une serie a ete prise pour un
+        # film.
+        "kind": plan.kind,
         "title": plan.title,
         "year": plan.year,
         "poster_url": plan.poster_url,
