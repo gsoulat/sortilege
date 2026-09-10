@@ -166,7 +166,6 @@ const ONGLETS = [
 const onglet = ref('bibliotheque')
 
 const KINDS = ['movie', 'episode', 'anime']
-const KIND_LABELS = { movie: 'Films', episode: 'Séries', anime: 'Animes' }
 </script>
 
 <template>
