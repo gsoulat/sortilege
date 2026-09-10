@@ -24,6 +24,11 @@ const data = ref(null)
 const error = ref(null)
 const message = ref(null)
 const busy = ref(null)
+
+// Le retour d'une action sur doublons, par œuvre. Le bandeau du haut ne suffit
+// pas quand la ligne concernée est au milieu de six cents autres.
+const dupeMessage = ref({})
+const confirmingDelete = ref(null)
 const open = ref(new Set())
 const picking = ref(null)
 const choosing = ref(false)
@@ -406,12 +411,46 @@ async function trashDuplicates(work) {
   busy.value = 'trash'
   try {
     const out = await call('/api/collection/duplicates/trash', { paths })
-    if (out) {
-      message.value = `${out.trashed} exemplaire(s) en trop mis en corbeille` +
-        (out.failed ? `, ${out.failed} en échec.` : '.')
-      await load()
-    }
+    // Le retour s'affiche À CÔTÉ DU BOUTON, pas seulement dans le bandeau du
+    // haut : quand on agit sur une ligne au milieu d'une liste de six cents,
+    // un message hors de l'écran équivaut à pas de message du tout.
+    dupeMessage.value[work.key] = out
+      ? `${out.trashed} en corbeille` + (out.failed ? `, ${out.failed} en échec` : '')
+      : error.value ?? 'Échec.'
+    if (out) await load()
   } finally {
+    busy.value = null
+  }
+}
+
+/**
+ * Supprime sans passer par la corbeille. Deux clics : le premier arme, le
+ * second exécute — parce que rien ne défera celui-ci.
+ *
+ * La corbeille reste le geste par défaut. Mais quand on cherche de la place,
+ * déplacer six cents gigaoctets vers une corbeille qu'il faudra vider ensuite
+ * double le travail sans rien protéger de plus : l'exemplaire gardé est là, et
+ * le serveur vérifie sa présence avant chaque suppression.
+ */
+async function deleteDuplicates(work) {
+  if (confirmingDelete.value !== work.key) {
+    confirmingDelete.value = work.key
+    return
+  }
+  const groups = work.owned.duplicates
+    .filter((d) => d.redundant.length)
+    .map((d) => ({ keep: d.keep, paths: d.redundant }))
+  if (!groups.length) return
+  busy.value = 'delete'
+  try {
+    const out = await call('/api/collection/duplicates/delete', { groups, confirm: true })
+    dupeMessage.value[work.key] = out
+      ? `${out.deleted} supprimé(s), ${gb(out.freed_bytes)} Go libérés` +
+        (out.failed ? `, ${out.failed} en échec` : '')
+      : error.value ?? 'Échec.'
+    if (out) await load()
+  } finally {
+    confirmingDelete.value = null
     busy.value = null
   }
 }
@@ -988,13 +1027,51 @@ onUnmounted(() => clearInterval(poller))
                 <span v-else-if="s.complete" class="complete">complète</span>
               </li>
             </ul>
+            <!-- « 2,5 fois le poids habituel » sur neuf épisodes ne dit pas
+                 LEQUEL. On nomme les fichiers : c'est sur eux qu'on agit. -->
+            <ul v-if="w.heavy_files?.length" class="fichiers surpoids">
+              <li v-for="f in w.heavy_files" :key="f.path">
+                <span class="etiquette">×{{ f.ratio }}</span>
+                <span class="poids">{{ gb(f.size_bytes) }} Go</span>
+                <code>{{ f.path }}</code>
+              </li>
+            </ul>
+            <ul v-if="w.off_strategy?.length" class="fichiers hors-strategie">
+              <li v-for="f in w.off_strategy" :key="f.path">
+                <span class="etiquette cible">{{ f.resolution }} → {{ f.target }}</span>
+                <span class="poids">
+                  {{ gb(f.size_bytes) }} Go — environ {{ gb(f.savings_bytes) }} Go récupérables
+                </span>
+                <code>{{ f.path }}</code>
+              </li>
+            </ul>
+
             <div v-if="w.owned.duplicates.length" class="dupe-head">
               <span class="warn-text">
-                Les exemplaires en trop partent à la corbeille, jamais à la suppression.
+                La corbeille se vide ensuite ; la suppression ne se rattrape pas.
               </span>
-              <button class="small" :disabled="busy" @click="trashDuplicates(w)">
-                Mettre en corbeille
+              <!-- Un seul bouton désactivé par « busy » global restait inerte
+                   pendant un scan, sans rien dire : le clic ne faisait rien et
+                   rien n'expliquait pourquoi. Chaque bouton ne se bloque plus
+                   que sur SA propre action. -->
+              <button class="small" :disabled="busy === 'trash'" @click="trashDuplicates(w)">
+                {{ busy === 'trash' ? 'Déplacement…' : 'Mettre en corbeille' }}
               </button>
+              <button
+                class="small danger"
+                :disabled="busy === 'delete'"
+                @click="deleteDuplicates(w)"
+              >
+                {{ confirmingDelete === w.key ? 'Confirmer la suppression' : 'Supprimer' }}
+              </button>
+              <button
+                v-if="confirmingDelete === w.key"
+                class="small"
+                @click="confirmingDelete = null"
+              >
+                Renoncer
+              </button>
+              <span v-if="dupeMessage[w.key]" class="dupe-msg">{{ dupeMessage[w.key] }}</span>
             </div>
             <ul v-if="w.owned.duplicates.length" class="dupes">
               <li v-for="d in w.owned.duplicates" :key="d.label">
@@ -1025,6 +1102,26 @@ onUnmounted(() => clearInterval(poller))
 </template>
 
 <style scoped>
+.fichiers { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.fichiers li { display: flex; align-items: center; gap: 8px; font-size: 11.5px; flex-wrap: wrap; }
+.fichiers code {
+  font-family: var(--mono); font-size: 11px; color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
+.fichiers .etiquette {
+  font-size: 10.5px; padding: 1px 6px; border-radius: 4px;
+  background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn);
+}
+.fichiers .etiquette.cible {
+  background: color-mix(in srgb, var(--accent) 18%, transparent); color: var(--accent);
+  font-family: var(--mono);
+}
+.fichiers .poids { color: var(--text-dim); }
+.dupe-msg { font-size: 11.5px; color: var(--text-dim); }
+button.small.danger { color: var(--warn); }
+button.small.danger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+}
 .workspace { display: flex; flex-direction: column; gap: 14px; }
 
 .toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }

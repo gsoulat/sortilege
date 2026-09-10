@@ -25,6 +25,8 @@ from dataclasses import dataclass, field
 
 from .collection import Work
 from .planner import Plan
+from .quality import QualitySettings
+from .reencode import Candidate, audit
 from .scanner import ScannedFile
 from .scoring import Decision
 from .store import title_key
@@ -58,6 +60,17 @@ class Pending:
         return len(self.ready) + len(self.review) + len(self.rejected) + len(self.unplanned)
 
 
+@dataclass(slots=True)
+class HeavyFile:
+    """Un fichier nettement plus lourd que ses semblables."""
+
+    relative_path: str
+    size_bytes: int
+    ratio: float
+    """Rapport a la mediane des fichiers du meme type. 2.5 = deux fois et demie
+    le poids habituel."""
+
+
 @dataclass
 class WorkspaceEntry:
     """Une oeuvre, dans ses deux etats a la fois."""
@@ -69,6 +82,23 @@ class WorkspaceEntry:
     poster_url: str = ""
     owned: Work | None = None
     pending: Pending = field(default_factory=Pending)
+
+    heavy_files: list[HeavyFile] = field(default_factory=list)
+    """Les fichiers precis qui font le surpoids.
+
+    « 2,5 fois le poids habituel » sur une serie de neuf episodes ne dit pas QUEL
+    episode est en cause. Sans le nom du fichier, l'avertissement se regarde
+    sans rien pouvoir en faire — et c'est justement au fichier qu'on agit.
+    """
+
+    off_strategy: list[Candidate] = field(default_factory=list)
+    """Les fichiers qui ne respectent pas la strategie choisie pour leur type.
+
+    Distinct du surpoids : un episode peut peser le double des autres tout en
+    respectant la strategie (une scene chargee, un episode double), et un
+    fichier parfaitement dans la moyenne peut etre en 2160p alors que la
+    strategie dit 1080p.
+    """
 
     heaviness: float = 0.0
     """Taille par fichier RAPPORTEE a la mediane des oeuvres du meme type.
@@ -152,6 +182,7 @@ def build(
     works: list[Work],
     plans: list[Plan],
     pending: list[ScannedFile],
+    quality_settings: QualitySettings | None = None,
 ) -> list[WorkspaceEntry]:
     """Assemble la vue. Ne fait aucun appel reseau ni disque.
 
@@ -231,8 +262,11 @@ def build(
         entry.pending.unplanned.append(scanned)
         entry.kind = entry.kind or str(scanned.parsed.kind)
 
-    _mark_heaviness(list(entries.values()))
-    return sorted(entries.values(), key=lambda e: e.sort_rank())
+    tous = list(entries.values())
+    _mark_heaviness(tous)
+    _mark_heavy_files(tous)
+    _mark_off_strategy(tous, quality_settings)
+    return sorted(tous, key=lambda e: e.sort_rank())
 
 
 def _mark_heaviness(entries: list[WorkspaceEntry]) -> None:
@@ -274,3 +308,63 @@ def summarize(entries: list[WorkspaceEntry]) -> dict[str, int]:
         "total_bytes": sum(e.owned.total_bytes for e in entries if e.owned),
         "heavy": sum(1 for e in entries if e.heaviness >= HEAVY_RATIO),
     }
+
+
+def _mark_heavy_files(entries: list[WorkspaceEntry]) -> None:
+    """Designe les fichiers precis qui font le surpoids d'une oeuvre.
+
+    La mediane se calcule ici sur les FICHIERS et non sur les oeuvres : la
+    question posee est « quel episode est trop lourd », et un episode ne se
+    compare pas a la moyenne d'une serie entiere.
+    """
+    tailles: dict[str, list[int]] = {}
+    for entry in entries:
+        if entry.owned is None:
+            continue
+        for refs in entry.owned.slots.values():
+            for ref in refs:
+                if ref.size_bytes > 0:
+                    tailles.setdefault(entry.owned.kind or "?", []).append(ref.size_bytes)
+
+    medianes = {kind: _median(v) for kind, v in tailles.items() if len(v) >= 3}
+
+    for entry in entries:
+        if entry.owned is None:
+            continue
+        mediane = medianes.get(entry.owned.kind or "?", 0)
+        if mediane <= 0:
+            continue
+        lourds = [
+            HeavyFile(ref.relative_path, ref.size_bytes, ref.size_bytes / mediane)
+            for refs in entry.owned.slots.values()
+            for ref in refs
+            if ref.size_bytes >= HEAVY_RATIO * mediane
+        ]
+        entry.heavy_files = sorted(lourds, key=lambda f: f.size_bytes, reverse=True)
+
+
+def _mark_off_strategy(
+    entries: list[WorkspaceEntry], settings: QualitySettings | None
+) -> None:
+    """Designe les fichiers qui ne respectent pas la strategie de leur type.
+
+    On delegue a ``reencode.audit``, qui tient deja la regle : un fichier viole
+    sa strategie s'il existe une resolution plus basse que la sienne que cette
+    strategie classe mieux. Deux endroits pour une meme regle finiraient par
+    diverger.
+    """
+    if settings is None:
+        return
+    for entry in entries:
+        if entry.owned is not None:
+            entry.off_strategy = audit([entry.owned], settings, min_savings_bytes=0)
+
+
+def _median(valeurs: list[int]) -> int:
+    ordonnees = sorted(valeurs)
+    milieu = len(ordonnees) // 2
+    if not ordonnees:
+        return 0
+    if len(ordonnees) % 2:
+        return ordonnees[milieu]
+    return (ordonnees[milieu - 1] + ordonnees[milieu]) // 2

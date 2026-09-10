@@ -22,7 +22,7 @@ from fastapi import APIRouter
 from ..core.planner import Plan
 from ..core.workspace import HEAVY_RATIO, WorkspaceEntry, build, summarize
 from . import collection, library, review
-from .deps import get_journal
+from .deps import get_journal, get_store
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,27 @@ def _entry_out(entry: WorkspaceEntry) -> dict[str, object]:
         # plus qu'un film, seul le poids d'un fichier se compare.
         "bytes_per_file": entry.bytes_per_file,
         "heaviness": round(entry.heaviness, 2),
+        # « 2,5 fois le poids habituel » sur une serie de neuf episodes ne dit
+        # pas QUEL episode est en cause. Sans le nom du fichier, l'avertissement
+        # se regarde sans rien pouvoir en faire — et c'est au fichier qu'on agit.
+        "heavy_files": [
+            {"path": f.relative_path, "size_bytes": f.size_bytes, "ratio": round(f.ratio, 1)}
+            for f in entry.heavy_files
+        ],
+        # Distinct du surpoids : un episode peut peser le double des autres tout
+        # en respectant la strategie, et un fichier parfaitement dans la moyenne
+        # peut etre en 2160p alors que la strategie demande du 1080p.
+        "off_strategy": [
+            {
+                "path": c.relative_path,
+                "resolution": c.resolution,
+                "target": c.target,
+                "size_bytes": c.size_bytes,
+                "savings_bytes": c.savings_bytes,
+                "reason": c.reason,
+            }
+            for c in entry.off_strategy
+        ],
         "owned": None
         if owned is None
         else {
@@ -172,7 +193,12 @@ def read_workspace(limit: int = 200, offset: int = 0) -> dict[str, object]:
         ]
     )
 
-    entries = build(collection.current_works(), plans, pending)
+    entries = build(
+        collection.current_works(),
+        plans,
+        pending,
+        get_store().load().quality,
+    )
     counts = summarize(entries)
 
     page = entries[offset : offset + max(1, limit)]

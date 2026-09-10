@@ -52,6 +52,26 @@ class TrashRequest(BaseModel):
     expose. Un chemin absolu venu du client serait une porte ouverte."""
 
 
+class DuplicateGroupIn(BaseModel):
+    """Un groupe de doublons : l'exemplaire garde, et ceux a supprimer.
+
+    Le chemin GARDE est exige, et non deduit. Supprimer sans filet n'a de sens
+    que si l'on a verifie qu'il reste bien quelque chose : sans cette donnee, un
+    bogue d'affichage ou un appel malforme effacerait le dernier exemplaire.
+    """
+
+    keep: str
+    paths: list[str]
+
+
+class DeleteDuplicatesRequest(BaseModel):
+    groups: list[DuplicateGroupIn]
+
+    confirm: bool = False
+    """Obligatoire. La suppression ne se rattrape pas, elle ne doit pas pouvoir
+    arriver par un champ oublie."""
+
+
 def forget_index() -> None:
     """Oublie l'index de bibliotheque. « Relire la bibliotheque » le refait."""
     _job.works = []
@@ -233,6 +253,80 @@ def trash_duplicates(body: TrashRequest) -> dict[str, object]:
         "trashed": sum(1 for m in moved if m["ok"]),
         "failed": sum(1 for m in moved if not m["ok"]),
         "results": moved,
+    }
+
+
+@router.post("/duplicates/delete")
+def delete_duplicates(body: DeleteDuplicatesRequest) -> dict[str, object]:
+    """Supprime des doublons SANS passer par la corbeille.
+
+    La corbeille reste le geste par defaut, et c'est le bon quand on ne fait
+    que soupconner un doublon. Mais quand on cherche de la place, deplacer six
+    cents gigaoctets vers une corbeille qu'il faudra vider ensuite double le
+    travail sans rien proteger de plus : le fichier garde est LA, verifie a
+    chaque suppression.
+
+    Rien n'est journalise. Une ligne de journal qui ne pourrait rien defaire
+    serait un mensonge poli ; le dire est plus honnete.
+    """
+    if not body.confirm:
+        raise HTTPException(400, "suppression non confirmee")
+
+    conf = get_settings()
+    resultats: list[dict[str, object]] = []
+    liberes = 0
+
+    for groupe in body.groups:
+        try:
+            garde = _resolve_in_library(groupe.keep, conf.library_root)
+        except ValueError as exc:
+            resultats.append({"path": groupe.keep, "ok": False, "message": str(exc)})
+            continue
+
+        # La condition qui rend l'operation acceptable : on ne supprime un
+        # exemplaire que si celui qu'on garde existe REELLEMENT sur le disque.
+        if not garde.is_file():
+            resultats.append(
+                {
+                    "path": groupe.keep,
+                    "ok": False,
+                    "message": "l'exemplaire a garder est introuvable — rien n'a ete supprime",
+                }
+            )
+            continue
+
+        for relative in groupe.paths:
+            try:
+                cible = _resolve_in_library(relative, conf.library_root)
+            except ValueError as exc:
+                resultats.append({"path": relative, "ok": False, "message": str(exc)})
+                continue
+
+            if cible == garde:
+                resultats.append(
+                    {"path": relative, "ok": False, "message": "c'est l'exemplaire garde"}
+                )
+                continue
+            if not cible.is_file():
+                resultats.append({"path": relative, "ok": False, "message": "fichier introuvable"})
+                continue
+
+            try:
+                taille = cible.stat().st_size
+                cible.unlink()
+            except OSError as exc:
+                resultats.append({"path": relative, "ok": False, "message": str(exc)})
+                continue
+
+            liberes += taille
+            logger.info("doublon supprime : %s (%s octets)", cible, taille)
+            resultats.append({"path": relative, "ok": True, "message": "supprime"})
+
+    return {
+        "deleted": sum(1 for r in resultats if r["ok"]),
+        "failed": sum(1 for r in resultats if not r["ok"]),
+        "freed_bytes": liberes,
+        "results": resultats,
     }
 
 
