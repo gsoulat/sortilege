@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 
 const props = defineProps({
   ai: { type: Object, required: true },
@@ -50,6 +50,38 @@ const current = computed(
 // version, et un modèle sorti depuis doit rester saisissable sans attendre une
 // mise à jour de Sortilège.
 const currentModels = computed(() => models.value[props.ai.provider] ?? [])
+
+// Le modèle enregistré ne fait pas toujours partie de la liste : il peut venir
+// d'une version antérieure, ou avoir été saisi à la main. Le menu bascule alors
+// sur « Autre » plutôt que d'afficher un choix qui ne correspond pas à ce qui
+// est réellement utilisé — ce qui serait pire que pas de menu du tout.
+const modeleLibre = ref(false)
+const champLibre = ref(null)
+
+const choixModele = computed(() => {
+  if (modeleLibre.value) return '__autre__'
+  if (!props.ai.model) return ''
+  return currentModels.value.includes(props.ai.model) ? props.ai.model : '__autre__'
+})
+
+watch(
+  [() => props.ai.model, currentModels],
+  ([modele, liste]) => {
+    modeleLibre.value = Boolean(modele) && !liste.includes(modele)
+  },
+  { immediate: true },
+)
+
+function onModele(valeur) {
+  if (valeur === '__autre__') {
+    modeleLibre.value = true
+    // Le champ n'existe pas encore au moment du choix : on attend le rendu.
+    nextTick(() => champLibre.value?.focus())
+    return
+  }
+  modeleLibre.value = false
+  patch({ model: valeur })
+}
 
 const modelPlaceholder = computed(() => current.value?.default_model || 'nom du modèle')
 const urlPlaceholder = computed(() => current.value?.base_url || 'https://…/v1')
@@ -116,23 +148,33 @@ function saveKey() {
 
       <div class="row">
         <label for="ai-model">Modèle</label>
+        <!-- Un vrai menu déroulant, et non une liste de suggestions : un
+             datalist ne se voit pas tant qu'on ne tape rien, ce qui revient à
+             une case vide devant laquelle on doit deviner un nom de modèle. -->
+        <select id="ai-model" :value="choixModele" @change="onModele($event.target.value)">
+          <option value="">Modèle par défaut ({{ current?.default_model || 'aucun' }})</option>
+          <option v-for="m in currentModels" :key="m" :value="m">{{ m }}</option>
+          <option value="__autre__">Autre — saisir le nom…</option>
+        </select>
+      </div>
+
+      <!-- La liste est figée à la publication de cette version : un modèle
+           sorti depuis doit rester utilisable sans attendre une mise à jour. -->
+      <div v-if="modeleLibre" class="row">
+        <label for="ai-model-libre">Nom exact</label>
         <input
-          id="ai-model"
-          list="ai-modeles"
+          id="ai-model-libre"
+          ref="champLibre"
           autocomplete="off"
           :value="ai.model"
           :placeholder="modelPlaceholder"
           spellcheck="false"
           @change="patch({ model: $event.target.value })"
         />
-        <datalist id="ai-modeles">
-          <option v-for="m in currentModels" :key="m" :value="m"></option>
-        </datalist>
       </div>
       <p class="hint">
-        Les modèles connus du fournisseur sont proposés à la saisie. Le champ reste
-        libre : un modèle plus récent que cette version de Sortilège s'y tape
-        directement. Vide, le modèle par défaut du fournisseur est utilisé.
+        Les modèles connus du fournisseur sont proposés. « Autre » laisse saisir le nom
+        exact d'un modèle plus récent que cette version de Sortilège.
       </p>
 
       <div v-if="ai.provider !== 'anthropic'" class="row">
