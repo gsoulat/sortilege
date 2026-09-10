@@ -392,3 +392,94 @@ def test_une_racine_absente_ne_leve_pas(tmp_path: Path) -> None:
     from sortilege.core.companions import find_empty_dirs
 
     assert find_empty_dirs([tmp_path / "jamais-creee"]) == []
+
+
+# --- Coquilles : des fichiers, mais plus de video ---------------------------
+#
+# Ranger un film emporte la video et ses compagnons, mais le dossier de release
+# garde ce qui n'accompagnait RIEN : jaquette au nom de la release, .nfo, .xml
+# de metadonnees. Le dossier n'est donc jamais vide au sens strict, et le
+# balayage des dossiers vides ne le voit pas.
+
+
+def coquille(root: Path, nom: str, fichiers: list[str]) -> Path:
+    d = root / nom
+    d.mkdir(parents=True)
+    for f in fichiers:
+        (d / f).write_text("x" * 50, encoding="utf-8")
+    return d
+
+
+def test_un_dossier_sans_video_est_propose(tmp_path: Path) -> None:
+    """Le cas reel : un film range, ses accessoires restes derriere."""
+    from sortilege.core.companions import find_orphan_dirs
+
+    d = coquille(
+        tmp_path,
+        "Alice in Wonderland (1951)",
+        ["poster.jpg", "fanart.jpg", "movie.xml", "Alice in Wonderland (1951).nfo"],
+    )
+
+    trouves = [o.path for o in find_orphan_dirs([tmp_path])]
+
+    assert d in trouves
+
+
+def test_un_dossier_contenant_encore_la_video_est_epargne(tmp_path: Path) -> None:
+    """C'est le garde-fou principal : un film pas encore range ne doit pas
+    perdre sa jaquette."""
+    from sortilege.core.companions import find_orphan_dirs
+
+    d = coquille(tmp_path, "Pas Encore Range", ["film.mkv", "poster.jpg"])
+
+    assert d not in [o.path for o in find_orphan_dirs([tmp_path])]
+
+
+def test_un_type_inattendu_fait_s_abstenir(tmp_path: Path) -> None:
+    """Mieux vaut laisser un residu que supprimer ce qu'on n'a pas su
+    reconnaitre. Une archive peut contenir n'importe quoi."""
+    from sortilege.core.companions import find_orphan_dirs
+
+    d = coquille(tmp_path, "Avec Archive", ["poster.jpg", "bonus.zip"])
+
+    assert d not in [o.path for o in find_orphan_dirs([tmp_path])]
+
+
+def test_un_dossier_vide_n_est_pas_une_coquille(tmp_path: Path) -> None:
+    """Il releve de l'autre balayage : les deux ne doivent pas se marcher
+    dessus."""
+    from sortilege.core.companions import find_orphan_dirs
+
+    d = tmp_path / "Vide"
+    d.mkdir()
+
+    assert d not in [o.path for o in find_orphan_dirs([tmp_path])]
+
+
+def test_les_sous_titres_orphelins_comptent(tmp_path: Path) -> None:
+    """Un .srt sans sa video ne sert plus a rien."""
+    from sortilege.core.companions import find_orphan_dirs
+
+    d = coquille(tmp_path, "Sous-titres seuls", ["film.srt", "film.idx"])
+
+    assert d in [o.path for o in find_orphan_dirs([tmp_path])]
+
+
+def test_la_taille_est_rapportee(tmp_path: Path) -> None:
+    """Pour annoncer la place recuperee avant d'agir."""
+    from sortilege.core.companions import find_orphan_dirs
+
+    coquille(tmp_path, "Coquille", ["poster.jpg", "fanart.jpg"])
+
+    orphelins = find_orphan_dirs([tmp_path])
+
+    assert orphelins[0].bytes == 100
+    assert len(orphelins[0].files) == 2
+
+
+def test_une_racine_n_est_jamais_une_coquille(tmp_path: Path) -> None:
+    from sortilege.core.companions import find_orphan_dirs
+
+    (tmp_path / "poster.jpg").write_text("x", encoding="utf-8")
+
+    assert tmp_path not in [o.path for o in find_orphan_dirs([tmp_path])]

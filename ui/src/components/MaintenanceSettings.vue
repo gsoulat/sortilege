@@ -148,6 +148,57 @@ async function nettoyerVides() {
   }
 }
 
+// --- Coquilles : des dossiers qui ont des fichiers mais plus de video -----
+//
+// Ranger un film emporte la video et ses compagnons, mais le dossier de
+// release garde ce qui n'accompagnait RIEN : jaquette au nom de la release,
+// .nfo, .xml. Il n'est donc jamais vide au sens strict.
+const coquilles = ref(null)
+const cherchantCoquilles = ref(false)
+const nettoyantCoquilles = ref(false)
+const coquilleMessage = ref(null)
+const confirmSuppr = ref(false)
+
+async function chercherCoquilles() {
+  cherchantCoquilles.value = true
+  coquilleMessage.value = null
+  try {
+    coquilles.value = await (await fetch('/api/library/orphan-dirs')).json()
+  } catch {
+    coquilleMessage.value = 'Serveur injoignable.'
+  } finally {
+    cherchantCoquilles.value = false
+  }
+}
+
+async function nettoyerCoquilles(mode) {
+  if (mode === 'delete' && !confirmSuppr.value) {
+    confirmSuppr.value = true
+    return
+  }
+  confirmSuppr.value = false
+  nettoyantCoquilles.value = true
+  try {
+    const res = await fetch('/api/library/orphan-dirs/prune', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ confirm: true, mode }),
+    })
+    const body = await res.json()
+    if (res.ok) {
+      coquilles.value = body
+      coquilleMessage.value =
+        `${body.removed_dirs} dossier(s) supprimé(s), ${body.handled_files} fichier(s) ` +
+        (mode === 'delete' ? 'supprimé(s)' : 'mis en corbeille') +
+        (body.failed?.length ? `, ${body.failed.length} en échec.` : '.')
+    } else {
+      coquilleMessage.value = body.detail ?? 'Échec.'
+    }
+  } finally {
+    nettoyantCoquilles.value = false
+  }
+}
+
 const purgingThumbs = ref(false)
 const thumbMessage = ref(null)
 
@@ -353,6 +404,46 @@ onMounted(loadTrash)
       </li>
     </ul>
     <p v-if="videMessage" class="ok-text">{{ videMessage }}</p>
+
+    <h3 class="sous-titre">Dossiers sans vidéo</h3>
+    <p class="note">
+      Une fois le film rangé, le dossier de release garde souvent ce qui
+      n'accompagnait rien : une jaquette au nom de la release, un <code>.nfo</code>, un
+      <code>.xml</code> de métadonnées. Il n'est donc jamais vide au sens strict, et le
+      balayage ci-dessus ne le voit pas — ce n'est plus qu'une coquille.
+    </p>
+    <p class="note">
+      Le critère est strict : <strong>aucune vidéo, et rien d'autre que des accessoires
+      connus</strong>. Un dossier contenant une archive ou un fichier d'un type inattendu
+      n'est pas proposé — mieux vaut laisser un résidu que supprimer ce qu'on n'a pas su
+      reconnaître.
+    </p>
+
+    <div class="vides-actions">
+      <button :disabled="cherchantCoquilles" @click="chercherCoquilles">
+        {{ cherchantCoquilles ? 'Recherche…' : 'Chercher les dossiers sans vidéo' }}
+      </button>
+      <template v-if="coquilles?.count">
+        <button :disabled="nettoyantCoquilles" @click="nettoyerCoquilles('trash')">
+          Mettre en corbeille ({{ gb(coquilles.bytes) }} Go)
+        </button>
+        <button class="danger" :disabled="nettoyantCoquilles" @click="nettoyerCoquilles('delete')">
+          {{ confirmSuppr ? `Confirmer : supprimer ces ${coquilles.count} dossiers` : 'Supprimer' }}
+        </button>
+      </template>
+    </div>
+
+    <p v-if="coquilles && !coquilles.count" class="empty">Aucun dossier sans vidéo.</p>
+    <ul v-else-if="coquilles" class="vides">
+      <li v-for="d in coquilles.dirs" :key="d.path">
+        <code>{{ d.path }}</code>
+        <span class="detail">{{ d.file_count }} fichier(s) : {{ d.files.join(', ') }}</span>
+      </li>
+      <li v-if="coquilles.count > coquilles.dirs.length" class="more">
+        … et {{ coquilles.count - coquilles.dirs.length }} autres
+      </li>
+    </ul>
+    <p v-if="coquilleMessage" class="ok-text">{{ coquilleMessage }}</p>
   </section>
 
   <section v-if="montre('renommage')">
@@ -426,6 +517,9 @@ h3 {
 .vides-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .vides { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; }
 .vides code { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
+.vides .detail { display: block; font-size: 10.5px; color: var(--text-faint); opacity: .75; margin-left: 10px; }
+.sous-titre { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border); }
+.note code { font-family: var(--mono); font-size: 11px; }
 .vides .more { font-size: 11.5px; color: var(--text-faint); font-style: italic; margin-top: 4px; }
 
 .vignettes { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); flex-wrap: wrap; }

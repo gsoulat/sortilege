@@ -22,6 +22,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from .parser import VIDEO_EXTENSIONS
+
 logger = logging.getLogger(__name__)
 
 SUBTITLE_EXTENSIONS = {".srt", ".ass", ".ssa", ".sub", ".idx", ".vtt", ".smi"}
@@ -289,3 +291,85 @@ def find_empty_dirs(roots: list[Path]) -> list[Path]:
 
     # Les plus profonds d'abord : c'est l'ordre dans lequel il faut supprimer.
     return sorted(condamnes, key=lambda c: (-len(c.parts), str(c)))
+
+
+# Ce qui accompagne une video sans jamais la remplacer : jaquettes,
+# metadonnees, sous-titres, sommes de controle, restes d'extraction. Aucun de
+# ces fichiers n'a de valeur seul — ils decrivent ou completent une video qui
+# n'est plus la.
+ORPHAN_EXTENSIONS = {
+    *ARTWORK_EXTENSIONS,
+    ".nfo",
+    ".xml",
+    ".txt",
+    ".srt",
+    ".sub",
+    ".idx",
+    ".ass",
+    ".ssa",
+    ".sfv",
+    ".md5",
+    ".url",
+    ".log",
+    ".part",
+    ".!ut",
+}
+
+
+@dataclass(frozen=True, slots=True)
+class OrphanDir:
+    """Un dossier qui ne contient plus de video, seulement ses accessoires."""
+
+    path: Path
+    files: list[Path]
+    bytes: int
+
+
+def find_orphan_dirs(roots: list[Path]) -> list[OrphanDir]:
+    """Dossiers sans aucune video, ne contenant que ses accessoires.
+
+    Ranger un film emporte la video et ses compagnons, mais un dossier de
+    release contient souvent des fichiers qui n'accompagnent RIEN : une
+    jaquette au nom de la release, un .nfo, un .xml de metadonnees, des
+    sommes de controle. Ils restent, et le dossier n'est donc jamais vide au
+    sens strict — il n'est plus qu'une coquille.
+
+    Le critere est simple et volontairement strict : aucune video, et RIEN
+    d'autre que des accessoires connus. Un dossier contenant une archive, un
+    document ou un fichier d'un type inattendu n'est pas propose — mieux vaut
+    laisser un residu que supprimer ce qu'on n'a pas su reconnaitre.
+    """
+    interdits = {r.resolve() for r in roots}
+    orphelins: list[OrphanDir] = []
+
+    for root in roots:
+        if not root.is_dir():
+            continue
+        for courant, _, fichiers in os.walk(root):
+            chemin = Path(courant)
+            try:
+                if chemin.resolve() in interdits:
+                    continue
+            except OSError:
+                continue
+
+            reels = [f for f in fichiers if not _sans_interet(f)]
+            if not reels:
+                continue  # vide au sens strict : c'est l'autre balayage
+
+            extensions = {Path(f).suffix.lower() for f in reels}
+            if extensions & VIDEO_EXTENSIONS:
+                continue  # il reste une video : on n'y touche pas
+            if not extensions <= ORPHAN_EXTENSIONS:
+                continue  # quelque chose d'inattendu : on s'abstient
+
+            chemins = [chemin / f for f in reels]
+            taille = 0
+            for f in chemins:
+                try:
+                    taille += f.stat().st_size
+                except OSError:
+                    continue
+            orphelins.append(OrphanDir(path=chemin, files=chemins, bytes=taille))
+
+    return sorted(orphelins, key=lambda o: str(o.path))

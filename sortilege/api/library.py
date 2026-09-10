@@ -22,7 +22,8 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..config import get_settings
-from ..core.companions import find_empty_dirs
+from ..core.companions import find_empty_dirs, find_orphan_dirs, trash_destination, trash_root_for
+from ..core.journal import _move, prune_empty_dirs
 from ..core.scanner import ScanResult, scan
 from ..core.snapshot import SCAN_KEY, SnapshotError, scan_in, scan_out
 from .deps import get_memory, get_store
@@ -115,11 +116,98 @@ def reset_workspace(body: ResetRequest) -> dict[str, object]:
     return {"cleared_plans": plans, "cleared_thumbnails": vignettes, **_status()}
 
 
+class OrphanPruneRequest(BaseModel):
+    confirm: bool = False
+    mode: str = "trash"
+    """« trash » met le contenu en corbeille, « delete » le supprime."""
+
+
 class PruneRequest(BaseModel):
     confirm: bool = False
     """Obligatoire. La liste se consulte d'abord : un balayage destructeur sur
     des centaines de dossiers ne doit pas partir du meme geste que celui qui
     sert a le regarder."""
+
+
+@router.get("/orphan-dirs")
+def read_orphan_dirs() -> dict[str, object]:
+    """Dossiers sans aucune video, ne contenant que ses accessoires.
+
+    Ranger un film emporte la video et ses compagnons, mais un dossier de
+    release garde souvent ce qui n'accompagnait RIEN : une jaquette au nom de
+    la release, un .nfo, un .xml de metadonnees. Le dossier n'est donc jamais
+    vide au sens strict, et le balayage precedent ne le voit pas — il n'est
+    plus qu'une coquille.
+    """
+    store = get_store()
+    orphelins = find_orphan_dirs(store.resolved_sources())
+    return {
+        "count": len(orphelins),
+        "bytes": sum(o.bytes for o in orphelins),
+        "dirs": [
+            {
+                "path": str(o.path),
+                "files": [f.name for f in o.files[:8]],
+                "file_count": len(o.files),
+                "bytes": o.bytes,
+            }
+            for o in orphelins[:200]
+        ],
+    }
+
+
+@router.post("/orphan-dirs/prune")
+def prune_orphan_dirs(body: OrphanPruneRequest) -> dict[str, object]:
+    """Evacue le contenu de ces dossiers, puis les supprime.
+
+    Ce ne sont pas des dossiers vides : ils contiennent de vrais fichiers. Ils
+    partent donc en CORBEILLE par defaut, ou l'on peut encore aller les
+    rechercher — une jaquette perdue est sans consequence, mais c'est le genre
+    de certitude qu'on n'a qu'apres coup.
+
+    ``mode=delete`` supprime directement, pour qui veut recuperer la place sans
+    seconde corvee de vidage.
+
+    Rien n'est journalise, deliberement : le journal d'annulation sert a
+    retrouver des VIDEOS deplacees, et y verser des centaines de jaquettes le
+    diluerait au point de le rendre illisible le jour ou l'on en a vraiment
+    besoin. La corbeille joue ce role ici.
+    """
+    if not body.confirm:
+        raise HTTPException(status_code=400, detail="Le nettoyage doit etre confirme.")
+
+    conf = get_settings()
+    store = get_store()
+    racines = store.resolved_sources()
+    lot = time.strftime("%Y-%m-%d")
+
+    dossiers, fichiers, echecs = 0, 0, []
+    for orphelin in find_orphan_dirs(racines):
+        rate = False
+        for fichier in orphelin.files:
+            try:
+                if body.mode == "delete":
+                    fichier.unlink()
+                else:
+                    corbeille = trash_root_for(fichier, conf.library_root, racines)
+                    cible = trash_destination(corbeille, lot, fichier)
+                    if cible.exists():
+                        cible.unlink()
+                    _move(fichier, cible)
+                fichiers += 1
+            except OSError as exc:
+                echecs.append(f"{fichier} : {exc}")
+                rate = True
+        if not rate:
+            dossiers += prune_empty_dirs(orphelin.path, racines)
+
+    logger.info("coquilles nettoyees : %s dossier(s), %s fichier(s)", dossiers, fichiers)
+    return {
+        "removed_dirs": dossiers,
+        "handled_files": fichiers,
+        "failed": echecs[:20],
+        **read_orphan_dirs(),
+    }
 
 
 @router.get("/empty-dirs")
