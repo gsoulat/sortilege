@@ -1,6 +1,80 @@
 # CHANGELOG
 
 
+## v0.41.0 (2026-09-10)
+
+### Features
+
+- **empreinte**: Identifier un fichier par son contenu, pas par son nom
+  ([`75bb21d`](https://github.com/gsoulat/sortilege/commit/75bb21dd436104f3941faca0f0e658d04c864103))
+
+Tout le reste de cette application DEVINE. Le parseur lit un nom de release, la sonde lit des tags,
+  le resolveur IA propose une meilleure requete — mais tous partent de ce que le fichier RACONTE de
+  lui-meme, et un nom de release ment regulierement : titre traduit, saison decalee, homonyme, faute
+  du groupe qui l'a publie.
+
+L'empreinte ne devine pas. Deux fichiers qui la partagent sont le meme encodage, et une base
+  exterieure associe ces empreintes a des oeuvres identifiees. C'est ce qui separe une
+  identification probable d'une identification certaine, et c'est precisement ce que FileBot a de
+  mieux.
+
+L'algorithme est celui d'OpenSubtitles, en usage depuis vingt ans : taille du fichier, plus la somme
+  des 64 premiers et des 64 derniers kibioctets, en arithmetique 64 bits. Il ne lit donc que 128 Kio
+  quelle que soit la taille — c'est ce qui le rend utilisable sur une bibliotheque entiere la ou un
+  vrai condensat imposerait de relire des teraoctets. Un test le verifie, parce que c'est toute la
+  difference entre une fonction utilisable et une qui ne le serait pas.
+
+Le masquage a chaque tour n'est pas cosmetique : Python n'a pas de debordement, et sans lui l'entier
+  grandirait indefiniment pour donner une valeur qu'aucune autre implementation ne retrouverait. Une
+  empreinte juste seulement chez nous ne servirait a rien.
+
+A ETRE HONNETE : cette fonction n'est encore branchee nulle part. Elle est la premiere moitie d'un
+  chantier — la seconde est le fournisseur qui interroge la base — et je la livre testee plutot que
+  de la garder de cote, mais elle ne produit aucun effet tant que ce fournisseur n'existe pas.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+- **livres**: Lire les metadonnees d un EPUB, qui font autorite
+  ([`e6c51ac`](https://github.com/gsoulat/sortilege/commit/e6c51ace1663a1d12a99522ad99f11ade079774b))
+
+Premiere piece du chantier livres, et elle renverse une hypothese du projet.
+
+Un fichier video ne dit presque rien de lui-meme : le nom de release ment, les tags de conteneur
+  sont rarement remplis, et il faut interroger un fournisseur pour savoir ce qu'on tient. Toute
+  l'architecture d'identification decoule de la — score de confiance, arbitrage humain, memoire des
+  decisions.
+
+Un EPUB, lui, PORTE ses metadonnees. Le format impose un manifeste renseigne par celui qui a
+  fabrique le fichier : titre, auteur, editeur, langue, ISBN, souvent la serie et le tome. Ici le
+  fichier fait autorite et le fournisseur ne servira qu'a completer.
+
+C'est l'inverse exact de la video, et le pipeline devra en tenir compte : aller interroger une base
+  pour confirmer ce que l'editeur a lui-meme inscrit depenserait un appel pour rien.
+
+Quatre points ou j'ai refuse la solution facile :
+
+Le manifeste est localise en SUIVANT META-INF/container.xml, et non en cherchant un « *.opf » au
+  hasard : un EPUB peut en contenir plusieurs, et seul celui-la fait foi.
+
+Parmi les identifiants, seul l'ISBN est retenu. Un UUID identifie le FICHIER, pas l'oeuvre — le
+  garder ne permettrait pas de la retrouver.
+
+La serie passe par la convention Calibre, faute de champ standard avant EPUB 3. Ce n'est pas
+  normalise, mais c'est ce que tout le monde ecrit, et l'ignorer priverait du seul moyen de
+  regrouper une saga.
+
+Les titres poses par un outil de generation sont ECARTES. « Microsoft Word - document1 » est courant
+  dans les PDF et ne designe aucune oeuvre : le retenir ferait ranger des livres sous ce nom.
+
+Aucune dependance ajoutee. Un EPUB est un ZIP et son manifeste du XML, tous deux dans la
+  bibliotheque standard — en ajouter une pour lire un ZIP serait payer cher une commodite.
+
+11 tests, sur de VRAIS EPUB construits pour l'occasion. Simuler la lecture ne prouverait rien : ce
+  qu'on veut savoir, c'est qu'on lit des fichiers tels qu'ils existent.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.40.2 (2026-09-10)
 
 ### Bug Fixes
