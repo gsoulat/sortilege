@@ -9,7 +9,12 @@ import TranscodeSettings from './TranscodeSettings.vue'
 import MaintenanceSettings from './MaintenanceSettings.vue'
 import DecisionsSettings from './DecisionsSettings.vue'
 
-const KIND_LABELS = { movie: 'Films', episode: 'Séries TV', anime: 'Animes' }
+// Deux listes, et pas une seule : un livre se range et se nomme comme le reste,
+// mais il n'a ni résolution, ni débit, ni stratégie de qualité. L'ajouter à la
+// liste unique lui aurait fait apparaître un réglage « préférer le 720p », qui
+// ne veut rien dire pour un roman.
+const KIND_LABELS = { movie: 'Films', episode: 'Séries TV', anime: 'Animes', book: 'Livres' }
+const KIND_LABELS_VIDEO = { movie: 'Films', episode: 'Séries TV', anime: 'Animes' }
 
 const s = ref(null)
 const prefs = ref(null)
@@ -262,7 +267,7 @@ const KINDS = ['movie', 'episode', 'anime']
           </div>
         </div>
 
-        <div v-for="(label, kind) in KIND_LABELS" :key="`o-${kind}`" class="dest-row">
+        <div v-for="(label, kind) in KIND_LABELS_VIDEO" :key="`o-${kind}`" class="dest-row">
           <label :for="`o-${kind}`">{{ label }}</label>
           <input
             :id="`o-${kind}`"
@@ -296,7 +301,7 @@ const KINDS = ['movie', 'episode', 'anime']
       </p>
 
       <div v-for="k in KINDS" :key="k" class="strategie">
-        <label>{{ KIND_LABELS[k] }}</label>
+        <label>{{ KIND_LABELS_VIDEO[k] }}</label>
         <select :value="prefs.quality[k]" @change="onQualityChange({ [k]: $event.target.value })">
           <option v-for="s in prefs.quality_strategies" :key="s.key" :value="s.key">
             {{ s.label }}
@@ -326,7 +331,7 @@ const KINDS = ['movie', 'episode', 'anime']
       </p>
 
       <div v-for="k in KINDS" :key="`budget-${k}`" class="strategie">
-        <label>{{ KIND_LABELS[k] }}</label>
+        <label>{{ KIND_LABELS_VIDEO[k] }}</label>
         <input
           type="number"
           min="0"

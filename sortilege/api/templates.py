@@ -79,6 +79,22 @@ PREVIEW_SAMPLES: dict[str, list[dict[str, object]]] = {
         },
         {"title": "One Piece", "absolute_episode": 1088, "resolution": "1080p"},
     ],
+    "book": [
+        {
+            "title": "Le Nom du Vent",
+            "author": "Patrick Rothfuss",
+            "series": "Chronique du Tueur de Roi",
+            "volume": 1,
+            "year": 2007,
+            "publisher": "Bragelonne",
+            "isbn": "9782266021196",
+        },
+        # Un roman isole : le segment de serie disparait de lui-meme, ce qui
+        # permet au meme gabarit de servir aux deux cas.
+        {"title": "L'Étranger", "author": "Albert Camus", "year": 1942},
+        # Sans auteur : le cas d'un fichier dont on n'a lu que le titre.
+        {"title": "Manuscrit Sans Nom"},
+    ],
 }
 
 

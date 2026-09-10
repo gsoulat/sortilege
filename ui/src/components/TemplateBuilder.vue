@@ -5,10 +5,12 @@ const KINDS = [
   { id: 'movie', label: 'Films' },
   { id: 'episode', label: 'Séries TV' },
   { id: 'anime', label: 'Animes' },
+  { id: 'book', label: 'Livres' },
 ]
 
 const GROUP_LABELS = {
   identite: 'Identité',
+  livre: 'Livre',
   episode: 'Épisode',
   technique: 'Technique',
   identifiants: 'Identifiants',
@@ -33,8 +35,16 @@ const grouped = computed(() => {
 // n'aide personne et produirait un segment vide en silence.
 const relevantGroups = computed(() => {
   const entries = Object.entries(grouped.value)
-  if (kind.value === 'movie') return entries.filter(([g]) => g !== 'episode')
-  return entries
+  // Un livre n'a ni saison, ni résolution, ni codec : lui proposer ces jetons
+  // ferait construire des chemins avec des segments toujours vides.
+  if (kind.value === 'book') {
+    return entries.filter(([g]) => g === 'identite' || g === 'livre')
+  }
+  // Et réciproquement : {auteur} ou {isbn} n'ont rien à faire dans le gabarit
+  // d'un film.
+  const sansLivre = entries.filter(([g]) => g !== 'livre')
+  if (kind.value === 'movie') return sansLivre.filter(([g]) => g !== 'episode')
+  return sansLivre
 })
 
 async function loadCatalog() {
