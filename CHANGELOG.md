@@ -1,6 +1,54 @@
 # CHANGELOG
 
 
+## v0.50.0 (2026-09-10)
+
+### Features
+
+- **interface**: Le reencodage sur sa page, et quatre gestes qui manquaient
+  ([`f85676a`](https://github.com/gsoulat/sortilege/commit/f85676ad8eff5953f07d49c13eacb567aa8a8daf))
+
+**Le reencodage prend sa propre page.** Il vivait en onglet interne de la mediatheque, ce qui posait
+  mal la question : on n'y vient pas pour regarder ce qu'on possede, on y vient pour surveiller un
+  travail long. C'est un atelier, et un atelier se consulte le matin pour savoir ce que la nuit a
+  produit.
+
+**La barre d'actions n'appartient qu'a « Ranger ».** Elle s'affichait aussi dans la mediatheque, ou
+  aucun de ces boutons n'a d'objet : on n'y analyse pas une source. Les voir la laissait croire
+  qu'ils portaient sur elle. La mediatheque garde la seule action qui la concerne — relire l'index.
+
+**Le bouton « Annuler… » quitte la barre.** Le journal a sa page depuis le dernier lot ; deux
+  chemins vers le meme geste obligent a se demander lequel fait foi, et le panneau replie ne
+  montrait de toute facon que les dernieres operations.
+
+**L'identification s'enchaine toute seule.** Le serveur travaille par lots de cent — tout planifier
+  d'un tenant, c'est des heures d'appels pendant lesquelles rien n'est applicable. Mais rendre la
+  main entre deux lots faisait porter le rythme a l'utilisateur : mille fichiers, dix clics, sans
+  que le bouton dise jamais qu'il en restait. La boucle enchaine desormais, s'arrete d'elle-meme
+  quand un lot n'avance plus — sans cette garde on tournerait a l'infini — et le bouton devient sa
+  propre sortie pendant qu'elle tourne. Un scan qui trouve des fichiers enchaine directement sur
+  l'identification.
+
+**Ranger nettoie les dossiers vides qu'il vient de creer.** Les proposer dans un ecran de reglages
+  revenait a demander un second geste pour finir le premier, et personne n'allait le chercher. Un
+  dossier vide ne contient rien a recuperer. Silencieux quand il n'y a rien a faire ; un echec, lui,
+  se dit, parce qu'il signale presque toujours un probleme de droits.
+
+**« Valider definitivement » sur la page de journal.** Le journal grossit a chaque rangement et ne
+  diminue jamais : passe quelques milliers d'entrees il ne se consulte plus, et personne ne va
+  annuler un deplacement d'il y a six mois. Le vider quand on est satisfait, c'est refermer un
+  chantier. Aucun fichier n'est touche — ce qu'on perd, c'est le chemin du retour, d'ou la
+  confirmation.
+
+**« Tester l'IA ».** « Operationnel » ne disait que la forme des reglages. Une cle peut etre valide
+  et refusee par le service, un modele avoir disparu, un serveur local ne pas repondre — et comme le
+  resolveur degrade vers la revue manuelle par construction, une configuration morte ressemble a une
+  configuration qui n'a rien eu a faire. Le bouton soumet un vrai cas difficile et rend la reponse
+  telle quelle.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.49.0 (2026-09-10)
 
 ### Features
