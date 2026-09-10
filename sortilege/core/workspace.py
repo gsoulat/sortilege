@@ -350,9 +350,7 @@ def _mark_heavy_files(entries: list[WorkspaceEntry]) -> None:
         entry.heavy_files = sorted(lourds, key=lambda f: f.size_bytes, reverse=True)
 
 
-def _mark_off_strategy(
-    entries: list[WorkspaceEntry], settings: QualitySettings | None
-) -> None:
+def _mark_off_strategy(entries: list[WorkspaceEntry], settings: QualitySettings | None) -> None:
     """Designe les fichiers qui ne respectent pas la strategie de leur type.
 
     On delegue a ``reencode.audit``, qui tient deja la regle : un fichier viole
