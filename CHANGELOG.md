@@ -1,6 +1,89 @@
 # CHANGELOG
 
 
+## v0.44.0 (2026-09-10)
+
+### Code Style
+
+- Reformater workspace.py
+  ([`3179a45`](https://github.com/gsoulat/sortilege/commit/3179a4555e46787cd654f1e1db1314ec51f2cc83))
+
+La CI verifie le formatage et je n'avais lance que le linter. Une signature tenait sur une ligne de
+  moins de cent caracteres, ruff la veut sur une seule.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+### Features
+
+- **mediatheque**: Deux onglets, des filtres utiles, et le nettoyage des doublons
+  ([`d0cb2eb`](https://github.com/gsoulat/sortilege/commit/d0cb2eb588c8689694e1a56b7352ece536a6a889))
+
+Un seul ecran melait deux gestes qui n'ont rien a voir. « Source » repond a « qu'est-ce qui traine
+  et qu'il faut ranger » : on y vient pour vider, on en repart quand il est vide. « Ma mediatheque »
+  repond a « qu'est-ce que je possede, et qu'est-ce qui cloche dedans » : on y vient pour inspecter,
+  et elle n'est jamais vide. Les melanger enterrait les quelques lignes actionnables sous des
+  centaines de lignes au repos, et interdisait de filtrer correctement les unes comme les autres.
+
+Filtres de la mediatheque : episodes manquants, doublons, surpoids, hors strategie — ce dernier
+  annonce la place recuperable. Plus une recherche par titre insensible aux accents (« Amelie »
+  trouve « Amélie ») et un tri : ce qui demande une action, titre, poids par fichier, episodes
+  manquants, place recuperable. Changer d'onglet remet les filtres a zero : « Épisodes manquants »
+  n'a aucun sens cote source, et un filtre reste actif donnerait une liste vide sans qu'on comprenne
+  pourquoi.
+
+Nettoyage des doublons selon la strategie :
+
+- Un bouton par oeuvre, « Supprimer selon la strategie », et un bouton global qui traite TOUTE la
+  bibliotheque. Le global travaille sur l'index du serveur et non sur ce que la page affiche : une
+  liste tronquee a deux cents oeuvres ferait oublier les autres, silencieusement.
+
+- L'arbitrage n'est pas refait : collection.group a deja classe chaque exemplaire selon la strategie
+  de son type. Deux regles pour une meme question finiraient par diverger.
+
+- Chaque exemplaire est affiche avec sa resolution et son poids, celui qui est garde etant marque. «
+  Garde celui-ci » sans dire ce que valent les autres demande une confiance aveugle juste avant une
+  suppression.
+
+Interface verifiee dans un navigateur sur une instance reelle : bascule d'onglet, filtres et tri,
+  sans erreur console.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+- **mediatheque**: Nommer les fichiers en surpoids et hors strategie
+  ([`7d6dd72`](https://github.com/gsoulat/sortilege/commit/7d6dd726a82512c7fc0f296c314d597bd5720489))
+
+« 2,5 fois le poids habituel » sur une serie de neuf episodes ne dit pas QUEL episode est en cause.
+  L'avertissement se regardait sans rien pouvoir en faire — alors que c'est au fichier qu'on agit.
+
+Deux listes distinctes, parce que ce sont deux problemes differents :
+
+- Les fichiers nettement plus lourds que leurs semblables. La mediane se calcule sur les FICHIERS et
+  non sur les oeuvres : un episode ne se compare pas a la moyenne d'une serie entiere. - Les
+  fichiers qui ne respectent pas la strategie de leur type, avec la resolution visee et la place
+  recuperable. Un episode peut peser le double des autres tout en respectant la strategie, et un
+  fichier parfaitement dans la moyenne peut etre en 2160p quand la strategie demande du 1080p.
+
+La regle de violation n'est pas reecrite ici : elle vient de core/reencode.py, qui la deduit de la
+  strategie choisie. Deux endroits pour une meme regle finiraient par diverger.
+
+Et sur les doublons :
+
+- « Mettre en corbeille » ne repondait plus pendant un scan. Le bouton etait desactive par
+  l'indicateur d'occupation GLOBAL : le clic ne faisait rien, et rien n'expliquait pourquoi. Chaque
+  bouton ne se bloque plus que sur sa propre action, et le resultat s'affiche a cote de lui — un
+  message dans le bandeau du haut, quand la ligne concernee est au milieu de six cents autres,
+  equivaut a pas de message.
+
+- Nouveau bouton « Supprimer », sans corbeille, en deux clics. La corbeille reste le geste par
+  defaut, mais deplacer six cents gigaoctets vers une corbeille qu'il faudra vider ensuite double le
+  travail sans rien proteger de plus. Le serveur exige le chemin de l'exemplaire GARDE et verifie sa
+  presence avant chaque suppression : sans cette condition, un bogue d'affichage effacerait le
+  dernier exemplaire d'une oeuvre. Rien n'est journalise — une ligne de journal qui ne pourrait rien
+  defaire serait un mensonge poli.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.43.3 (2026-09-10)
 
 ### Bug Fixes
