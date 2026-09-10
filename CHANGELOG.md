@@ -1,6 +1,37 @@
 # CHANGELOG
 
 
+## v0.43.1 (2026-09-10)
+
+### Bug Fixes
+
+- **parseur**: Couper la signature des sites de telechargement
+  ([`862014e`](https://github.com/gsoulat/sortilege/commit/862014e46b53b0a96b2aa7724463de57ad76c8f0))
+
+Les fichiers diffuses par Wawacity, Zone-Telechargement et consorts portent le nom du site suivi
+  d'un mot pris au hasard : « Bruce tout puissant Wawacity ec ». Quand la release portait une annee,
+  la coupure a l'annee suffisait a nettoyer le titre. SANS annee, le titre gardait la signature, et
+  plus aucun fournisseur ne reconnaissait l'oeuvre — d'ou des lignes sans jaquette ni annee.
+
+Le suffixe aleatoire n'appartient a aucune liste : il ne peut etre reconnu que par sa POSITION,
+  apres la signature. On coupe donc au lieu de retirer un mot. Un titre reduit a la seule signature
+  est conserve tel quel : mieux vaut un fichier nomme d'apres le site que pas nomme du tout.
+
+Deux autres corrections dans le meme geste :
+
+- La liste se remplit PENDANT le scan. Elle ne l'etait qu'a la toute fin, soit plusieurs minutes
+  devant un ecran vide surmonte d'une barre qui avance. Le resultat partiel est publie tous les
+  vingt-cinq fichiers, en copie — l'interface le lit depuis un autre fil pendant que le scan y
+  ecrit.
+
+- Enregistrer un webhook Discord active les notifications du meme geste. La case « Activer » etait
+  grisee tant qu'aucune URL n'etait enregistree : on ne pouvait pas la cocher, et rien ne disait
+  clairement pourquoi. Le champ URL passe avant les cases, et une case indisponible se voit
+  desormais.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.43.0 (2026-09-10)
 
 ### Bug Fixes
