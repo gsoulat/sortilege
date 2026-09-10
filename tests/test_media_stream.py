@@ -134,3 +134,48 @@ def test_la_lecture_exige_une_session(plan) -> None:
     mediatheque entiere a qui connait un identifiant."""
     with TestClient(app) as anonymous:
         assert anonymous.get(f"/api/media/plan/{plan.id}").status_code == 401
+
+
+# --- Lecture d'un conteneur que le navigateur ne sait pas ouvrir -------------
+#
+# Le MKV n'est lu par aucun navigateur courant, et c'est le format majoritaire
+# d'une bibliotheque constituee. Mais le CONTENEUR n'est pas le contenu : une
+# release H.264 dans un MKV redevient lisible en changeant simplement
+# d'emballage, sans retoucher a une seule image.
+
+
+def test_un_codec_lisible_est_reemballable() -> None:
+    from sortilege.api.media import REMUXABLE_VIDEO
+
+    assert "h264" in REMUXABLE_VIDEO
+
+
+def test_le_hevc_n_est_pas_reemballable() -> None:
+    """Il faudrait le REENCODER, ce qui coute un ordre de grandeur de plus et
+    ferait chauffer le NAS pour verifier trois secondes de film. On refuse, et
+    les vignettes repondent deja a la question."""
+    from sortilege.api.media import REMUXABLE_VIDEO
+
+    assert "hevc" not in REMUXABLE_VIDEO
+    assert "x265" not in REMUXABLE_VIDEO
+
+
+def test_l_ac3_est_reencode_pas_copie() -> None:
+    """Courant dans les MKV, lu par aucun navigateur. Le reencoder coute peu
+    compare a une video."""
+    from sortilege.api.media import COPYABLE_AUDIO
+
+    assert "ac3" not in COPYABLE_AUDIO
+    assert "dts" not in COPYABLE_AUDIO
+    assert "aac" in COPYABLE_AUDIO
+
+
+def test_un_plan_inconnu_ne_lance_aucun_processus(client: TestClient) -> None:
+    """L'entree reste un identifiant de plan : aucun chemin ne vient du
+    client, donc aucun fichier arbitraire ne peut etre ouvert."""
+    assert client.get("/api/media/plan/inexistant/remux").status_code == 404
+
+
+def test_la_lecture_reemballee_exige_une_session(plan) -> None:
+    with TestClient(app) as anonyme:
+        assert anonyme.get(f"/api/media/plan/{plan.id}/remux").status_code == 401

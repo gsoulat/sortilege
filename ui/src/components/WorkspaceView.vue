@@ -772,6 +772,17 @@ onUnmounted(() => clearInterval(poller))
                   <template v-if="preview?.playable_in_browser">
                     <video controls preload="metadata" :src="`/api/media/plan/${p.id}`"></video>
                   </template>
+                  <!-- Conteneur illisible mais image lisible : on réemballe à la
+                       volée, sans réencoder. Une release H.264 dans un MKV est
+                       parfaitement lisible une fois dans un MP4. -->
+                  <template v-else-if="preview?.remux?.possible">
+                    <video controls preload="none" :src="`/api/media/plan/${p.id}/remux`"></video>
+                    <p class="thumb-note">
+                      Réemballé en MP4 à la volée — l'image n'est pas réencodée. La barre de
+                      progression ne permet pas de sauter : le flux est produit au fil de la
+                      lecture.
+                    </p>
+                  </template>
                   <template v-else-if="preview?.available">
                     <div class="thumbs">
                       <img
@@ -789,6 +800,10 @@ onUnmounted(() => clearInterval(poller))
                       />
                     </div>
                     <p class="thumb-note">
+                      <template v-if="preview?.remux?.video">
+                        Vidéo en {{ preview.remux.video }} : la réemballer ne suffirait pas, il
+                        faudrait la réencoder — trop cher pour vérifier trois secondes.
+                      </template>
                       Images prises tout au long du fichier — la dernière est à 90 %, une image
                       noire ou figée à cet endroit trahit un téléchargement incomplet.
                     </p>
@@ -844,6 +859,17 @@ onUnmounted(() => clearInterval(poller))
                   <template v-if="preview?.playable_in_browser">
                     <video controls preload="metadata" :src="`/api/media/plan/${p.id}`"></video>
                   </template>
+                  <!-- Conteneur illisible mais image lisible : on réemballe à la
+                       volée, sans réencoder. Une release H.264 dans un MKV est
+                       parfaitement lisible une fois dans un MP4. -->
+                  <template v-else-if="preview?.remux?.possible">
+                    <video controls preload="none" :src="`/api/media/plan/${p.id}/remux`"></video>
+                    <p class="thumb-note">
+                      Réemballé en MP4 à la volée — l'image n'est pas réencodée. La barre de
+                      progression ne permet pas de sauter : le flux est produit au fil de la
+                      lecture.
+                    </p>
+                  </template>
                   <template v-else-if="preview?.available">
                     <div class="thumbs">
                       <img
@@ -861,6 +887,10 @@ onUnmounted(() => clearInterval(poller))
                       />
                     </div>
                     <p class="thumb-note">
+                      <template v-if="preview?.remux?.video">
+                        Vidéo en {{ preview.remux.video }} : la réemballer ne suffirait pas, il
+                        faudrait la réencoder — trop cher pour vérifier trois secondes.
+                      </template>
                       Images prises tout au long du fichier — la dernière est à 90 %, une image
                       noire ou figée à cet endroit trahit un téléchargement incomplet.
                     </p>

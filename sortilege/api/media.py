@@ -216,6 +216,76 @@ def purge_thumbnails() -> int:
     return supprimees
 
 
+# Codecs video que les navigateurs decodent nativement une fois dans un
+# conteneur MP4. Le H.264 couvre l'ecrasante majorite des releases 1080p ; le
+# HEVC, lui, n'est lu que par Safari et sous conditions.
+REMUXABLE_VIDEO = {"h264", "avc1"}
+
+# Pistes audio lisibles telles quelles. L'AC-3 et le DTS sont courants dans les
+# MKV et ne passent nulle part : ils sont reencodes en AAC, ce qui coute peu
+# compare a une video.
+COPYABLE_AUDIO = {"aac", "mp3", "opus", "vorbis", "flac"}
+
+
+def _streams(path: Path) -> tuple[str, str]:
+    """Codecs (video, audio) du fichier. Chaines vides si illisible."""
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe is None:
+        return "", ""
+    try:
+        out = subprocess.run(  # noqa: S603 - argv fixe, pas de shell
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_entries",
+                "stream=codec_type,codec_name",
+                "-of",
+                "csv=p=0",
+                str(path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=THUMB_TIMEOUT,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return "", ""
+
+    video = audio = ""
+    for ligne in out.stdout.splitlines():
+        champs = ligne.strip().split(",")
+        if len(champs) < 2:
+            continue
+        nom, genre = champs[0], champs[1]
+        if genre == "video" and not video:
+            video = nom
+        elif genre == "audio" and not audio:
+            audio = nom
+    return video, audio
+
+
+def _remux_plan(path: Path) -> dict[str, object]:
+    """Ce qu'il faudrait faire pour que ce fichier soit lisible au navigateur.
+
+    Le MKV n'est lu par aucun navigateur courant, mais le CONTENEUR n'est pas
+    le contenu : une release H.264 dans un MKV redevient lisible en changeant
+    simplement d'emballage, sans retoucher a une seule image. C'est le point
+    que j'avais neglige en concluant trop vite qu'il fallait tout reencoder.
+
+    Reencoder la video, lui, couterait un ordre de grandeur de plus et ferait
+    chauffer le NAS pour verifier trois secondes de film. On refuse donc, et on
+    le dit — les vignettes repondent deja a la question dans ce cas.
+    """
+    video, audio = _streams(path)
+    return {
+        "video": video,
+        "audio": audio,
+        "possible": video in REMUXABLE_VIDEO,
+        "audio_copiable": audio in COPYABLE_AUDIO,
+    }
+
+
 def _ffmpeg_available() -> bool:
     return shutil.which("ffmpeg") is not None
 
@@ -336,6 +406,92 @@ def purge_cache() -> dict[str, object]:
     return {"removed": purge_thumbnails()}
 
 
+@router.get("/plan/{plan_id}/remux")
+def stream_remuxed(plan_id: str, at: float = 0.0) -> StreamingResponse:
+    """Sert la video reemballee en MP4, sans reencoder l'image.
+
+    Le conteneur n'est pas le contenu. Une release H.264 dans un MKV est
+    parfaitement lisible par un navigateur : il suffit de changer d'emballage,
+    ce qui ne touche pas une seule image et ne coute presque rien. Seule la
+    piste audio est reencodee quand il le faut — AC-3 et DTS sont courants dans
+    les MKV et ne passent nulle part — et c'est sans commune mesure avec une
+    video.
+
+    Le flux est FRAGMENTE : il commence a arriver immediatement, sans quoi il
+    faudrait remuxer le fichier entier avant la premiere image. En contrepartie
+    la barre de progression ne permet pas de sauter — d'ou ``at``, qui redemarre
+    le flux plus loin.
+    """
+    plan = next((p for p in review.current_plans() if p.id == plan_id), None)
+    if plan is None or not plan.source.is_file():
+        raise HTTPException(status_code=404, detail="Fichier introuvable.")
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise HTTPException(status_code=503, detail="ffmpeg absent de l'image.")
+
+    infos = _remux_plan(plan.source)
+    if not infos["possible"]:
+        raise HTTPException(
+            status_code=415,
+            detail=(
+                f"Video en {infos['video'] or 'codec inconnu'} : la reemballer ne suffirait "
+                "pas, il faudrait la reencoder. Les apercus repondent a la question sans "
+                "faire chauffer le NAS."
+            ),
+        )
+
+    argv = [
+        ffmpeg,
+        "-nostdin",
+        "-v",
+        "error",
+        *(["-ss", f"{max(0.0, at):.3f}"] if at > 0 else []),
+        "-i",
+        str(plan.source),
+        "-map",
+        "0:v:0",
+        "-map",
+        "0:a:0?",
+        # L'image est COPIEE : c'est tout l'interet, et ce qui rend l'operation
+        # supportable sur un NAS.
+        "-c:v",
+        "copy",
+        *(["-c:a", "copy"] if infos["audio_copiable"] else ["-c:a", "aac", "-b:a", "160k"]),
+        "-movflags",
+        "frag_keyframe+empty_moov+default_base_moof",
+        "-f",
+        "mp4",
+        "pipe:1",
+    ]
+
+    processus = subprocess.Popen(  # noqa: S603 - argv fixe, pas de shell
+        argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL
+    )
+
+    def flux():
+        """Le processus est TUE des que le client se detache.
+
+        Sans cela, fermer un lecteur laisserait ffmpeg lire le fichier
+        jusqu'au bout : quelques ouvertures suffiraient a saturer le NAS avec
+        du travail que plus personne n'attend.
+        """
+        try:
+            while morceau := processus.stdout.read(CHUNK):
+                yield morceau
+        finally:
+            processus.stdout.close()
+            if processus.poll() is None:
+                processus.kill()
+            processus.wait()
+
+    return StreamingResponse(
+        flux(),
+        media_type="video/mp4",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.get("/plan/{plan_id}/positions")
 def thumb_positions(plan_id: str) -> dict[str, object]:
     """Ou placer les vignettes, et si l'on peut en produire.
@@ -354,4 +510,7 @@ def thumb_positions(plan_id: str) -> dict[str, object]:
         "duration": duration,
         "positions": list(DEFAULT_POSITIONS) if available and duration else [],
         "playable_in_browser": plan.source.suffix.lower() in BROWSER_FRIENDLY,
+        # Ce qu'on peut faire quand le conteneur n'est pas lisible : reemballer
+        # sans reencoder, ou seulement montrer des images.
+        "remux": _remux_plan(plan.source) if available else None,
     }
