@@ -1,6 +1,27 @@
 # CHANGELOG
 
 
+## v0.40.2 (2026-09-10)
+
+### Bug Fixes
+
+- **echecs**: Dire QUELS fichiers ont echoue, et en unite lisible
+  ([`f25118d`](https://github.com/gsoulat/sortilege/commit/f25118de6882176cabe2db023fee3ba8314c588e))
+
+Le bandeau donnait le motif et le compte, mais un seul exemple. On savait donc POURQUOI ca avait
+  echoue, sans savoir SUR QUOI — et il n'y a rien a faire de cette information. Vingt-neuf refus
+  dont on ignore les fichiers ne valent guere mieux que vingt-neuf refus sans explication.
+
+Chaque motif se deplie maintenant sur la liste des fichiers concernes, avec le message propre a
+  chacun.
+
+Les tailles passent en unite humaine : « la copie fait 9,83 Go, le fichier range 4,93 Go » plutot
+  que « 10552265410 vs 5293727744 octets ». C'est precisement cette comparaison qui doit permettre
+  de trancher entre les deux fichiers, et compter des chiffres n'aide pas a decider.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.40.1 (2026-09-10)
 
 ### Bug Fixes
