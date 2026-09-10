@@ -1,6 +1,40 @@
 # CHANGELOG
 
 
+## v0.39.0 (2026-09-10)
+
+### Features
+
+- **lecture**: Lire un MKV en le reemballant, sans reencoder l image
+  ([`e5d9479`](https://github.com/gsoulat/sortilege/commit/e5d9479617583b5322ab0eec7ed9d1c3d1ce571e))
+
+J'avais conclu trop vite. En ecartant le transcodage a la volee — a juste titre, il ferait chauffer
+  le NAS pour verifier trois secondes de film — j'ai laisse croire qu'un MKV etait par nature
+  illisible dans un navigateur. C'est faux, et la confusion est la mienne : le CONTENEUR n'est pas
+  le contenu.
+
+Une release H.264 dans un MKV est parfaitement lisible par un navigateur. Il suffit de changer
+  d'emballage, ce qui ne touche pas une seule image et ne coute presque rien en processeur. Seule la
+  piste audio est reencodee quand il le faut — AC-3 et DTS sont courants dans les MKV et ne passent
+  nulle part — et c'est sans commune mesure avec une video.
+
+Verifie dans le conteneur, sur un vrai fichier :
+
+MKV h264 + ac3 -> MP4 h264 + aac
+
+L'image est copiee telle quelle. Le HEVC, lui, reste refuse : le reemballer ne suffirait pas, il
+  faudrait le reencoder — et la, les vignettes repondent deja a la question sans faire tourner le
+  NAS. L'interface le dit plutot que de laisser un lecteur noir.
+
+Deux details qui evitent des ennuis. Le flux est FRAGMENTE, donc il commence a arriver immediatement
+  au lieu d'attendre le reemballage complet ; en contrepartie la barre ne permet pas de sauter, d'ou
+  un parametre de position. Et le processus est TUE des que le client se detache : sans cela, fermer
+  un lecteur laisserait ffmpeg lire le fichier jusqu'au bout, et quelques ouvertures suffiraient a
+  saturer le NAS avec du travail que plus personne n'attend.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.38.1 (2026-09-10)
 
 ### Bug Fixes
