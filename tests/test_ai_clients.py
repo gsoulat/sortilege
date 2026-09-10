@@ -228,3 +228,53 @@ def test_le_modele_par_defaut_est_utilise_si_vide() -> None:
     resolver = build_resolver("mistral", "cle", "")
     assert resolver is not None
     assert resolver._model == BY_KEY["mistral"].default_model
+
+
+# --- Ce que l'utilisateur doit pouvoir lire ---------------------------------
+#
+# « J'ai active le resolveur et rien ne se passe. » Toutes les raisons de
+# renoncer partaient dans les journaux, que personne ne lit avant d'avoir un
+# doute — et le doute arrive precisement quand rien ne se passe.
+
+
+def test_une_cle_manquante_est_nommee() -> None:
+    from sortilege.core.ai import resolver_status
+
+    ok, motif = resolver_status("openai", "", "gpt-4o-mini")
+
+    assert ok is False
+    assert "clé" in motif
+
+
+def test_un_fournisseur_inconnu_est_nomme() -> None:
+    from sortilege.core.ai import resolver_status
+
+    ok, motif = resolver_status("inexistant", "cle", "modele")
+
+    assert ok is False
+    assert "inconnu" in motif
+
+
+def test_un_service_local_se_passe_de_cle() -> None:
+    """Exiger une cle interdirait le seul fournisseur qui ne coute rien."""
+    from sortilege.core.ai import resolver_status
+
+    assert resolver_status("ollama", "", "llama3.1")[0] is True
+
+
+def test_une_configuration_complete_est_declaree_prete() -> None:
+    from sortilege.core.ai import resolver_status
+
+    assert resolver_status("groq", "gsk_factice", "llama-3.3-70b-versatile") == (True, "")
+
+
+def test_chaque_fournisseur_propose_des_modeles() -> None:
+    """Le champ reste libre, mais partir d'une page blanche oblige a aller
+    chercher un nom de modele ailleurs — et a le recopier sans faute."""
+    from sortilege.core.ai import PROVIDERS
+
+    for info in PROVIDERS:
+        if info.key == "custom":
+            continue  # saisie libre par definition
+        assert info.models, info.key
+        assert info.default_model in info.models, info.key

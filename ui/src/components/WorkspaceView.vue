@@ -37,7 +37,27 @@ const picking = ref(null)
 const choosing = ref(false)
 const filter = ref('all')
 
-const KINDS = { movie: 'Film', episode: 'Série', anime: 'Anime' }
+const KINDS = { movie: 'Film', episode: 'Série', anime: 'Anime', book: 'Livre' }
+
+/**
+ * D'où vient l'identification. Deux plans à 82 % ne se valent pas selon qu'ils
+ * viennent d'une fiche TMDB ou d'une supposition d'un modèle de langage : un
+ * score nu demande de faire confiance sans savoir à qui.
+ */
+const ORIGINES = {
+  tmdb: { court: 'TMDB', long: 'Fiche TMDB' },
+  tvdb: { court: 'TVDB', long: 'Fiche TheTVDB' },
+  anilist: { court: 'AniList', long: 'Fiche AniList' },
+  ia: { court: 'IA', long: "Le résolveur a proposé le titre, la fiche vient du fournisseur" },
+  memoire: { court: 'mémoire', long: 'Tu avais déjà tranché pour ce titre' },
+  manuel: { court: 'ton choix', long: 'Candidat choisi à la main' },
+  fichier: { court: 'fichier', long: 'Métadonnées lues dans le fichier lui-même' },
+  nom: { court: 'nom', long: 'Deviné depuis le nom du fichier, rien de plus' },
+}
+
+function origine(plan) {
+  return ORIGINES[plan.identified_by] ?? ORIGINES.nom
+}
 
 /**
  * Ce qui demande un arbitrage : les plans douteux ET les plans écartés.
@@ -1200,6 +1220,7 @@ onUnmounted(() => clearInterval(poller))
               <template v-for="p in w.pending.ready" :key="p.id">
                 <li>
                   <span class="score ok">{{ (p.score * 100).toFixed(0) }}</span>
+                  <span class="origine" :title="origine(p).long">{{ origine(p).court }}</span>
                   <code class="from">{{ shortPath(p.source) }}</code>
                   <span class="arrow">→</span>
                   <code class="to">{{ shortPath(p.destination) }}</code>
@@ -1289,6 +1310,7 @@ onUnmounted(() => clearInterval(poller))
                           : 'Score de confiance'">
                     {{ (p.score * 100).toFixed(0) }}
                   </span>
+                  <span class="origine" :title="origine(p).long">{{ origine(p).court }}</span>
                   <code class="from">{{ shortPath(p.source) }}</code>
                   <button class="small play" title="Vérifier le contenu"
                           @click="togglePlayer(p.id)">
@@ -1507,6 +1529,11 @@ onUnmounted(() => clearInterval(poller))
 </template>
 
 <style scoped>
+.origine {
+  font-size: 10px; padding: 1px 7px; border-radius: 20px; white-space: nowrap;
+  background: var(--surface-2); color: var(--text-faint);
+  text-transform: uppercase; letter-spacing: .04em;
+}
 .rien { display: flex; flex-direction: column; gap: 10px; }
 .par-type { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
 .par-type li { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; font-size: 12px; }

@@ -58,6 +58,9 @@ def _plan_out(plan: Plan, *, with_alternatives: bool = False) -> dict[str, objec
         "reasons": plan.reasons,
         "error": plan.error,
         "manual": plan.manual,
+        # D'ou vient l'identification. Un score nu demande de faire confiance
+        # sans savoir a qui.
+        "identified_by": plan.identified_by,
     }
     if with_alternatives:
         out["alternatives"] = [

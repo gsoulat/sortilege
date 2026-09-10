@@ -217,6 +217,7 @@ class Pipeline:
             plan.decision = Decision.AUTO
             plan.score = 1.0
             plan.manual = True
+            plan.identified_by = "memoire"
             plan.reasons = [
                 f"identification memorisee : {decision.title}"
                 + (f" ({decision.year})" if decision.year else ""),
@@ -357,6 +358,7 @@ class Pipeline:
         )
         plan.alternatives = others[:8]
         plan.manual = True
+        plan.identified_by = "manuel"
 
         if plan.destination is not None:
             plan.decision = Decision.AUTO
@@ -577,13 +579,19 @@ class Pipeline:
 
         match.signals.ai_confidence = proposal.confidence
 
-        return build_plan(
+        plan = build_plan(
             rescanned,
             match,
             template=self._templates.get(_kind_key(corrected.kind), ""),
             destination_root=self._destination_for(_kind_key(corrected.kind), rescanned.size_bytes),
             policy=self._policy,
         )
+        # La fiche vient bien du fournisseur, mais c'est le modele qui a trouve
+        # QUOI lui demander. Afficher « TMDB » masquerait le maillon dont on
+        # veut justement se mefier — et deux plans a 82 % ne se valent pas selon
+        # qu'ils viennent d'une lecture de nom ou d'une supposition de modele.
+        plan.identified_by = "ia"
+        return plan
 
 
 def _kind_from(value: str, fallback: MediaKind) -> MediaKind:

@@ -76,6 +76,16 @@ class Plan:
     """Le candidat a ete choisi par un humain. Un choix explicite vaut mieux
     que n'importe quel score : on ne le repasse pas au calcul."""
 
+    identified_by: str = ""
+    """D'ou vient l'identification : « tmdb », « ia », « memoire », « manuel »,
+    « fichier », ou vide quand seul le nom a parle.
+
+    Deux plans a 82 % ne se valent pas selon qu'ils viennent d'une fiche TMDB
+    ou d'une supposition d'un modele de langage. Sans cette information, un
+    score nu demande de faire confiance sans savoir a qui — et c'est
+    exactement ce qu'on refuse de demander pour une operation qui deplace des
+    fichiers."""
+
     @property
     def is_noop(self) -> bool:
         """Le fichier est deja exactement la ou il devrait etre.
@@ -240,6 +250,7 @@ def build_plan(
         reasons=reasons,
         title=match.candidate.title,
         year=match.candidate.year,
+        identified_by=match.candidate.provider,
         provider=match.candidate.provider,
         external_id=match.candidate.external_id,
         poster_url=match.candidate.poster_url,
@@ -359,6 +370,7 @@ def build_book_plan(
         score=score,
         decision=Decision.AUTO if sur else Decision.REVIEW,
         reasons=motifs,
+        identified_by="fichier" if sur else "nom",
         title=valeurs["title"],
         year=valeurs["year"],
         companions=compagnons,

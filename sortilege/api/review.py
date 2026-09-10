@@ -229,6 +229,7 @@ def _plan_out(plan: Plan) -> dict[str, object]:
         "error": plan.error,
         "is_noop": plan.is_noop,
         "manual": plan.manual,
+        "identified_by": plan.identified_by,
         "alternatives": [
             {
                 "provider": c.provider,
