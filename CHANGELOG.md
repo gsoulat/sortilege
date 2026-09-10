@@ -1,6 +1,35 @@
 # CHANGELOG
 
 
+## v0.48.1 (2026-09-10)
+
+### Bug Fixes
+
+- **notifications**: Ne parler que quand un fichier a ete range
+  ([`964c189`](https://github.com/gsoulat/sortilege/commit/964c1895497db21da8800a47273858d2555ec8bb))
+
+Le canal Discord recevait « Cycle automatique termine — rien de nouveau a identifier » toutes les
+  quinze minutes, jour et nuit.
+
+La cause est un mauvais critere : la notification partait des qu'un fichier avait ete DETECTE. Or «
+  detecte » est un ETAT, pas un evenement. Les memes fichiers sont revus a chaque tour, et un
+  fichier qu'on ne peut pas planifier — deja passe par le calcul, ou en attente d'arbitrage — reste
+  detecte indefiniment. Le canal repetait donc la meme phrase quatre fois par heure.
+
+C'est le pire resultat possible pour une notification : un canal qui se repete n'est plus lu, et les
+  rares messages qui comptent disparaissent avec le reste. La docstring promettait pourtant le
+  silence — elle decrivait une intention, pas le code.
+
+Desormais un seul evenement merite d'interrompre quelqu'un : un fichier a REELLEMENT ete range. Le
+  titre le dit directement (« 3 fichier(s) range(s) »), et la file d'arbitrage n'apparait plus qu'en
+  complement d'un message que le rangement justifiait deja. Les echecs gardent leur chemin et leur
+  reglage.
+
+Le texte des reglages est corrige dans le meme geste : il promettait ce silence depuis le debut.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.48.0 (2026-09-10)
 
 ### Features
