@@ -1,6 +1,39 @@
 # CHANGELOG
 
 
+## v0.40.1 (2026-09-10)
+
+### Bug Fixes
+
+- Borner le nom en corbeille, et cesser d annoncer un effacement pas fait
+  ([`1c85971`](https://github.com/gsoulat/sortilege/commit/1c859712930e7801d0709f6cb7b62ee609dc547f))
+
+**Un nom de fichier trop long faisait echouer l'evacuation.** La corbeille aplatit le chemin
+  d'origine dans le nom, et une release 4K au titre a rallonge produisait deux cent cinquante-sept
+  octets — deux de trop pour la limite d'un composant. L'erreur etait rangee sous « deplacement
+  impossible : disque plein, volume en lecture seule, ou chemin trop long », ce qui envoyait
+  chercher de la place qu'on avait deja.
+
+Le nom est desormais borne. Quand il faut couper, on garde la FIN : elle porte le nom reel du
+  fichier, celui qui permet de le reconnaitre, la ou le debut n'est que le chemin des dossiers
+  parents. Une empreinte du chemin complet est prefixee, sans quoi deux fichiers de meme fin se
+  recouvriraient en corbeille — exactement la perte qu'elle existe pour eviter. La coupe se fait sur
+  les octets, pas les caracteres : tronquer au milieu d'un accent produirait un nom invalide.
+
+Errno 36 recoit aussi son propre motif, distinct de « deplacement impossible ». Un manque de place
+  et un nom trop long ne se corrigent pas du meme cote.
+
+**« Tout effacer » annoncait au present ce qui n'avait pas eu lieu.** Le bouton demande un second
+  clic, mais l'avertissement disait « La liste entiere EST effacee » — on croyait donc l'action
+  faite alors qu'elle attendait. Il est maintenant au futur, dit explicitement qu'il faut cliquer a
+  nouveau, et offre de renoncer.
+
+C'est le meme defaut que ceux que je traque dans le code, applique a une phrase : annoncer un etat
+  qui n'est pas le bon.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.40.0 (2026-09-10)
 
 ### Features
