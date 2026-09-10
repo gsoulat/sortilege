@@ -1,6 +1,52 @@
 # CHANGELOG
 
 
+## v0.45.0 (2026-09-10)
+
+### Features
+
+- **reencodage**: Moteur nocturne, budget de poids, verification au matin
+  ([`d818d7c`](https://github.com/gsoulat/sortilege/commit/d818d7c21dcb763e1345626185c50dade4db5ca5))
+
+Le chantier complet : mettre en file le soir, encoder la nuit, verifier et remplacer le lendemain.
+
+Trois decisions structurent le moteur, et elles decoulent de la meme observation — reencoder est
+  lent, couteux et destructeur :
+
+1. L'original n'est JAMAIS touche pendant l'encodage. Le resultat est ecrit a cote. Coupure de
+  courant, disque plein, ffmpeg tue par l'OOM killer : on perd du temps de calcul, jamais un film.
+
+2. Le remplacement est un geste humain, separe et posterieur. Un encodeur qui remplacerait tout seul
+  demanderait une confiance aveugle sur une operation qu'on ne peut pas defaire — il suffit d'un
+  filtre mal choisi pour degrader deux cents episodes pendant la nuit.
+
+3. Un seul encodage a la fois. Deux ffmpeg en parallele sur un NAS ne vont pas deux fois plus vite :
+  ils se disputent le processeur et rendent la machine inutilisable pour ce a quoi elle sert —
+  servir des films.
+
+Le controle avant remplacement porte sur la DUREE autant que sur la taille. Un encodage interrompu
+  produit un fichier plus court ET plus petit : sans cette verification, il ressemblerait a une
+  reussite particulierement efficace, et on remplacerait un film entier par ses vingt premieres
+  minutes. Un gain inferieur a dix pour cent est refuse aussi — perdre de la qualite pour ca est un
+  mauvais marche. Et l'original part en corbeille, jamais a la suppression : un reencodage peut etre
+  visuellement decevant sans que rien d'automatique l'ait vu.
+
+Budget de poids par type, en prime, parce que la resolution ne dit pas tout : deux fichiers en 1080p
+  peuvent peser 1,2 Go et 6 Go selon leur debit. « Un episode, 500 Mo, pas plus » est une contrainte
+  a part entiere, qui attrape des fichiers que la strategie de resolution laisse passer — et
+  l'encodeur vise alors ce poids par un debit calcule, au lieu d'une qualite constante qui produit
+  le poids qu'elle produit. Zero par defaut : un budget impose d'office ferait apparaitre des
+  centaines de fichiers a reencoder chez quelqu'un qui n'a rien demande.
+
+Corrige au passage un defaut qui bloquait des fichiers pour toujours : les plans ECARTES par le
+  score n'etaient affiches nulle part. Ils comptaient dans « a traiter », la ligne apparaissait, et
+  l'ouvrir ne montrait rien — ni le fichier, ni un lecteur, ni un bouton. Le fichier restait donc
+  dans la source indefiniment. Ils rejoignent la liste d'arbitrage, avec leur lecteur et leurs
+  alternatives : un score bas dit l'incertitude de la MACHINE, pas celle de la personne qui regarde.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.44.0 (2026-09-10)
 
 ### Code Style
