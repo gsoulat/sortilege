@@ -1,6 +1,25 @@
 # CHANGELOG
 
 
+## v0.48.0 (2026-09-10)
+
+### Features
+
+- **source**: Signaler l'IA sur la ligne, pas seulement dans le detail
+  ([`390105f`](https://github.com/gsoulat/sortilege/commit/390105fa1abcf93b5c6804a5bfac88b47d8ea01b))
+
+L'origine de l'identification etait affichee a cote de chaque fichier, donc seulement une fois la
+  ligne ouverte. Or c'est AVANT d'ouvrir qu'on decide s'il faut regarder : une identification
+  proposee par un modele de langage merite un coup d'oeil que la meme, a cent pour cent, venue d'une
+  fiche TMDB ne demande pas.
+
+Un seul fichier propose par l'IA suffit a marquer l'oeuvre : le noyer dans une majorite de fiches
+  TMDB reviendrait a ne pas le dire. Et quand aucun fournisseur n'a rien apporte du tout, la ligne
+  le dit aussi — « nom seul ».
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.47.0 (2026-09-10)
 
 ### Bug Fixes
