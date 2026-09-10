@@ -1,6 +1,108 @@
 # CHANGELOG
 
 
+## v0.46.0 (2026-09-10)
+
+### Features
+
+- **ia**: Proposer les modeles du fournisseur, et dire si le resolveur est pret
+  ([`7b0b888`](https://github.com/gsoulat/sortilege/commit/7b0b888420793f88dd2b07eb13930a9e3953d872))
+
+Deux manques qui se repondaient : on cochait « activer », on voyait un champ « modele » vide, et
+  rien n'indiquait ensuite si quoi que ce soit fonctionnait.
+
+- Le champ modele propose les modeles connus du fournisseur choisi. Une liste et non un menu ferme :
+  elle est figee a la publication de cette version, et un modele sorti depuis doit rester
+  saisissable sans attendre une mise a jour. - L'etat du resolveur s'affiche sous la case a cocher —
+  la ou l'on se pose la question — avec la raison quand il est inutilisable : cle absente, modele
+  vide, paquet manquant. Ces raisons partaient dans les journaux, que personne ne lit avant d'avoir
+  un doute. - Une phrase precise que « operationnel » ne veut pas dire « actif » : le resolveur
+  n'est appele que pour les fichiers dont le score passe sous le seuil. Un lot bien identifie n'en
+  declenche aucun, et c'est voulu — mais indiscernable d'une panne tant que rien ne le dit.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+- **livres**: Epub et PDF dans le pipeline, avec lecteur integre
+  ([`037f52b`](https://github.com/gsoulat/sortilege/commit/037f52bf51b0ee68c124368551847786307407af))
+
+Un renversement complet par rapport a la video, et c'est ce qui rend les livres plus simples a
+  ranger qu'un film : un EPUB PORTE ses metadonnees. Le format impose un manifeste — titre, auteur,
+  editeur, ISBN, serie, tome — renseigne par celui qui a fabrique le fichier, la ou un nom de
+  release ment.
+
+Consequence directe : un livre ne passe par AUCUN fournisseur. Interroger une base pour confirmer ce
+  que l'editeur a lui-meme inscrit serait payer un appel reseau pour rien. Le verdict vient de la
+  qualite de ce que le fichier declare — titre ET auteur lus dans le fichier partent seuls, le reste
+  passe en revue.
+
+Ce que ca implique ailleurs :
+
+- Le scanner accepte les livres, avec un plancher de taille distinct : le seuil video de cinquante
+  mega-octets ecarterait TOUS les livres, qui en pesent deux. Le seuil reste utile pour la meme
+  raison — trois kilo-octets sont un telechargement avorte, pas un roman. - Quand le fichier ne dit
+  rien — MOBI, CBZ, EPUB casse — le nom sert de filet : « Auteur - Titre », convention la plus
+  repandue. En cas de doute tout va dans le titre : se tromper d'auteur rendrait le livre
+  introuvable pour qui le cherche au bon endroit, ce qui est pire que de n'avoir pas d'auteur. -
+  Nouveaux jetons de gabarit : auteur, serie, tome, editeur, ISBN. Le gabarit par defaut prefixe le
+  tome au titre plutot que de le suffixer — c'est ce qui fait que l'ordre alphabetique d'un dossier
+  suit l'ordre de lecture. - Une strategie de qualite n'est plus exigee pour les livres : resolution
+  et debit n'ont aucun sens pour un roman, et l'exiger bloquait l'enregistrement des preferences.
+
+Le lecteur sert les chapitres depuis le serveur plutot que de dezipper dans le navigateur : zipfile
+  est dans la bibliotheque standard, la premiere page arrive sans attendre le livre entier, et
+  surtout le contenu passe par un filtre.
+
+Ce dernier point est le vrai sujet. Le contenu d'un EPUB est du CODE ETRANGER : le format autorise
+  le JavaScript, et un livre telecharge n'est pas plus digne de confiance qu'une page web
+  quelconque. Deux protections independantes, parce que le nettoyage est du filtrage — donc
+  faillible par nature — et que le bac-a-sable est structurel :
+
+1. le HTML est nettoye a la lecture (scripts, cadres, gestionnaires d'evenements, liens «
+  javascript: ») ; 2. il est servi avec un en-tete CSP « sandbox » et affiche dans un cadre sans
+  autorisation d'execution.
+
+Verifie dans un navigateur : Chrome refuse effectivement d'executer le script d'un chapitre piege.
+
+Trois corrections dans le meme lot :
+
+- « Ce n'est pas ça » ne repondait plus. Le selecteur de candidats etait reste branche sur la seule
+  liste « a arbitrer » quand les plans ecartes l'ont rejointe : le bouton armait un selecteur que
+  rien n'affichait. Regression que j'avais introduite en rendant les ecartes visibles. - L'onglet
+  reencodage explique desormais POURQUOI il ne propose rien. « Rien a reencoder » est vrai mais
+  inutile : quelqu'un qui vient de regler ses series et n'en voit aucune proposee ne peut pas savoir
+  si ses fichiers sont conformes ou si sa strategie ne demandera jamais rien. Le cas le plus
+  frequent est le second — « Qualité maximale » ne classe aucune resolution inferieure devant la
+  courante, donc elle ne propose jamais de reduire. - Le resolveur IA dit s'il est utilisable, et
+  sinon pourquoi : cle absente, modele vide, paquet manquant. Toutes ces raisons partaient dans les
+  journaux, que personne ne lit avant d'avoir un doute. Les modeles connus de chaque fournisseur
+  sont proposes, le champ restant libre pour un modele sorti apres cette version.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+- **source**: Dire d'ou vient chaque identification
+  ([`36ff546`](https://github.com/gsoulat/sortilege/commit/36ff5464f73b5398565e39aad7915d7577f1462d))
+
+Un score nu demande de faire confiance sans savoir a qui. Deux plans a 82 % ne se valent pas selon
+  qu'ils viennent d'une fiche TMDB, d'une supposition d'un modele de langage, ou d'une simple
+  lecture du nom de fichier — et c'est precisement quand le score est moyen qu'on a besoin de le
+  savoir pour trancher.
+
+Chaque plan porte donc son origine, affichee a cote du score : TMDB, TVDB, AniList, IA, memoire («
+  tu avais deja tranche »), ton choix, fichier (les metadonnees d'un livre), ou nom (devine, rien de
+  plus).
+
+Le cas de l'IA merite d'etre distingue meme si la fiche vient bien du fournisseur : c'est le modele
+  qui a trouve QUOI lui demander. Afficher « TMDB » masquerait le maillon dont on veut justement se
+  mefier.
+
+Ajoute aussi ce qui manquait pour comprendre le resolveur, verifie par des tests : il n'est appele
+  QUE pour les fichiers dont le score est sous le seuil et qui ne sont pas automatiques. Une
+  bibliotheque bien identifiee ne declenche donc aucun appel — c'est voulu, mais indiscernable d'une
+  panne tant que rien ne le dit.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.45.0 (2026-09-10)
 
 ### Features
