@@ -1,6 +1,67 @@
 # CHANGELOG
 
 
+## v0.43.0 (2026-09-10)
+
+### Bug Fixes
+
+- **reglages**: Retirer une declaration en double qui cassait le build
+  ([`49d8c64`](https://github.com/gsoulat/sortilege/commit/49d8c64b3cddfc7369db333ec322efa69ccc0baa))
+
+KIND_LABELS existait deja en tete du fichier ; j'en ai ajoute une seconde en posant le bloc des
+  strategies, et j'ai commite sans regarder le resultat du build. Il echouait sur « Identifier
+  'KIND_LABELS' has already been declared ».
+
+Le commit precedent ne produisait donc aucune interface utilisable — les tests Python passaient, ce
+  qui ne dit rien de la compilation du frontend.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+### Features
+
+- **qualite**: Choisir la strategie de conservation, par type d oeuvre
+  ([`6738430`](https://github.com/gsoulat/sortilege/commit/6738430cb5dfd11ee9e9e47789ac3fd2a6f10353))
+
+La regle etait codee en dur : la plus haute resolution gagne, puis le plus gros fichier. C'est une
+  preference deguisee en regle, et elle ne convient pas a tout le monde — un remux 4K de soixante
+  gigaoctets n'a pas la meme valeur pour qui archive un film et pour qui garde deux cents episodes
+  sur un NAS.
+
+Trois strategies, et le choix se fait PAR TYPE. C'est le point ou cette approche depasse celle de
+  Radarr, qui impose une echelle unique : en pratique on veut souvent du 2160p pour un film qu'on
+  regardera une fois avec attention, et du 720p pour une serie qu'on laisse tourner.
+
+Qualite maximale 2160p › 1080p › 720p › 576p › 480p Equilibre 1080p › 720p › 2160p › 576p › 480p
+  Economie de place 720p › 1080p › 576p › 480p › 2160p
+
+Dans les deux dernieres, la 4K passe volontairement APRES des resolutions plus basses : elle triple
+  le poids pour un gain que peu d'ecrans restituent, et c'est precisement ce qu'une strategie «
+  economie » doit exprimer.
+
+La strategie s'applique a deux endroits : le classement des doublons, et l'arbitrage entre un
+  fichier deja range et une copie de taille differente. Dans ce second cas, la resolution du fichier
+  range est MESUREE par ffprobe — il ne figure dans aucun scan de source, et son nom, que nous lui
+  avons donne, ne mentionne pas toujours sa resolution.
+
+Trois choix qui evitent des surprises :
+
+Une resolution absente arrive DERNIERE, jamais premiere. On ne remplace pas une certitude par une
+  inconnue, meme modeste.
+
+« 4K », « UHD » et « 2160p » sont ramenes a la meme valeur, sinon aucune comparaison ne
+  fonctionnerait et l'utilisateur ne comprendrait pas pourquoi sa 4K n'est pas reconnue.
+
+Le verdict porte son MOTIF — « 1080p l'emporte sur 2160p, strategie Equilibre ». Remplacer un
+  fichier sans dire ce qui l'a emporte laisse devant un resultat qu'on ne peut ni verifier ni
+  contester.
+
+21 tests, dont celui qui verifie qu'« Economie de place » ecarte bien la 4K : une strategie qui ne
+  ferait pas ce que son libelle annonce serait pire qu'un reglage absent, parce qu'on lui ferait
+  confiance.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.42.0 (2026-09-10)
 
 ### Features
