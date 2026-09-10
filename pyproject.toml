@@ -64,6 +64,26 @@ commit_message = "chore(release): v{version} [skip ci]"
 build_command = ""
 tag_format = "v{version}"
 
+# Un « refactor » livre du code a l'utilisateur, exactement comme un « fix ».
+# Le reglage par defaut ne retient que feat et fix : la refonte de l'interface,
+# ecrite en refactor, est passee la CI au vert SANS produire aucune image — le
+# travail etait pousse et inaccessible, ce qui est pire qu'un echec visible.
+[tool.semantic_release.commit_parser_options]
+allowed_tags = [
+    "feat",
+    "fix",
+    "perf",
+    "refactor",
+    "style",
+    "docs",
+    "test",
+    "build",
+    "ci",
+    "chore",
+]
+minor_tags = ["feat"]
+patch_tags = ["fix", "perf", "refactor"]
+
 [tool.semantic_release.branches.main]
 match = "main"
 
