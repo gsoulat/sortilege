@@ -1,6 +1,36 @@
 # CHANGELOG
 
 
+## v0.38.1 (2026-09-10)
+
+### Bug Fixes
+
+- **evacuation**: Diagnostiquer partout, et cesser d appeler « echec » un refus
+  ([`a17fd29`](https://github.com/gsoulat/sortilege/commit/a17fd292e5ca429383adf1430f8e6e4c8fbb98e4))
+
+Deux corrections tirees d'un cas reel.
+
+**Le diagnostic manquait sur un chemin.** Quand la corbeille contient deja le fichier, l'evacuation
+  supprime l'exemplaire surnumeraire — et ce chemin-la n'ajoutait pas le message qui nomme le
+  proprietaire du dossier. C'est precisement celui qu'on emprunte apres une premiere tentative
+  interrompue, donc le plus frequent en pratique : le seul ou le diagnostic manquait etait le seul
+  dont on avait besoin.
+
+**Vingt-sept refus etaient etiquetes « Echec ».** Ils n'en sont pas. Le fichier range et la copie
+  n'ont pas la meme taille — 1 439 234 650 contre 1 442 789 811 octets dans le cas observe — donc ce
+  sont deux ENCODAGES distincts de la meme oeuvre, pas deux exemplaires du meme fichier. Le refus
+  est le comportement voulu : supprimer l'un des deux ferait perdre une version.
+
+Mais l'appeler « echec » induit en erreur, et surtout cache ce qu'il faut faire. C'est une decision
+  qu'aucun algorithme ne peut prendre a la place de l'utilisateur : comparer les deux, garder celui
+  qu'il prefere. Le libelle le dit maintenant, et renvoie a l'apercu video pour comparer.
+
+Deux autres motifs n'avaient pas d'explication et tombaient dans le meme fourre-tout : fichier pas
+  encore range, et corbeille inaccessible.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.38.0 (2026-09-09)
 
 ### Features
