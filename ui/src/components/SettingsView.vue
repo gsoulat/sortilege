@@ -50,6 +50,11 @@ function onMediaServerChange(patch) {
   save({ media_server: patch })
 }
 
+function onQualityChange(patch) {
+  Object.assign(prefs.value.quality, patch)
+  save({ quality: patch })
+}
+
 function onOversizeChange(patch) {
   Object.assign(prefs.value.oversize, patch)
   save({ oversize: patch })
@@ -159,6 +164,9 @@ const ONGLETS = [
   { id: 'systeme', label: 'Système' },
 ]
 const onglet = ref('bibliotheque')
+
+const KINDS = ['movie', 'episode', 'anime']
+const KIND_LABELS = { movie: 'Films', episode: 'Séries', anime: 'Animes' }
 </script>
 
 <template>
@@ -269,6 +277,36 @@ const onglet = ref('bibliotheque')
       </div>
     </section>
 
+    <section>
+      <h3>Stratégie de qualité</h3>
+      <p class="note">
+        Quand plusieurs exemplaires d'une même œuvre existent, lequel garder ? La règle
+        était figée — la plus haute résolution gagne. C'est une préférence, pas une
+        vérité : un remux 4K de 60 Go n'a pas la même valeur pour un film qu'on regarde
+        une fois et pour une série de 200 épisodes.
+      </p>
+      <p class="note">
+        Le choix se fait <strong>par type</strong>, parce que c'est là que le besoin se
+        pose. La résolution prime toujours ; la taille ne départage qu'à résolution égale.
+      </p>
+
+      <div v-for="k in KINDS" :key="k" class="strategie">
+        <label>{{ KIND_LABELS[k] }}</label>
+        <select :value="prefs.quality[k]" @change="onQualityChange({ [k]: $event.target.value })">
+          <option v-for="s in prefs.quality_strategies" :key="s.key" :value="s.key">
+            {{ s.label }}
+          </option>
+        </select>
+        <span class="ordre">
+          {{ (prefs.quality_strategies.find((s) => s.key === prefs.quality[k])?.order ?? []).join(' › ') }}
+        </span>
+      </div>
+
+      <p v-for="s in prefs.quality_strategies" :key="s.key" class="hint">
+        <strong>{{ s.label }}</strong> — {{ s.summary }}
+      </p>
+    </section>
+
     <MaintenanceSettings
       section="renommage"
       :media-server="prefs.media_server"
@@ -361,6 +399,17 @@ const onglet = ref('bibliotheque')
 
 .onglets { display: flex; gap: 6px; flex-wrap: wrap; }
 .onglets button { font-size: 12.5px; padding: 5px 14px; color: var(--text-dim); }
+.strategie { display: flex; align-items: center; gap: 12px; margin-bottom: 9px; flex-wrap: wrap; }
+.strategie > label { min-width: 82px; font-size: 12.5px; color: var(--text-dim); }
+.strategie select {
+  font-size: 12.5px; padding: 4px 9px; min-width: 180px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text);
+}
+.strategie .ordre { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.hint { margin: 8px 0 0; font-size: 11.5px; color: var(--text-faint); line-height: 1.6; max-width: 720px; }
+.hint strong { color: var(--text-dim); }
+
 .onglets button.actif { border-color: var(--accent); color: var(--text); background: var(--surface); }
 
 .lead { margin: 8px 0 0; font-size: 12.5px; color: var(--text-faint); line-height: 1.65; max-width: 720px; }

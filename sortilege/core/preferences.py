@@ -25,6 +25,8 @@ from threading import Lock
 
 from .mediaserver import MediaServerError, validate_server_url
 from .notify import WebhookError, validate_webhook
+from .quality import BY_KEY as QUALITY_KEYS
+from .quality import QualitySettings
 from .safety import PathConfinementError, resolve_within
 from .template import PRESETS, TemplateError, validate
 
@@ -169,6 +171,7 @@ class Preferences:
     oversize: OversizeSettings = field(default_factory=OversizeSettings)
     notifications: NotificationSettings = field(default_factory=NotificationSettings)
     media_server: MediaServerSettings = field(default_factory=MediaServerSettings)
+    quality: QualitySettings = field(default_factory=QualitySettings)
 
     def template_for(self, kind: str) -> str:
         return self.templates.get(kind) or PRESETS["jellyfin"].get(kind, "")
@@ -234,6 +237,9 @@ class PreferenceStore:
                 ),
                 media_server=MediaServerSettings(
                     **{**asdict(MediaServerSettings()), **(raw.get("media_server") or {})}
+                ),
+                quality=QualitySettings(
+                    **{**asdict(QualitySettings()), **(raw.get("quality") or {})}
                 ),
             )
             return self._cache
@@ -372,6 +378,11 @@ class PreferenceStore:
                 raise PreferenceError(
                     "Renseigne l'adresse du serveur avant d'activer le rafraichissement."
                 )
+
+        for kind in KINDS:
+            choix = getattr(prefs.quality, kind, None)
+            if choix not in QUALITY_KEYS:
+                raise PreferenceError(f"strategie de qualite inconnue pour « {kind} » : {choix}")
 
         if prefs.automation.quiet_seconds < 0:
             raise PreferenceError("le delai de stabilite ne peut pas etre negatif")

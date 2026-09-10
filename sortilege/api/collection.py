@@ -24,7 +24,7 @@ from ..core.matching import title_similarity
 from ..core.scanner import scan
 from ..core.trash import MIN_AGE_DAYS, inventory, purge, total_bytes
 from ..providers.tmdb import TMDBProvider
-from .deps import get_journal
+from .deps import get_journal, get_store
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +119,7 @@ async def _build() -> None:
     roots = [conf.library_root]
     result = scan(roots, deep=False, library_root=conf.library_root)
 
-    works = group(result.files)
+    works = group(result.files, get_store().load().quality)
     _job.total = len(works)
     _job.processed = 0
 

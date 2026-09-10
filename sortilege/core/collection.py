@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 
+from . import quality
 from .parser import MediaKind
 from .scanner import ScannedFile
 
@@ -38,14 +39,20 @@ class FileRef:
     codec: str = ""
     source: str = ""
 
+    strategy_key: str = ""
+    """Strategie retenue pour departager. Vide = qualite maximale, l'ancien
+    comportement code en dur."""
+
     @property
     def rank(self) -> tuple[int, int]:
-        """Resolution d'abord, taille ensuite.
+        """Rang selon la strategie choisie pour ce type d'oeuvre.
 
-        La resolution prime : un 2160p compresse vaut mieux qu'un 1080p
-        volumineux. A resolution egale, le plus gros a generalement le meilleur
-        debit."""
-        return (_RESOLUTION_RANK.get(self.resolution, 0), self.size_bytes)
+        C'etait une regle codee en dur — la plus haute resolution gagne, puis le
+        plus gros fichier. C'est une preference, pas une verite : un remux 4K
+        n'a pas la meme valeur pour qui archive un film et pour qui garde deux
+        cents episodes sur un NAS.
+        """
+        return quality.strategy(self.strategy_key).rank(self.resolution, self.size_bytes)
 
 
 @dataclass
@@ -146,7 +153,7 @@ def _slot_label(scanned: ScannedFile) -> str:
     return f"?{scanned.relative_path}"
 
 
-def group(files: list[ScannedFile]) -> list[Work]:
+def group(files: list[ScannedFile], reglages: quality.QualitySettings | None = None) -> list[Work]:
     """Regroupe des fichiers scannes en oeuvres, doublons compris.
 
     La cle combine type et titre normalise : deux oeuvres homonymes de types
@@ -180,6 +187,9 @@ def group(files: list[ScannedFile]) -> list[Work]:
             resolution=scanned.probe.resolution_label or parsed.resolution or "",
             codec=scanned.probe.video_codec or parsed.codec or "",
             source=parsed.source or "",
+            # La strategie suit le TYPE de l'oeuvre : la meilleure image pour
+            # les films, la plus petite empreinte pour les series.
+            strategy_key=getattr(reglages, kind, "") if reglages else "",
         )
         work.slots.setdefault(_slot_label(scanned), []).append(reference)
 

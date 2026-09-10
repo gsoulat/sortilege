@@ -34,8 +34,10 @@ from ..core.preferences import (
     OversizeSettings,
     PreferenceError,
     Preferences,
+    QualitySettings,
 )
 from ..core.probe import ffprobe_available
+from ..core.quality import STRATEGIES as QUALITY_STRATEGIES
 from .deps import get_memory, get_store
 
 router = APIRouter(prefix="/api/settings", tags=["reglages"])
@@ -80,6 +82,12 @@ class MediaServerIn(BaseModel):
     """Ecriture seule, comme les autres cles. « - » vide explicitement."""
 
 
+class QualityIn(BaseModel):
+    movie: str | None = None
+    episode: str | None = None
+    anime: str | None = None
+
+
 class OversizeIn(BaseModel):
     enabled: bool | None = None
     threshold_gb: float | None = None
@@ -96,6 +104,7 @@ class PreferencesIn(BaseModel):
     oversize: OversizeIn | None = None
     notifications: NotificationsIn | None = None
     media_server: MediaServerIn | None = None
+    quality: QualityIn | None = None
 
 
 @router.get("/preferences")
@@ -136,6 +145,11 @@ def read_preferences() -> dict[str, object]:
             "api_key_set": bool(prefs.ai.api_key),
         },
         "automation": asdict(prefs.automation),
+        "quality": asdict(prefs.quality),
+        "quality_strategies": [
+            {"key": s.key, "label": s.label, "summary": s.summary, "order": list(s.order)}
+            for s in QUALITY_STRATEGIES
+        ],
         "media_server": {
             "enabled": prefs.media_server.enabled,
             "base_url": prefs.media_server.base_url,
@@ -225,6 +239,12 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
             patch["api_key"] = key
         server = MediaServerSettings(**{**asdict(current.media_server), **patch})
 
+    qualite = current.quality
+    if body.quality is not None:
+        qualite = QualitySettings(
+            **{**asdict(current.quality), **body.quality.model_dump(exclude_none=True)}
+        )
+
     merged = Preferences(
         custom_sources=(
             current.custom_sources if body.custom_sources is None else body.custom_sources
@@ -239,6 +259,7 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
         oversize=over,
         notifications=notif,
         media_server=server,
+        quality=qualite,
     )
 
     try:

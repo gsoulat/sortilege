@@ -25,6 +25,7 @@ from ..core.journal import (
     evacuate_ranged_source,
     group_by_work,
     keep_by_size,
+    keep_by_strategy,
     undo_last,
     undo_plans,
     undo_work,
@@ -32,6 +33,7 @@ from ..core.journal import (
 from ..core.mediaserver import refresh_library
 from ..core.pipeline import BATCH_SIZE, Pipeline
 from ..core.planner import Plan
+from ..core.probe import probe_media
 from ..core.renaming import rename_plans
 from ..core.renaming import summarize as rename_summary
 from ..core.scanner import scan
@@ -90,6 +92,20 @@ class UndoRequest(BaseModel):
     plan_ids: list[str] | None = None
     """Fichiers precis. Un plan porte la video et ses compagnons : annuler un
     episode remet aussi son sous-titre en place."""
+
+
+def _resolution_of(path: Path | None) -> str | None:
+    """Resolution MESUREE d'un fichier.
+
+    Mesuree et non deduite du nom : un fichier deja range porte le nom que nous
+    lui avons donne, souvent sans mention de resolution, et un nom de release
+    ment de toute facon. C'est un appel a ffprobe par fichier — acceptable pour
+    une action explicite sur un lot borne, la ou ce serait prohibitif pendant
+    un scan.
+    """
+    if path is None or not path.is_file():
+        return None
+    return probe_media(path).resolution_label or None
 
 
 def _library_titles() -> set[str]:
@@ -626,9 +642,12 @@ class EvacuateRequest(BaseModel):
     occupee par un fichier identique."""
 
     mode: str = "trash"
-    """Ce qu'on fait des copies : « trash », « delete », ou un arbitrage par la
-    taille — « keep_smaller » / « keep_larger » — quand les deux fichiers
-    different et qu'il faut choisir lequel garder.
+    """Ce qu'on fait des copies : « trash », « delete », un arbitrage sur la
+    seule taille — « keep_smaller » / « keep_larger » — ou « strategy », qui
+    applique la strategie de qualite reglee pour le type d'oeuvre.
+
+    « strategy » est le critere le plus juste : la taille seule ne distingue
+    pas un 720p bien encode d'un 1080p compresse a l'exces.
 
     La corbeille reste le defaut. Mais quand le fichier est verifie present a
     destination ET de meme taille, la source n'est pas un fichier : c'est un
@@ -693,6 +712,7 @@ async def evacuate(body: EvacuateRequest) -> dict[str, object]:
 
     conf = get_settings()
     journal = get_journal()
+    prefs = get_store().load()
 
     with _lock:
         if body.plan_ids is not None:
@@ -722,7 +742,18 @@ async def evacuate(body: EvacuateRequest) -> dict[str, object]:
                 # Corbeille choisie PAR FICHIER : sur un NAS ou telechargements
                 # et bibliotheque sont deux partages, une corbeille commune
                 # imposerait de recopier chaque fichier au lieu de le renommer.
-                if body.mode in ("keep_smaller", "keep_larger"):
+                if body.mode == "strategy":
+                    result = keep_by_strategy(
+                        plan,
+                        journal,
+                        trash_root_for(plan.source, conf.library_root, conf.source_roots),
+                        prefs.quality.for_kind(plan.kind),
+                        candidate_resolution=_resolution_of(plan.source),
+                        # La resolution du fichier deja range n'est nulle part :
+                        # il n'appartient pas au scan des SOURCES. On la mesure.
+                        incumbent_resolution=_resolution_of(plan.destination),
+                    )
+                elif body.mode in ("keep_smaller", "keep_larger"):
                     result = keep_by_size(
                         plan,
                         journal,

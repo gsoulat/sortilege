@@ -28,6 +28,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
 
+from . import quality
 from .companions import directory_now_empty, trash_destination
 from .planner import Plan
 
@@ -452,6 +453,57 @@ def delete_ranged_source(plan: Plan) -> ApplyResult:
     )
 
 
+def keep_by_strategy(
+    plan: Plan,
+    journal: Journal,
+    trash_root: Path | None,
+    strat,
+    *,
+    candidate_resolution: str | None = None,
+    incumbent_resolution: str | None = None,
+) -> ApplyResult:
+    """Tranche entre deux exemplaires selon une STRATEGIE de qualite.
+
+    La taille seule est un critere pauvre : elle ne distingue pas un 720p bien
+    encode d'un 1080p compresse a l'exces. La strategie raisonne d'abord sur la
+    resolution, et n'utilise la taille que pour departager a resolution egale.
+
+    Le motif du verdict remonte a l'utilisateur. Remplacer un fichier de
+    bibliotheque sans dire ce qui l'a emporte le laisserait devant un resultat
+    qu'il ne peut ni verifier ni contester.
+    """
+    if plan.destination is None:
+        return ApplyResult(plan.id, False, str(plan.source), None, "aucune destination")
+    if not plan.source.is_file() or not plan.destination.is_file():
+        return ApplyResult(
+            plan.id,
+            False,
+            str(plan.source),
+            str(plan.destination),
+            "l'un des deux fichiers a disparu",
+            reason="source_missing",
+        )
+
+    verdict = quality.compare(
+        strat,
+        candidate_resolution=candidate_resolution,
+        candidate_size=plan.source.stat().st_size,
+        incumbent_resolution=incumbent_resolution,
+        incumbent_size=plan.destination.stat().st_size,
+    )
+
+    if not verdict.keep_candidate:
+        resultat = evacuate_ranged_source(plan, journal, trash_root, force=True)
+        if resultat.ok:
+            resultat.message = f"le fichier range est conserve : {verdict.reason}"
+        return resultat
+
+    resultat = _replace_with_source(plan, journal, trash_root)
+    if resultat.ok:
+        resultat.message = f"remplace par la copie : {verdict.reason}"
+    return resultat
+
+
 def keep_by_size(
     plan: Plan, journal: Journal, trash_root: Path | None, *, keep: str = "smaller"
 ) -> ApplyResult:
@@ -511,6 +563,25 @@ def keep_by_size(
             )
         return resultat
 
+    resultat = _replace_with_source(plan, journal, trash_root)
+    if resultat.ok:
+        resultat.message = (
+            f"remplace par la copie ({_lisible(taille_copie)} au lieu de "
+            f"{_lisible(taille_rangee)}), l'ancien fichier est en corbeille"
+        )
+    return resultat
+
+
+def _replace_with_source(plan: Plan, journal: Journal, trash_root: Path | None) -> ApplyResult:
+    """Met la copie a la place du fichier range, l'ancien partant en corbeille.
+
+    Extrait parce que deux criteres — la taille seule, ou une strategie de
+    qualite — aboutissent au meme geste. Le dupliquer aurait fini par les faire
+    diverger sur la partie la plus risquee du code.
+    """
+    if plan.destination is None:
+        return ApplyResult(plan.id, False, str(plan.source), None, "aucune destination")
+
     if trash_root is None:
         return ApplyResult(
             plan.id,
@@ -521,7 +592,7 @@ def keep_by_size(
             reason="no_trash",
         )
 
-    # La copie l'emporte. Le fichier range part D'ABORD en corbeille, ce qui
+    # Le fichier range part D'ABORD en corbeille, ce qui
     # libere la destination : deplacer la copie avant echouerait sur une
     # destination occupee, le refus d'ecraser etant applique dans _move.
     lot = datetime.now(UTC).strftime("%Y-%m-%d")
@@ -567,8 +638,7 @@ def keep_by_size(
         True,
         str(plan.source),
         str(plan.destination),
-        f"remplace par la copie ({_lisible(taille_copie)} au lieu de "
-        f"{_lisible(taille_rangee)}), l'ancien fichier est en corbeille",
+        "remplace par la copie, l'ancien fichier est en corbeille",
         reason="ok",
     )
 
