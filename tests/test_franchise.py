@@ -66,3 +66,44 @@ def test_franchise_seule_rejetee() -> None:
 
 def test_sans_bibliotheque_on_garde_la_deduction() -> None:
     assert franchise_for("Star Trek: Discovery", None) == "Star Trek"
+
+
+# --- Le disque comme voisinage ----------------------------------------------
+#
+# Cas reel, et le plus couteux qu'on ait vu : « Star Trek: Discovery »
+# telecharge SEUL partait dans « Series/Star Trek Discovery (2017) », et
+# telecharge le meme jour que « Star Trek: Picard » dans « Series/Star Trek/
+# Star Trek Discovery (2017) ». Deux destinations pour une meme serie selon ce
+# qui l'accompagnait : la bibliotheque finissait coupee en deux, et un serveur
+# multimedia y voyait deux series aux saisons incompletes.
+#
+# Les voisins lus sur le disque suppriment cette dependance au lot. Ils ont
+# perdu leur deux-points en devenant des noms de dossier, d'ou les cas
+# ci-dessous.
+
+
+def test_un_dossier_de_franchise_existant_suffit() -> None:
+    """Une fois « Star Trek » sur le disque, toute serie de la franchise l'y
+    rejoint — quel que soit le contenu du lot en cours."""
+    sur_le_disque = ["Star Trek", "Star Trek Discovery", "Severance"]
+
+    assert franchise_for("Star Trek: Picard", sur_le_disque) == "Star Trek"
+
+
+def test_un_voisin_sans_deux_points_compte_quand_meme() -> None:
+    """« Star Trek: Discovery » figure sur le disque sous « Star Trek
+    Discovery » : plus rien ne s'en derive, mais le prefixe reste lisible."""
+    assert franchise_for("Star Trek", ["Star Trek", "Star Trek Voyager"]) == "Star Trek"
+
+
+def test_une_serie_seule_ne_cree_pas_de_dossier() -> None:
+    """Un dossier de franchise a un seul element n'est pas un regroupement,
+    c'est un niveau de plus a traverser."""
+    assert franchise_for("Star Trek", ["Star Trek"]) is None
+    assert franchise_for("Severance", ["Severance", "Star Trek"]) is None
+
+
+def test_le_prefixe_exige_une_suite() -> None:
+    """Sans cette borne, « Star Trek » se declarerait sa propre franchise en se
+    voyant lui-meme dans la liste."""
+    assert franchise_for("Star Trek", ["Star Trek", "Star Trek "]) is None

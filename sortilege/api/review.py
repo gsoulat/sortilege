@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -109,17 +110,62 @@ def _resolution_of(path: Path | None) -> str | None:
     return probe_media(path).resolution_label or None
 
 
-def _library_titles() -> set[str]:
-    """Titres des oeuvres deja rangees.
+_ANNEE_FINALE = re.compile(r"\s*\((?:19|20)\d{2}\)\s*$")
 
-    Ils servent de voisins a la deduction de franchise : sans eux, importer
-    « Star Trek: Picard » seul ne le rangerait pas avec les Star Trek deja en
-    bibliotheque. Un index absent n'est pas une erreur — on retombe alors sur
-    les seuls titres du lot en cours.
+
+def _library_titles() -> set[str]:
+    """Titres des oeuvres deja rangees, index ET disque.
+
+    Ils servent de voisins a la deduction de franchise. Le disque compte autant
+    que l'index, et c'est ce qui manquait : l'index vit en memoire et n'existe
+    qu'apres un « Relire la bibliotheque ». Sans lui, la franchise se deduisait
+    du seul LOT en cours — donc « Star Trek: Discovery » telecharge seul partait
+    dans « Series/Star Trek Discovery (2017) », et telecharge le meme jour que
+    « Star Trek: Picard » dans « Series/Star Trek/Star Trek Discovery (2017) ».
+
+    Deux destinations pour une meme serie selon ce qui l'accompagnait : la
+    bibliotheque se retrouvait coupee en deux, et Jellyfin y voyait deux series
+    aux saisons incompletes. Le disque, lui, dit toujours la meme chose.
     """
     from . import collection
 
-    return {w.title for w in collection.current_works() if w.title}
+    titres = {w.title for w in collection.current_works() if w.title}
+    return titres | _titles_on_disk()
+
+
+def _titles_on_disk() -> set[str]:
+    """Noms des dossiers deja poses sous les destinations de series.
+
+    Un seul niveau, et les dossiers de franchise sont ouverts : c'est peu
+    couteux et cela suffit a repondre a la seule question posee — « ce
+    regroupement existe-t-il deja ? ». Une fois « Star Trek » sur le disque,
+    toute nouvelle serie Star Trek l'y rejoint, quel que soit le lot.
+    """
+    conf = get_settings()
+    prefs = get_store().load()
+    trouves: set[str] = set()
+
+    for kind in ("episode", "anime"):
+        racine = conf.library_root / prefs.destination_for(kind)
+        try:
+            enfants = [d for d in racine.iterdir() if d.is_dir()]
+        except OSError:
+            continue
+        for dossier in enfants:
+            trouves.add(_ANNEE_FINALE.sub("", dossier.name).strip())
+            # Un dossier de franchise contient des series ; ses enfants sont des
+            # titres a part entiere, et les ignorer ferait croire la franchise
+            # vide au lot suivant.
+            try:
+                trouves.update(
+                    _ANNEE_FINALE.sub("", petit.name).strip()
+                    for petit in dossier.iterdir()
+                    if petit.is_dir() and not petit.name.lower().startswith("season")
+                )
+            except OSError:
+                continue
+
+    return {t for t in trouves if t}
 
 
 def _ai_resolver():

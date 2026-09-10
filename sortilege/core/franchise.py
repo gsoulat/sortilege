@@ -117,9 +117,18 @@ def franchise_for(title: str, siblings: list[str] | None = None) -> str | None:
             return None
         folded = title.casefold()
         for other in siblings:
-            if other != title and (derived := derive_franchise(other)) is not None:
-                if derived.casefold() == folded:
-                    return title
+            if other == title:
+                continue
+            derived = derive_franchise(other)
+            if derived is not None and derived.casefold() == folded:
+                return title
+            # Les voisins lus sur le DISQUE ont perdu leur deux-points en
+            # devenant des noms de dossier : « Star Trek: Discovery » y figure
+            # sous « Star Trek Discovery », dont plus rien ne se derive. Le
+            # prefixe suffit alors — et il faut qu'il reste quelque chose
+            # apres, sans quoi « Star Trek » se declarerait sa propre franchise.
+            if other.casefold().startswith(f"{folded} ") and len(other) > len(title) + 1:
+                return title
         return None
 
     if siblings is None:
