@@ -425,3 +425,100 @@ def test_la_derniere_page_n_annonce_plus_de_suite() -> None:
     page = entries[offset : offset + limit]
 
     assert offset + len(page) >= len(entries), "plus rien apres cette page"
+
+
+# --- Les fichiers dont le parseur ne lit aucun titre ------------------------
+#
+# Cas reel : « 02x01 - Chasseurs de Prime DviX.avi » depose seul, sans dossier
+# de serie au-dessus. Le motif episodique est en TETE du nom, il ne reste rien
+# a gauche pour faire un titre. Tous ces fichiers partageaient alors la meme
+# cle vide et se fondaient dans UNE entree sans libelle : une ligne blanche a
+# la place de cinquante fichiers bien reels.
+
+
+def test_des_fichiers_sans_titre_ne_se_fondent_pas_en_une_ligne_blanche() -> None:
+    fichiers = [pending("02x01 - Chasseurs de Prime.avi"), pending("02x02 - La Chaine Brisee.avi")]
+    assert all(f.parsed.title == "" for f in fichiers), "le cas teste n'est plus le bon"
+
+    entries = build([], [], fichiers)
+
+    assert len(entries) == 2, "un fichier sans titre reste un fichier"
+    assert all(e.title for e in entries), "aucune ligne sans libelle"
+
+
+def test_un_fichier_sans_titre_s_affiche_sous_son_nom() -> None:
+    """C'est moins qu'un titre, mais c'est verifiable — et surtout ca existe a
+    l'ecran, ce qui permet d'aller voir le fichier."""
+    entries = build([], [], [pending("02x01 - Chasseurs de Prime.avi")])
+
+    assert entries[0].title == "02x01 - Chasseurs de Prime"
+
+
+# --- Ce qui est encore physiquement dans la source --------------------------
+#
+# Cas reel, et le plus couteux de tous : des dossiers pleins dans la source que
+# plus rien ne signalait. Le filtre excluait tout chemin DEJA PASSE par le
+# calcul d'identification — mais « deja identifie » ne veut pas dire « range ».
+# Un fichier dont le plan avait ete rejete, ou perdu entre deux redemarrages,
+# restait sur le disque tout en ayant disparu de la liste.
+
+
+def test_un_fichier_toujours_dans_la_source_reste_affiche(tmp_path, monkeypatch) -> None:
+    """Le disque tranche, pas l'historique. Un fichier range n'existe plus a
+    son ancien chemin puisqu'il a ete DEPLACE ; celui qui est encore la est
+    encore a traiter, quoi qu'en dise la liste des chemins deja calcules."""
+    from sortilege.api import collection as api_collection
+    from sortilege.api import library as api_library
+    from sortilege.api import review as api_review
+    from sortilege.api import workspace as api_workspace
+    from sortilege.core.scanner import ScanResult
+
+    fichier = tmp_path / "Film.2024.1080p.mkv"
+    fichier.write_bytes(b"x")
+    reste = ScannedFile(
+        # Une taille plausible : en dessous de cinquante megaoctets, le scan
+        # ecarte le fichier comme echantillon et le test ne prouverait rien.
+        path=fichier,
+        size_bytes=2 * 1024**3,
+        parsed=parse(fichier, []),
+        probe=FileProbe(),
+        relative_path=fichier.name,
+    )
+
+    monkeypatch.setattr(api_library, "last_scan", lambda: ScanResult(files=[reste]))
+    monkeypatch.setattr(api_review, "current_plans", list)
+    monkeypatch.setattr(api_collection, "current_works", list)
+    # Il est passe par le calcul : c'est justement le cas qui le faisait
+    # disparaitre.
+    monkeypatch.setattr(api_review, "planned_paths", lambda: {str(fichier)})
+
+    sortie = api_workspace.read_workspace()
+
+    assert sortie["counts"]["unplanned"] == 1, "le fichier est toujours sur le disque"
+
+
+def test_un_fichier_range_disparait_bien_de_la_liste(tmp_path, monkeypatch) -> None:
+    """L'autre moitie de la regle, sans laquelle le compteur ne descendrait
+    jamais : le scan est un instantane, un fichier deplace depuis y figure
+    encore."""
+    from sortilege.api import collection as api_collection
+    from sortilege.api import library as api_library
+    from sortilege.api import review as api_review
+    from sortilege.api import workspace as api_workspace
+    from sortilege.core.scanner import ScanResult
+
+    disparu = tmp_path / "Deja.Range.2024.mkv"
+    parti = ScannedFile(
+        path=disparu,
+        size_bytes=2 * 1024**3,
+        parsed=parse(disparu, []),
+        probe=FileProbe(),
+        relative_path=disparu.name,
+    )
+
+    monkeypatch.setattr(api_library, "last_scan", lambda: ScanResult(files=[parti]))
+    monkeypatch.setattr(api_review, "current_plans", list)
+    monkeypatch.setattr(api_collection, "current_works", list)
+    monkeypatch.setattr(api_review, "planned_paths", set)
+
+    assert api_workspace.read_workspace()["counts"]["unplanned"] == 0

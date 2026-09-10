@@ -213,7 +213,21 @@ def build(
         # Aucun identifiant de fournisseur a ce stade : seul le titre lu par le
         # parseur est disponible, et il peut differer de celui qui sortira du
         # calcul. La ligne se recollera d'elle-meme au plan suivant.
-        entry = touch([entry_key(title=scanned.parsed.title)], scanned.parsed.title)
+        titre = scanned.parsed.title
+        if titre:
+            keys = [entry_key(title=titre)]
+        else:
+            # Le parseur n'a RIEN pu lire du nom — « 02x01 - Episode.avi » sans
+            # dossier de serie au-dessus. Tous ces fichiers partageaient alors
+            # la meme cle vide et se fondaient dans UNE entree sans libelle :
+            # une ligne blanche a la place de cinquante fichiers bien reels.
+            #
+            # On les separe par leur chemin, et on affiche le nom du fichier.
+            # C'est moins qu'un titre, mais c'est verifiable — et surtout ca
+            # existe a l'ecran.
+            titre = scanned.path.stem
+            keys = [f"chemin:{scanned.path}"]
+        entry = touch(keys, titre)
         entry.pending.unplanned.append(scanned)
         entry.kind = entry.kind or str(scanned.parsed.kind)
 

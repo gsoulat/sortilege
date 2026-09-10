@@ -135,6 +135,11 @@ def collect(
     return found, skipped, errors
 
 
+LOGGED_SAMPLE = 10
+"""Combien d'exemples citer dans un journal. Une liste de trois cents noms ne
+se lit pas ; dix suffisent a reconnaitre le motif, et le compte donne
+l'ampleur."""
+
 PARTIAL_EVERY = 25
 """Frequence de publication du resultat partiel. Assez souvent pour que la
 liste se remplisse sous les yeux, assez rare pour que le cout reste
@@ -173,6 +178,8 @@ def scan(
     result.errors.extend(errors)
 
     total = len(candidates)
+    sans_titre: list[str] = []
+    logger.info("scan : %s fichier(s) video reperes dans %s racine(s)", total, len(roots))
     if on_progress:
         on_progress(0, total, "")
 
@@ -212,6 +219,26 @@ def scan(
         parsed = parse(path, ancestors)
         probe = inspect(path) if deep else FileProbe()
 
+        # Une ligne par fichier, en DEBUG : c'est le seul endroit ou l'on peut
+        # voir ce que Sortilege a compris d'un nom, et donc pourquoi une oeuvre
+        # sort mal. En INFO ce serait six mille lignes pour une bibliotheque
+        # ordinaire ; en DEBUG, c'est disponible quand on en a besoin.
+        logger.debug(
+            "%s -> titre=%r type=%s annee=%s S%sE%s res=%s",
+            path.name,
+            parsed.title,
+            parsed.kind,
+            parsed.year,
+            parsed.season,
+            parsed.episode,
+            parsed.resolution,
+        )
+        if not parsed.title:
+            # Celui-la, on le remonte : un fichier dont on ne lit AUCUN titre
+            # apparaitra sans libelle dans la liste, et c'est la premiere
+            # question qu'on se pose en le voyant.
+            sans_titre.append(str(path.relative_to(root)))
+
         result.files.append(
             ScannedFile(
                 path=path,
@@ -226,4 +253,32 @@ def scan(
         if on_progress:
             on_progress(index, total, path.name)
 
+    _report(result, sans_titre)
     return result
+
+
+def _report(result: ScanResult, sans_titre: list[str]) -> None:
+    """Ce que le scan a compris, en trois lignes lisibles dans les journaux.
+
+    Un scan qui se termine sans rien dire oblige a deviner : les fichiers
+    etaient-ils absents, ecartes, deja ranges, ou mal lus ? Chacune de ces
+    reponses appelle une action differente, et aucune ne se lit sur une barre
+    de progression.
+    """
+    deja = sum(1 for f in result.files if f.in_library)
+    logger.info(
+        "scan termine : %s analyse(s), %s deja en bibliotheque, %s ecarte(s), %s erreur(s)",
+        len(result.files),
+        deja,
+        result.skipped,
+        len(result.errors),
+    )
+    if sans_titre:
+        logger.warning(
+            "%s fichier(s) sans titre lisible — ils apparaitront sous leur nom de fichier : %s",
+            len(sans_titre),
+            ", ".join(sans_titre[:LOGGED_SAMPLE])
+            + (" …" if len(sans_titre) > LOGGED_SAMPLE else ""),
+        )
+    for erreur in result.errors[:LOGGED_SAMPLE]:
+        logger.warning("scan : %s", erreur)

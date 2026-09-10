@@ -8,6 +8,7 @@ directe : aucune configuration CORS, aucun second port a publier.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -32,7 +33,15 @@ from .config import get_settings
 from .core.auth import SESSION_COOKIE, verify_session
 from .core.probe import ffprobe_available
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# Le niveau se regle sans reconstruire l'image : SORTILEGE_LOG_LEVEL=DEBUG fait
+# apparaitre une ligne par fichier scanne — ce que le parseur a lu de chaque
+# nom. C'est verbeux par construction, donc hors du defaut, mais c'est le seul
+# moyen de comprendre pourquoi une oeuvre precise sort mal.
+_NIVEAU = os.environ.get("SORTILEGE_LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, _NIVEAU, logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "web" / "static"

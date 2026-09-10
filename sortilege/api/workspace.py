@@ -143,10 +143,17 @@ def read_workspace(limit: int = 200, offset: int = 0) -> dict[str, object]:
     """
     scan = library.last_scan()
     plans = list(review.current_plans())
-    # Les chemins DEJA PASSES par le calcul, et non ceux des plans vivants : un
-    # plan applique quitte la file, et s'y fier ferait retomber son fichier
-    # dans « pas encore planifie ». Le compteur ne descendait jamais.
-    planned = review.planned_paths() | {str(p.source) for p in plans}
+    # Seulement les plans VIVANTS. On excluait aussi tout chemin deja passe par
+    # le calcul, pour empecher le compteur de remonter quand un plan applique
+    # quittait la file. C'etait la mauvaise cle : « deja identifie » ne veut pas
+    # dire « range ». Un fichier dont le plan a ete rejete, ou perdu, restait
+    # PHYSIQUEMENT dans la source tout en ayant disparu de la liste — d'ou des
+    # dossiers pleins en source que rien ne signalait plus.
+    #
+    # Le bon critere est juste en dessous : un fichier range n'existe plus a son
+    # ancien chemin, puisqu'il a ete DEPLACE. C'est le disque qui tranche, pas
+    # une liste tenue a cote.
+    planned = {str(p.source) for p in plans}
 
     pending = (
         []
@@ -159,7 +166,8 @@ def read_workspace(limit: int = 200, offset: int = 0) -> dict[str, object]:
             and str(f.path) not in planned
             # Le scan est un instantane : un fichier range ou evacue depuis
             # figure encore dedans. L'annoncer « en attente » ferait promettre
-            # un travail qui n'aura pas lieu.
+            # un travail qui n'aura pas lieu. A l'inverse, un fichier toujours
+            # la est toujours a traiter, quoi qu'en dise l'historique.
             and f.path.exists()
         ]
     )
