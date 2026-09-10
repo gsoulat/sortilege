@@ -524,7 +524,8 @@ def evacuate_ranged_source(plan: Plan, journal: Journal, trash_root: Path | None
                 False,
                 str(plan.source),
                 str(target),
-                f"suppression impossible : {exc}",
+                f"suppression impossible : {exc}"
+                + (_permission_hint(plan.source) if isinstance(exc, PermissionError) else ""),
                 reason="permission_denied" if isinstance(exc, PermissionError) else "move_failed",
             )
         return ApplyResult(

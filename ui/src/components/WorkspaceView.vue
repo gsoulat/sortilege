@@ -269,6 +269,21 @@ const REASONS = {
     label: 'Aucune destination calculée',
     fix: "L'identification n'a rien donné pour ces fichiers.",
   },
+  size_mismatch: {
+    // Ce n'est PAS un échec, et l'appeler ainsi induit en erreur : c'est un
+    // refus délibéré, et il demande une décision qu'aucun algorithme ne peut
+    // prendre à ta place.
+    label: 'Deux fichiers différents, pas un doublon',
+    fix: "Le fichier rangé et la copie n'ont pas la même taille : ce sont deux encodages distincts de la même œuvre, pas deux exemplaires du même fichier. Rien n'a été touché — supprimer l'un des deux te ferait perdre une version. Compare-les avec « ▶ Voir », garde celui que tu préfères, et supprime l'autre toi-même.",
+  },
+  not_ranged: {
+    label: "Le fichier n'est pas à destination",
+    fix: "La copie ne peut pas être évacuée : rien ne prouve qu'elle existe ailleurs. Range-la d'abord avec « Exécuter ».",
+  },
+  no_trash: {
+    label: 'Aucune corbeille configurée',
+    fix: "La racine de bibliothèque n'est pas accessible en écriture — la corbeille y vit.",
+  },
 }
 
 const failureGroups = computed(() => {
