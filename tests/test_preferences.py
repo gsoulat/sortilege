@@ -4,6 +4,7 @@ L'enjeu principal est le confinement : l'interface devient un moyen d'ecrire
 sur le disque, elle ne doit pas pouvoir designer n'importe quelle destination.
 """
 
+import json
 from pathlib import Path
 
 import pytest
@@ -57,6 +58,52 @@ def test_fichier_corrompu_retombe_sur_les_defauts(store: PreferenceStore) -> Non
         path=store._path, library_root=store._library_root, source_roots=store._source_roots
     )
     assert neuf.load().destinations == DEFAULT_DESTINATIONS
+
+
+def test_un_reglage_disparu_est_ignore_sans_tout_emporter(store: PreferenceStore) -> None:
+    """« ai.batch_size » a quitte le code, mais pas les fichiers deja ecrits.
+
+    Le passer au constructeur leve un TypeError qu'aucun bloc ne rattrape :
+    l'application repartirait alors avec TOUTES les preferences aux defauts —
+    destinations, gabarits, sources — pour un champ qui ne sert plus. Un
+    reglage supprime doit s'oublier, pas tout emporter avec lui.
+    """
+    store._path.parent.mkdir(parents=True, exist_ok=True)
+    store._path.write_text(
+        json.dumps(
+            {
+                "destinations": {**DEFAULT_DESTINATIONS, "movie": "Cinema"},
+                "ai": {"provider": "groq", "batch_size": 12, "reglage_du_futur": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    neuf = PreferenceStore(
+        path=store._path, library_root=store._library_root, source_roots=store._source_roots
+    )
+    prefs = neuf.load()
+
+    assert prefs.destinations["movie"] == "Cinema"
+    assert prefs.ai.provider == "groq"
+    assert not hasattr(prefs.ai, "batch_size")
+
+
+def test_les_nouveaux_blocs_ont_leurs_defauts_sur_un_ancien_fichier(
+    store: PreferenceStore,
+) -> None:
+    """Un fichier ecrit avant l'arrivee des metadonnees et du parcours."""
+    store._path.parent.mkdir(parents=True, exist_ok=True)
+    store._path.write_text(json.dumps({"templates": {}}), encoding="utf-8")
+
+    prefs = PreferenceStore(
+        path=store._path, library_root=store._library_root, source_roots=store._source_roots
+    ).load()
+
+    assert prefs.metadata.language == "fr-FR"
+    assert prefs.metadata.tmdb_api_key == ""
+    assert prefs.scan.min_size_bytes() == 50 * 1024 * 1024
+    assert prefs.scan.extra_skip_dirs == []
 
 
 # --- Confinement ------------------------------------------------------------

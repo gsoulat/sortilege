@@ -36,7 +36,7 @@ from ..core.watch import Watcher
 from ..providers.anilist import AniListProvider
 from ..providers.tmdb import TMDBProvider
 from . import library, review
-from .deps import get_journal, get_memory, get_store
+from .deps import get_journal, get_memory, get_store, scan_rules, tmdb_key
 
 logger = logging.getLogger(__name__)
 
@@ -95,8 +95,13 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
         report.message = "aucune source selectionnee"
         return report
 
+    # Les memes regles pour la surveillance et pour le scan : sans cela, un
+    # fichier exclu reveillerait un cycle a chaque intervalle pour etre ecarte
+    # juste apres — une boucle de travail nul, indefiniment.
+    regles = scan_rules()
+
     _watcher.quiet_seconds = auto.quiet_seconds
-    fresh = _watcher.poll(roots)
+    fresh = _watcher.poll(roots, rules=regles)
     report.detected = len(fresh)
 
     if not fresh and not forced:
@@ -104,7 +109,7 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
         return report
 
     # --- Scan ---
-    result = scan(roots, deep=True, library_root=conf.library_root)
+    result = scan(roots, deep=True, library_root=conf.library_root, rules=regles)
     library.adopt_scan(result, deep=True)
     report.scanned = result.total
 
@@ -112,13 +117,14 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
         report.message = "aucun fichier a traiter"
         return report
 
-    if not conf.tmdb_api_key:
+    cle = tmdb_key()
+    if not cle:
         report.message = "aucune cle TheMovieDB : identification impossible"
         return report
 
     # --- Plan ---
     pipeline = Pipeline(
-        tmdb=TMDBProvider(conf.tmdb_api_key),
+        tmdb=TMDBProvider(cle, prefs.metadata.language),
         anilist=AniListProvider(),
         library_root=conf.library_root,
         templates={k: prefs.template_for(k) for k in ("movie", "episode", "anime")},
@@ -128,7 +134,6 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
             reject_threshold=conf.reject_threshold,
         ),
         ai=review._ai_resolver(),
-        ai_batch_size=prefs.ai.batch_size,
         ai_threshold=prefs.ai.threshold,
         memory=get_memory(),
         known_titles=review._library_titles(),

@@ -13,6 +13,8 @@ from typing import Annotated
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
+from .core.scoring import AUTO_APPLY_THRESHOLD, REJECT_THRESHOLD
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -41,6 +43,12 @@ class Settings(BaseSettings):
 
     # --- Fournisseurs (hors prefixe SORTILEGE_) ---
     tmdb_api_key: str = Field(default="", alias="TMDB_API_KEY")
+    """Repli seulement : la cle se saisit dans les preferences.
+
+    Elle survit ici pour les installations deja en place, dont le .env porte la
+    cle depuis le premier jour — la retirer les aurait cassees en silence, ce
+    qui est exactement ce qu'une amelioration de confort ne doit pas faire.
+    Voir ``api/deps.py``, qui arbitre entre les deux."""
 
     # Rien ici pour le resolveur IA : fournisseur, cle, modele et taille de lot
     # vivent dans les preferences et se changent depuis l'interface, sans
@@ -53,8 +61,11 @@ class Settings(BaseSettings):
     admin_password: str = ""
 
     # --- Comportement ---
-    auto_apply_threshold: float = 0.92
-    reject_threshold: float = 0.40
+    # Les defauts viennent de scoring.py, seul endroit ou ces seuils sont
+    # ecrits : c'est la que la decision est prise, et deux declarations
+    # finissent toujours par diverger sans que rien ne le signale.
+    auto_apply_threshold: float = AUTO_APPLY_THRESHOLD
+    reject_threshold: float = REJECT_THRESHOLD
 
     @field_validator("source_roots", "allowed_roots", mode="before")
     @classmethod

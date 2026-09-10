@@ -8,6 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from sortilege.config import Settings
+from sortilege.core.scoring import AUTO_APPLY_THRESHOLD, REJECT_THRESHOLD, Policy
 from sortilege.main import app
 
 
@@ -95,6 +96,20 @@ def test_seuils_incoherents_rejetes() -> None:
             secret_key="x" * 40,
             admin_password="p",
         )
+
+
+def test_les_seuils_n_ont_qu_une_source_de_verite() -> None:
+    """Ils etaient ecrits deux fois : dans la configuration et dans les defauts
+    de ``Policy``. Les seconds etaient morts — tous les appelants passaient ceux
+    de la configuration — mais une divergence future aurait ete MUETTE : le
+    comportement aurait alors dependu de qui, de l'appelant ou du defaut, avait
+    servi. Les valeurs sont desormais declarees dans ``scoring.py`` seul.
+    """
+    s = Settings(secret_key="x" * 40, admin_password="p", source_roots=["/tmp"])
+    defauts = Policy()
+
+    assert s.auto_apply_threshold == defauts.auto_apply_threshold == AUTO_APPLY_THRESHOLD
+    assert s.reject_threshold == defauts.reject_threshold == REJECT_THRESHOLD
 
 
 def test_configuration_incomplete_detectee() -> None:

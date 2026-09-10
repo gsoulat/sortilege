@@ -52,7 +52,6 @@ async def run(src: Path, lib: Path, tmdb, ai=None):
         templates={k: PRESETS["jellyfin"][k] for k in ("movie", "episode", "anime")},
         policy=Policy(auto_apply_threshold=0.92, reject_threshold=0.40),
         ai=ai,
-        ai_batch_size=12,
     )
     try:
         return await pipeline.plan_all(result.files)

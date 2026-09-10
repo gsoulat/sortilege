@@ -24,7 +24,7 @@ from ..core.matching import title_similarity
 from ..core.scanner import scan
 from ..core.trash import MIN_AGE_DAYS, inventory, purge, total_bytes
 from ..providers.tmdb import TMDBProvider
-from .deps import get_journal, get_store
+from .deps import get_journal, get_store, scan_rules, tmdb_key, tmdb_language
 
 logger = logging.getLogger(__name__)
 
@@ -137,13 +137,14 @@ async def _build() -> None:
     conf = get_settings()
 
     roots = [conf.library_root]
-    result = scan(roots, deep=False, library_root=conf.library_root)
+    result = scan(roots, deep=False, library_root=conf.library_root, rules=scan_rules())
 
     works = group(result.files, get_store().load().quality)
     _job.total = len(works)
     _job.processed = 0
 
-    tmdb = TMDBProvider(conf.tmdb_api_key) if conf.tmdb_api_key else None
+    cle = tmdb_key()
+    tmdb = TMDBProvider(cle, tmdb_language()) if cle else None
     try:
         await _enrich(works, tmdb)
     finally:

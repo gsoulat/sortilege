@@ -3,6 +3,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import CandidatePicker from './CandidatePicker.vue'
 import ImageZoom from './ImageZoom.vue'
 import BookReader from './BookReader.vue'
+import ConfirmAction from './ConfirmAction.vue'
 
 /**
  * Vue unique de la médiathèque.
@@ -21,6 +22,17 @@ import BookReader from './BookReader.vue'
  *    être enterrées sous des centaines de lignes au repos.
  */
 
+const props = defineProps({
+  /**
+   * Quel espace afficher : `source` (ce qui traîne et qu'il faut ranger) ou
+   * `library` (ce qu'on possède). Le choix se fait désormais dans la barre du
+   * haut : ce sont deux intentions, pas deux filtres, et les enterrer dans des
+   * onglets internes obligeait à entrer dans un écran pour découvrir qu'on
+   * voulait l'autre.
+   */
+  espace: { type: String, default: 'source' },
+})
+
 const data = ref(null)
 const error = ref(null)
 const message = ref(null)
@@ -29,8 +41,6 @@ const busy = ref(null)
 // Le retour d'une action sur doublons, par œuvre. Le bandeau du haut ne suffit
 // pas quand la ligne concernée est au milieu de six cents autres.
 const dupeMessage = ref({})
-const confirmingDelete = ref(null)
-const confirmingPrune = ref(false)
 const menuOuvert = ref(false)
 const lecture = ref(null)
 const open = ref(new Set())
@@ -112,19 +122,26 @@ const working = computed(
 )
 
 /**
- * Deux onglets, parce que ce sont deux gestes qui n'ont rien à voir.
+ * Ce que la liste montre à cet instant : l'espace choisi en haut, ou la file de
+ * réencodage.
  *
- * « Source » répond à « qu'est-ce qui traîne et qu'il faut ranger ». On y vient
- * pour vider, et on en repart quand il est vide. « Ma médiathèque » répond à
- * « qu'est-ce que je possède, et qu'est-ce qui cloche dedans ». On y vient pour
- * inspecter, et elle n'est jamais vide.
- *
- * Les mélanger, c'était enterrer les quelques lignes actionnables sous des
- * centaines de lignes au repos — et ne pouvoir filtrer correctement ni les unes
- * ni les autres.
+ * « Source » et « Ma médiathèque » ont quitté cette rangée pour la barre du
+ * haut. Le réencodage y reste, et c'est volontaire : ce n'est pas un troisième
+ * espace mais une file d'attente qu'on ouvre pour vérifier un résultat de la
+ * nuit, puis qu'on referme. Lui donner le même rang que les deux autres
+ * laisserait croire à une troisième médiathèque.
  */
-const onglet = ref('source')
+const onglet = ref(props.espace)
+
+// La barre du haut fait foi. Sans ce report, changer d'entrée de navigation ne
+// changerait rien à la liste — le composant étant réutilisé d'une entrée à
+// l'autre, il n'est pas remonté et son état interne survivrait tel quel.
+watch(() => props.espace, (espace) => { onglet.value = espace })
+
 const reenc = ref(null)
+// La panne de la file de réencodage, séparée de son contenu. Les confondre
+// dans un même `null` faisait passer un serveur muet pour un onglet vide.
+const reencErreur = ref(null)
 const recherche = ref('')
 const tri = ref('defaut')
 
@@ -172,6 +189,21 @@ function recuperable(w) {
 // Filtre de type, indépendant de l'état : on veut pouvoir croiser « les séries »
 // avec « celles qui pèsent lourd ».
 const kind = ref('all')
+
+/**
+ * Les types filtrables, dans l'ordre où on les cherche.
+ *
+ * Livres et animes circulaient depuis toujours dans les données — `w.kind` les
+ * vaut, `KINDS` les nomme, le lecteur d'EPUB existe — mais la rangée n'offrait
+ * que films et séries. Une médiathèque de mille livres se parcourait donc
+ * mélangée aux films, sans aucun moyen de l'isoler.
+ */
+const KIND_FILTRES = [
+  { id: 'movie', label: 'Films' },
+  { id: 'episode', label: 'Séries' },
+  { id: 'anime', label: 'Animes' },
+  { id: 'book', label: 'Livres' },
+]
 
 /** L'onglet décide de ce qui entre dans la liste, avant tout autre filtre. */
 const sousVue = ref('avoir')
@@ -230,10 +262,21 @@ watch(onglet, () => {
 })
 
 const kindCounts = computed(() => {
-  const out = { movie: 0, episode: 0, anime: 0 }
+  const out = Object.fromEntries(KIND_FILTRES.map((k) => [k.id, 0]))
   for (const w of data.value?.works ?? []) if (w.kind in out) out[w.kind] += 1
   return out
 })
+
+/**
+ * Les types qu'aucune œuvre chargée ne porte.
+ *
+ * Leur filtre reste affiché et grisé plutôt que retiré : un bouton absent ne
+ * dit rien, alors qu'un compte à zéro dit « c'est mesuré, et il n'y en a pas ».
+ * Encore faut-il le DIRE — un bouton pâle tout seul se lit comme un bogue.
+ */
+const typesVides = computed(() =>
+  KIND_FILTRES.filter((k) => !kindCounts.value[k.id]).map((k) => k.label.toLowerCase()),
+)
 
 /** Les plus lourds d'abord : c'est l'ordre utile quand on cherche de la place. */
 const bySize = computed(() => [...works.value].sort((a, b) => b.bytes_per_file - a.bytes_per_file))
@@ -254,6 +297,37 @@ function progress(job) {
   const pct = job.total ? Math.min(100, Math.round((job.processed / job.total) * 100)) : 0
   return { processed: job.processed, total: job.total, pct, current: job.current }
 }
+
+/**
+ * Pourquoi la barre d'actions est inerte, en une phrase.
+ *
+ * Vingt et un des vingt-quatre boutons de cet écran se grisent sans un mot, et
+ * les trois qui s'expliquaient le faisaient par un attribut `title` — que le
+ * doigt ne fait jamais apparaître et que le clavier n'atteint pas. Un bouton
+ * pâle qui ne réagit pas se lit alors comme une panne.
+ *
+ * Une phrase et non un texte par bouton : la cause est presque toujours
+ * commune à toute la barre, et la répéter vingt et une fois demanderait de la
+ * chercher au lieu de la lire.
+ *
+ * L'ordre des cas n'est pas arbitraire — on nomme d'abord ce qui BLOQUE, qui se
+ * terminera tout seul, puis ce qui MANQUE, qui demande un geste. L'inverse
+ * enverrait relancer un scan pendant qu'un scan tourne.
+ */
+const raisonIndispo = computed(() => {
+  if (busy.value) return "Une action est déjà en cours : les autres reprennent dès qu'elle rend la main."
+  if (working.value) {
+    return `${activity.value?.label ?? 'Un travail'} en cours : « Analyser les sources » et « Identifier » attendent la fin.`
+  }
+  const aIdentifier = counts.value.unplanned ?? 0
+  const prets = counts.value.ready ?? 0
+  if (!aIdentifier && !prets) {
+    return "Rien à identifier ni à ranger : la source est vide. « Analyser les sources » la relit si tu viens d'y déposer des fichiers."
+  }
+  if (!aIdentifier) return "« Identifier » n'a plus rien à traiter : chaque fichier de la source a déjà un plan."
+  if (!prets) return "« Ranger » attend un plan validé : aucun fichier n'est prêt. Lance « Identifier », puis arbitre ce qui est resté douteux."
+  return null
+})
 
 // Nombre d'œuvres chargées. Croît par paliers plutôt que par pages : on
 // parcourt une médiathèque en déroulant, pas en tournant des pages, et perdre
@@ -285,9 +359,17 @@ async function load() {
   // médiathèque entière coûterait cher pour un onglet fermé.
   if (onglet.value === 'transcode') {
     try {
-      reenc.value = await (await fetch('/api/transcode')).json()
-    } catch {
+      const res = await fetch('/api/transcode')
+      if (!res.ok) throw new Error(`réponse ${res.status}`)
+      reenc.value = await res.json()
+      reencErreur.value = null
+    } catch (e) {
+      // Remettre `reenc` à null vidait l'onglet ENTIER — état de ffmpeg, fenêtre
+      // horaire, files en cours — et le vide se lit comme « rien à réencoder ».
+      // Le contenu part, le motif reste : c'est la seule différence entre un
+      // onglet au repos et un serveur qui ne répond plus.
       reenc.value = null
+      reencErreur.value = e.message ?? 'sans réponse'
     }
   }
 }
@@ -396,15 +478,28 @@ async function plan({ reset = false } = {}) {
 // qu'en pratique on veut défaire UNE série mal identifiée au milieu de sept
 // cents déplacements corrects.
 const journal = ref(null)
+// La panne de lecture, distincte du journal lui-même. `journal` à null signifie
+// « pas encore lu » et rien d'autre : il ne peut pas porter en plus le sens
+// « lu, et ça a échoué ».
+const journalErreur = ref(null)
 const showUndo = ref(false)
 const undoing = ref(null)
-const WORK_KINDS = { movie: 'Film', episode: 'Série', anime: 'Anime' }
+// Les livres sont arrivés dans le pipeline sans être ajoutés ici : une œuvre
+// livre affichait son code brut, « book », au milieu de libellés français.
+const WORK_KINDS = { movie: 'Film', episode: 'Série', anime: 'Anime', book: 'Livre' }
 
 async function loadJournal() {
+  journalErreur.value = null
   try {
-    journal.value = await (await fetch('/api/review/journal')).json()
-  } catch {
+    const res = await fetch('/api/review/journal')
+    // Une 502 arrive en HTML : `res.json()` lèverait, et l'échec se rangeait
+    // sous le même `null` que l'attente — le panneau annonçait « Lecture du
+    // journal… » pour toujours. Personne ne réessaie ce qu'il croit en cours.
+    if (!res.ok) throw new Error(`réponse ${res.status}`)
+    journal.value = await res.json()
+  } catch (e) {
     journal.value = null
+    journalErreur.value = e.message ?? 'sans réponse'
   }
 }
 
@@ -490,6 +585,14 @@ const MAX_LISTE = 100
 const evacuating = ref(false)
 const evacProgress = ref(null)
 
+/**
+ * Ce qu'on dit d'un échec, et dans quel ordre.
+ *
+ * `fix` est ce qu'il y a À FAIRE, en une phrase visible. `detail` est le
+ * pourquoi, replié dans un `<details>` : sept lignes d'explication posées
+ * au-dessus de l'action à mener enterrent l'action, et on relit l'explication
+ * une fois, jamais dix.
+ */
 const REASONS = {
   destination_exists: {
     label: 'La destination existe déjà',
@@ -502,7 +605,9 @@ const REASONS = {
   },
   permission_denied: {
     label: 'Permission refusée',
-    fix: "Sortilège n'a pas le droit d'écrire là où il doit agir — le plus souvent le dossier de TÉLÉCHARGEMENT, dont les fichiers appartiennent au client qui les a créés (JDownloader, un client torrent…). Aucun réglage de Sortilège ne peut le contourner : c'est une permission du NAS. Sur le NAS : « ls -ln » sur le dossier concerné pour voir l'UID propriétaire, puis aligne PUID / PGID du conteneur dessus, ou donne l'écriture au groupe partagé par les deux conteneurs.",
+    fix: "Sur le NAS : « ls -ln » sur le dossier concerné donne l'UID propriétaire, puis aligne PUID / PGID du conteneur Sortilège dessus — ou donne l'écriture au groupe que les deux conteneurs partagent.",
+    detail:
+      "Sortilège n'a pas le droit d'écrire là où il doit agir, le plus souvent dans le dossier de TÉLÉCHARGEMENT : ses fichiers appartiennent au client qui les a créés — JDownloader, un client torrent. Aucun réglage de Sortilège ne contourne cela, c'est une permission du NAS. Le droit qui manque porte d'ailleurs sur le DOSSIER, jamais sur le fichier : sous Unix, déplacer un fichier exige d'écrire dans le répertoire qui le contient.",
   },
   move_failed: {
     label: 'Déplacement impossible',
@@ -510,7 +615,9 @@ const REASONS = {
   },
   name_too_long: {
     label: 'Nom de fichier trop long',
-    fix: "La corbeille aplatit le chemin d'origine dans le nom du fichier, et une release au titre à rallonge dépassait la limite du système. Ce n'est pas un problème de place. Corrigé : les noms trop longs sont désormais raccourcis en gardant leur fin, celle qui identifie le fichier.",
+    fix: "Raccourcis le nom de ces fichiers dans la source, puis relance « Analyser les sources » et « Identifier ».",
+    detail:
+      "La corbeille aplatit le chemin d'origine dans le nom du fichier — c'est ce qui permet de le remettre exactement d'où il vient — et une release au titre à rallonge fait dépasser la limite du système de fichiers. Ce n'est pas un problème de place disque : libérer des gigaoctets n'y changera rien.",
   },
   no_destination: {
     label: 'Aucune destination calculée',
@@ -546,6 +653,7 @@ const failureGroups = computed(() => {
       key,
       label: REASONS[key]?.label ?? 'Échec',
       fix: REASONS[key]?.fix ?? '',
+      detail: REASONS[key]?.detail ?? null,
       action: REASONS[key]?.action ?? null,
       items,
       sample: items[0].message,
@@ -566,16 +674,9 @@ let evacPoller = null
  * suppression : l'opération est journalisée, donc annulable, et une source de
  * taille différente est refusée plutôt que confondue avec un doublon.
  */
-const confirmDelete = ref(false)
-
 async function evacuate(group, { mode = 'trash' } = {}) {
-  // La suppression directe demande un second clic : elle est irréversible, et
-  // un bouton irréversible qui part au premier clic est un piège.
-  if (mode === 'delete' && !confirmDelete.value) {
-    confirmDelete.value = true
-    return
-  }
-  confirmDelete.value = false
+  // Le second clic est demandé par ConfirmAction, dans le gabarit. Le
+  // redemander ici en ferait trois, dont un sans aucune trace à l'écran.
   evacuating.value = true
   evacProgress.value = null
 
@@ -665,10 +766,6 @@ async function trashDuplicates(work) {
  * celui que la stratégie du type a déjà désigné.
  */
 async function pruneDuplicates() {
-  if (!confirmingPrune.value) {
-    confirmingPrune.value = true
-    return
-  }
   busy.value = 'prune'
   try {
     const out = await call('/api/collection/duplicates/prune', { confirm: true })
@@ -679,7 +776,6 @@ async function pruneDuplicates() {
       await load()
     }
   } finally {
-    confirmingPrune.value = false
     busy.value = null
   }
 }
@@ -694,10 +790,6 @@ async function pruneDuplicates() {
  * le serveur vérifie sa présence avant chaque suppression.
  */
 async function deleteDuplicates(work) {
-  if (confirmingDelete.value !== work.key) {
-    confirmingDelete.value = work.key
-    return
-  }
   const groups = work.owned.duplicates
     .filter((d) => d.redundant.length)
     .map((d) => ({ keep: d.keep, paths: d.redundant }))
@@ -711,7 +803,6 @@ async function deleteDuplicates(work) {
       : error.value ?? 'Échec.'
     if (out) await load()
   } finally {
-    confirmingDelete.value = null
     busy.value = null
   }
 }
@@ -765,9 +856,18 @@ async function togglePlayer(id) {
   playing.value = id
   preview.value = null
   try {
-    preview.value = await (await fetch(`/api/media/plan/${id}/positions`)).json()
-  } catch {
-    preview.value = { available: false, playable_in_browser: false }
+    const res = await fetch(`/api/media/plan/${id}/positions`)
+    if (!res.ok) throw new Error(`réponse ${res.status}`)
+    preview.value = await res.json()
+  } catch (e) {
+    // Distinguer « ce fichier ne se lit pas » de « le serveur n'a pas répondu ».
+    // Les confondre accusait le fichier d'un défaut qui venait du réseau, et
+    // envoyait chercher la panne au mauvais endroit.
+    preview.value = {
+      available: false,
+      playable_in_browser: false,
+      panne: e.message ?? 'serveur injoignable',
+    }
   }
 }
 
@@ -780,16 +880,23 @@ function agrandir(src, legende) {
   if (src) zoom.value = { src, legende }
 }
 
+/**
+ * Entrée et Espace sur une image déclarée bouton.
+ *
+ * Un `<img tabindex="0">` reçoit le focus mais n'a aucune activation native :
+ * sans ce relais, on l'atteint au clavier sans jamais pouvoir l'ouvrir — pire
+ * qu'un élément inatteignable, qui au moins ne promet rien. Espace demande le
+ * `preventDefault` : c'est le raccourci de défilement de la page.
+ */
+function agrandirTouche(e, src, legende) {
+  if (e.key !== 'Enter' && e.key !== ' ') return
+  e.preventDefault()
+  agrandir(src, legende)
+}
+
 // Remise a zero de l'etat de travail. En deux clics : ce qui part est
 // reconstructible, mais recalculer six mille plans coute des heures d'appels.
-const confirmReset = ref(false)
-
 async function remiseAZero() {
-  if (!confirmReset.value) {
-    confirmReset.value = true
-    return
-  }
-  confirmReset.value = false
   busy.value = 'reset'
   failures.value = []
   try {
@@ -812,6 +919,28 @@ function toggle(key) {
   open.value = next
 }
 
+// --- Fermeture du menu « Entretien » ---------------------------------------
+//
+// Un menu qui ne se referme qu'en recliquant son propre bouton reste posé
+// par-dessus la liste dès qu'on regarde ailleurs, et il n'existait aucun geste
+// au clavier pour en sortir : une fois entré dedans au Tab, on ne pouvait que
+// le traverser.
+const menuRef = ref(null)
+
+function fermerSiDehors(e) {
+  if (!menuOuvert.value) return
+  if (!menuRef.value?.contains(e.target)) menuOuvert.value = false
+}
+
+function surEchap(e) {
+  if (e.key !== 'Escape' || !menuOuvert.value) return
+  menuOuvert.value = false
+  // Le focus revient sur le bouton qui a ouvert le menu. Sans cela il retombe
+  // sur le document, et la tabulation suivante repart du haut de la page — on
+  // perd l'endroit où on travaillait pour avoir fermé un menu.
+  menuRef.value?.querySelector('button')?.focus()
+}
+
 const shortPath = (p) => (p ? p.split('/').slice(-2).join('/') : '—')
 const gb = (bytes) => (bytes / 1024 ** 3).toFixed(1)
 
@@ -827,8 +956,17 @@ onMounted(() => {
   poller = setInterval(() => {
     if (working.value || document.visibilityState === 'visible') load()
   }, 2000)
+  // `pointerdown` et non `click` : le menu doit être parti quand le clic
+  // atteint ce qu'il visait, sinon on ferme le menu ET on active ce qui était
+  // dessous, ou l'inverse selon l'ordre de propagation.
+  document.addEventListener('pointerdown', fermerSiDehors)
+  document.addEventListener('keydown', surEchap)
 })
-onUnmounted(() => clearInterval(poller))
+onUnmounted(() => {
+  clearInterval(poller)
+  document.removeEventListener('pointerdown', fermerSiDehors)
+  document.removeEventListener('keydown', surEchap)
+})
 </script>
 
 <template>
@@ -880,8 +1018,13 @@ onUnmounted(() => clearInterval(poller))
       <!-- Quatre boutons de même poids visuel ne disaient pas lequel sert tous
            les jours. Ceux d'entretien passent derrière un menu : on les cherche
            quand on en a besoin, ils n'encombrent pas le reste du temps. -->
-      <div class="menu-entretien">
-        <button class="ghost" :class="{ active: menuOuvert }" @click="menuOuvert = !menuOuvert">
+      <div ref="menuRef" class="menu-entretien">
+        <button
+          class="ghost"
+          :class="{ active: menuOuvert }"
+          :aria-expanded="menuOuvert"
+          @click="menuOuvert = !menuOuvert"
+        >
           Entretien ▾
         </button>
         <div v-if="menuOuvert" class="tiroir" @click="menuOuvert = false">
@@ -897,27 +1040,32 @@ onUnmounted(() => clearInterval(poller))
             Recommencer l'identification
             <span class="quoi">vide la file de plans et repart du premier fichier</span>
           </button>
-          <button v-if="counts.works" class="danger" :disabled="busy || working" @click="remiseAZero">
-            {{ confirmReset ? 'Confirmer : tout effacer' : 'Tout effacer' }}
-            <span class="quoi">plans et aperçus — journal et identifications conservés</span>
-          </button>
+          <ConfirmAction
+            v-if="counts.works"
+            label="Tout effacer"
+            confirm-label="Confirmer : tout effacer"
+            :detail="`Vide la liste — ${counts.works} œuvre(s), plans et aperçus. Ton journal `
+              + `d'annulation (${data.journal_size}) et tes identifications retenues sont `
+              + `conservés, et aucun fichier n'est déplacé.`"
+            :busy="busy === 'reset'"
+            :disabled="busy || working"
+            :disabled-reason="raisonIndispo"
+            @confirm="remiseAZero"
+          />
         </div>
       </div>
     </div>
 
+    <!-- Pourquoi la barre ne répond pas, sous la barre. Une seule ligne : la
+         cause est commune à presque tous ces boutons, et un `title` par bouton
+         n'existe ni au doigt ni au clavier. `role="status"` pour qu'un
+         changement d'état soit annoncé sans voler le focus. -->
+    <p v-if="raisonIndispo" class="indispo" role="status">{{ raisonIndispo }}</p>
+
     <!-- Au FUTUR, et en disant ce qu'il reste à faire. La formulation au
          présent laissait croire que l'action avait déjà eu lieu, alors que le
          bouton attend un second clic. -->
-    <p v-if="confirmReset" class="reset-avert">
-      <strong>Rien n'est encore effacé.</strong> Clique à nouveau sur
-      « Confirmer : tout effacer » pour vider la liste — plans, avancement, aperçus —
-      et repartir d'un scan neuf.
-      <br />
-      Ton journal d'annulation ({{ data.journal_size }}) et tes identifications retenues
-      seront <strong class="garde">conservés</strong>, et aucun fichier ne sera déplacé
-      ni supprimé.
-      <button class="renoncer" @click="confirmReset = false">Renoncer</button>
-    </p>
+
 
     <!-- Ce qui a été rangé, par œuvre, avec une annulation par ligne -->
     <section v-if="showUndo" class="undo-panel">
@@ -932,7 +1080,16 @@ onUnmounted(() => clearInterval(poller))
         origine déjà occupée fait échouer le retour plutôt que d'écraser.
       </p>
 
-      <p v-if="!journal" class="empty">Lecture du journal…</p>
+      <!-- L'échec passe AVANT l'attente, sans quoi il s'y cacherait : les deux
+           états valaient un même `journal` à null, et une lecture ratée
+           annonçait « Lecture du journal… » jusqu'à la fin des temps. -->
+      <p v-if="journalErreur" class="panne-inline">
+        Le journal n'a pas pu être lu ({{ journalErreur }}). Rien n'est perdu : les
+        {{ data.journal_size }} opérations restent annulables dès que le serveur
+        répond à nouveau.
+        <button class="small" @click="loadJournal">Réessayer</button>
+      </p>
+      <p v-else-if="!journal" class="empty">Lecture du journal…</p>
       <p v-else-if="!journal.works.length" class="empty">Aucun déplacement à annuler.</p>
 
       <ul v-else class="undo-works">
@@ -997,6 +1154,14 @@ onUnmounted(() => clearInterval(poller))
             <span class="voir">{{ ouvert === g.key ? 'masquer' : 'voir les fichiers' }}</span>
           </button>
           <p class="fix">{{ g.fix }}</p>
+          <!-- Le pourquoi replié, et natif : un `<details>` s'ouvre au clavier,
+               retient son état, et n'a besoin d'aucun script. Déplié par
+               défaut, il repoussait l'action à mener sous sept lignes
+               d'explication qu'on ne relit jamais. -->
+          <details v-if="g.detail" class="pourquoi">
+            <summary>Pourquoi ?</summary>
+            <p>{{ g.detail }}</p>
+          </details>
           <!-- Arbitrage par la taille : deux encodages, il faut choisir. -->
           <div v-if="g.action === 'arbitrer'" class="actions">
             <button class="act" :disabled="evacuating" @click="evacuate(g, { mode: 'keep_smaller' })">
@@ -1016,16 +1181,18 @@ onUnmounted(() => clearInterval(poller))
             <button class="act" :disabled="evacuating" @click="evacuate(g)">
               {{ evacuating ? 'En cours…' : `Mettre ces ${g.items.length} copies en corbeille` }}
             </button>
-            <button class="act danger" :disabled="evacuating" @click="evacuate(g, { mode: 'delete' })">
-              {{ confirmDelete
-                ? `Confirmer : supprimer ces ${g.items.length} copies`
-                : 'Supprimer sans passer par la corbeille' }}
-            </button>
+            <ConfirmAction
+              label="Supprimer sans passer par la corbeille"
+              :confirm-label="`Confirmer : supprimer ces ${g.items.length} copies`"
+              :detail="`${g.items.length} fichier(s) effacé(s) définitivement. Rien ne les `
+                + `rendra : l'exemplaire déjà rangé, lui, ne bouge pas.`"
+              :busy="evacuating"
+              :disabled="evacuating"
+              disabled-reason="Une évacuation est déjà en cours."
+              @confirm="evacuate(g, { mode: 'delete' })"
+            />
           </div>
-          <p v-if="confirmDelete" class="fix warn-strong">
-            Irréversible. Chaque fichier est tout de même vérifié avant : présent à
-            destination et de même taille, sinon il est refusé.
-          </p>
+
           <div v-if="g.action === 'evacuate' && evacProgress" class="evac">
             <div class="bar"><div class="fill" :style="{ width: evacPercent + '%' }"></div></div>
             <div class="stats">
@@ -1062,18 +1229,27 @@ onUnmounted(() => clearInterval(poller))
       </ul>
     </section>
 
-    <!-- Deux gestes distincts : vider la source, inspecter la médiathèque. -->
+    <!-- « Source » et « Ma médiathèque » sont remontées dans la barre du haut :
+         ce sont deux intentions, et on choisissait entre elles APRÈS être
+         entré, une fois l'écran chargé. Le réencodage reste ici, où il est né :
+         c'est une file d'attente qu'on ouvre pour vérifier le travail de la
+         nuit, pas une troisième médiathèque. -->
     <div class="onglets">
-      <button :class="{ actif: onglet === 'source' }" @click="onglet = 'source'">
-        Source <span class="pastille">{{ counts.source_works ?? 0 }}</span>
-      </button>
-      <button :class="{ actif: onglet === 'library' }" @click="onglet = 'library'">
-        Ma médiathèque <span class="pastille">{{ counts.library_works ?? 0 }}</span>
-      </button>
-      <button :class="{ actif: onglet === 'transcode' }" @click="onglet = 'transcode'">
+      <button
+        :class="{ actif: onglet === 'transcode' }"
+        :aria-pressed="onglet === 'transcode'"
+        @click="onglet = onglet === 'transcode' ? espace : 'transcode'"
+      >
         Réencodage
         <span v-if="counts.off_strategy" class="pastille">{{ counts.off_strategy }}</span>
       </button>
+      <!-- La sortie est écrite. Un onglet solitaire qu'on referme en le
+           recliquant est un piège muet : rien, sur l'écran, ne dit comment
+           revenir à la liste qu'il a remplacée. -->
+      <span v-if="onglet === 'transcode'" class="onglet-retour">
+        clique à nouveau pour revenir à
+        {{ espace === 'source' ? '« Ranger »' : '« Ma médiathèque »' }}
+      </span>
     </div>
 
     <!-- Réencodage : la nuit, un fichier à la fois, sans rien remplacer. -->
@@ -1090,6 +1266,16 @@ onUnmounted(() => clearInterval(poller))
           </p>
         </div>
       </div>
+
+      <!-- Sans ce bloc, une file injoignable rendait un onglet vide — et un
+           onglet vide se lit « rien à réencoder », c'est-à-dire l'inverse de
+           ce qui se passe. -->
+      <p v-if="reencErreur" class="panne-inline">
+        La file de réencodage n'a pas pu être lue ({{ reencErreur }}). Ce qui est déjà
+        en file continue de tourner côté serveur : c'est l'affichage qui manque, pas
+        le travail.
+        <button class="small" :disabled="chargement" @click="load">Réessayer</button>
+      </p>
 
       <div v-if="reenc" class="reenc-etat">
         <span class="puce" :class="reenc.ffmpeg ? 'ok' : 'ko'">
@@ -1287,10 +1473,16 @@ onUnmounted(() => clearInterval(poller))
         Ne garde qu'un exemplaire par emplacement : celui que la stratégie de son type
         désigne. Porte sur TOUTE la bibliothèque, pas seulement sur les lignes affichées.
       </span>
-      <button class="small danger" :disabled="busy === 'prune'" @click="pruneDuplicates">
-        {{ confirmingPrune ? `Confirmer — ${counts.duplicates} emplacement(s)` : 'Nettoyer tous les doublons' }}
-      </button>
-      <button v-if="confirmingPrune" class="small" @click="confirmingPrune = false">Renoncer</button>
+      <ConfirmAction
+        label="Nettoyer tous les doublons"
+        :confirm-label="`Confirmer — ${counts.duplicates} emplacement(s)`"
+        :detail="`Supprime les exemplaires en trop de ${counts.duplicates} emplacement(s) sur `
+          + `toute la bibliothèque. Celui que la stratégie désigne reste en place.`"
+        :busy="busy === 'prune'"
+        :disabled="busy === 'prune'"
+        disabled-reason="Un nettoyage est déjà en cours."
+        @confirm="pruneDuplicates"
+      />
     </div>
 
     <div v-if="onglet !== 'transcode'" class="outils">
@@ -1313,21 +1505,32 @@ onUnmounted(() => clearInterval(poller))
       <span v-if="recherche && works.length" class="compte">{{ works.length }} résultat(s)</span>
     </div>
 
+    <!-- Livres et animes rejoignent films et séries. Le type existait dans les
+         données depuis toujours ; seuls deux des quatre avaient un bouton, et
+         rien ne disait que les deux autres étaient filtrables. -->
     <div v-if="onglet !== 'transcode'" class="filters kinds">
       <button :class="{ active: kind === 'all' }" @click="kind = 'all'">Tous types</button>
-      <button v-if="kindCounts.movie" :class="{ active: kind === 'movie' }" @click="kind = 'movie'">
-        Films ({{ kindCounts.movie }})
-      </button>
-      <button v-if="kindCounts.episode" :class="{ active: kind === 'episode' }" @click="kind = 'episode'">
-        Séries ({{ kindCounts.episode }})
-      </button>
-      <button v-if="kindCounts.anime" :class="{ active: kind === 'anime' }" @click="kind = 'anime'">
-        Animes ({{ kindCounts.anime }})
+      <button
+        v-for="k in KIND_FILTRES"
+        :key="k.id"
+        :class="{ active: kind === k.id, muet: !kindCounts[k.id] }"
+        :disabled="!kindCounts[k.id]"
+        @click="kind = k.id"
+      >
+        {{ k.label }} ({{ kindCounts[k.id] }})
       </button>
       <span v-if="counts.total_bytes" class="total">
         {{ gb(counts.total_bytes) }} Go en bibliothèque
       </span>
     </div>
+
+    <!-- La raison des boutons grisés, écrite plutôt que cachée dans un
+         `title`. Elle nomme la LISTE et non la médiathèque : le type existe
+         peut-être ailleurs, il n'est simplement pas ici. -->
+    <p v-if="onglet !== 'transcode' && typesVides.length" class="indispo">
+      Aucun résultat de ce type dans cette liste : {{ typesVides.join(', ') }}. Le filtre
+      reste affiché — un compte à zéro dit qu'on a mesuré, un bouton absent ne dit rien.
+    </p>
 
     <p
       v-if="!works.length && onglet !== 'transcode' && !(onglet === 'library' && sousVue === 'place')"
@@ -1345,48 +1548,62 @@ onUnmounted(() => clearInterval(poller))
 
     <ul v-if="onglet !== 'transcode'" class="works">
       <li v-for="w in listed" :key="w.key" :class="{ open: open.has(w.key) }">
-        <button class="row" @click="toggle(w.key)">
-          <span class="chev" :class="{ closed: !open.has(w.key) }">▾</span>
+        <!-- La jaquette a QUITTÉ le bouton qui l'enveloppait. Un élément
+             cliquable imbriqué dans un bouton est invalide, et le navigateur
+             s'en sortait en n'en rendant qu'un seul atteignable : la jaquette
+             n'existait ni au Tab ni pour un lecteur d'écran, alors que c'est
+             sur elle qu'on tranche entre deux saisons.
+             Elle passe donc en tête de ligne, sœur du bouton et non son
+             enfant ; le chevron la suit et reste aligné, les jaquettes ayant
+             toutes la même largeur, vides comprises. -->
+        <div class="row-wrap">
           <img
             v-if="w.poster_url"
             class="thumb zoomable"
             :src="w.poster_url"
-            :alt="w.title"
+            :alt="`Jaquette de ${w.title}`"
             loading="lazy"
-            title="Agrandir"
-            @click.stop="agrandir(w.poster_url, `${w.title}${w.year ? ` (${w.year})` : ''}`)"
+            role="button"
+            tabindex="0"
+            :aria-label="`Agrandir la jaquette de ${w.title}`"
+            @click="agrandir(w.poster_url, `${w.title}${w.year ? ` (${w.year})` : ''}`)"
+            @keydown="(e) => agrandirTouche(e, w.poster_url, `${w.title}${w.year ? ` (${w.year})` : ''}`)"
           />
           <span v-else class="thumb empty"></span>
 
-          <span class="title">
-            {{ w.title }}<span v-if="w.year" class="year"> ({{ w.year }})</span>
-            <span v-if="w.kind" class="kind">{{ KINDS[w.kind] ?? w.kind }}</span>
-          </span>
+          <button class="row" :aria-expanded="open.has(w.key)" @click="toggle(w.key)">
+            <span class="chev" :class="{ closed: !open.has(w.key) }">▾</span>
 
-          <span class="badges">
-            <span v-if="w.owned" class="badge own">{{ w.owned.file_count }} fichier{{ w.owned.file_count > 1 ? 's' : '' }}</span>
-            <span v-if="w.owned?.total_bytes" class="badge size">{{ gb(w.owned.total_bytes) }} Go</span>
-            <span v-if="w.heaviness >= (data.heavy_ratio ?? 2)" class="badge heavy"
-                  :title="`${gb(w.bytes_per_file)} Go par fichier, contre ${(w.bytes_per_file / w.heaviness / 1024 ** 3).toFixed(1)} Go en médiane`">
-              {{ heavyLabel(w) }} le poids habituel
+            <span class="title">
+              {{ w.title }}<span v-if="w.year" class="year"> ({{ w.year }})</span>
+              <span v-if="w.kind" class="kind">{{ KINDS[w.kind] ?? w.kind }}</span>
             </span>
-            <span v-if="w.owned?.missing_count" class="badge gap">{{ w.owned.missing_count }} manquant{{ w.owned.missing_count > 1 ? 's' : '' }}</span>
-            <span v-if="w.owned?.duplicates?.length" class="badge dupe">{{ w.owned.duplicates.length }} doublon{{ w.owned.duplicates.length > 1 ? 's' : '' }}</span>
-            <span v-if="w.pending.ready.length" class="badge ready">{{ w.pending.ready.length }} prêt{{ w.pending.ready.length > 1 ? 's' : '' }}</span>
-            <span v-if="arbitrables(w).length" class="badge review">{{ arbitrables(w).length }} à arbitrer</span>
-            <span v-if="w.pending.unplanned_count" class="badge wait">{{ w.pending.unplanned_count }} en attente</span>
-            <!-- Sur la LIGNE, pas seulement dans le détail : c'est là qu'on
-                 décide d'ouvrir. Une identification proposée par un modèle de
-                 langage mérite un coup d'œil que la même à 100 % venue de TMDB
-                 ne demande pas. -->
-            <span v-if="origines(w).ia" class="badge ia" title="Titre proposé par le résolveur IA, fiche confirmée par le fournisseur">
-              IA
+
+            <span class="badges">
+              <span v-if="w.owned" class="badge own">{{ w.owned.file_count }} fichier{{ w.owned.file_count > 1 ? 's' : '' }}</span>
+              <span v-if="w.owned?.total_bytes" class="badge size">{{ gb(w.owned.total_bytes) }} Go</span>
+              <span v-if="w.heaviness >= (data.heavy_ratio ?? 2)" class="badge heavy"
+                    :title="`${gb(w.bytes_per_file)} Go par fichier, contre ${(w.bytes_per_file / w.heaviness / 1024 ** 3).toFixed(1)} Go en médiane`">
+                {{ heavyLabel(w) }} le poids habituel
+              </span>
+              <span v-if="w.owned?.missing_count" class="badge gap">{{ w.owned.missing_count }} manquant{{ w.owned.missing_count > 1 ? 's' : '' }}</span>
+              <span v-if="w.owned?.duplicates?.length" class="badge dupe">{{ w.owned.duplicates.length }} doublon{{ w.owned.duplicates.length > 1 ? 's' : '' }}</span>
+              <span v-if="w.pending.ready.length" class="badge ready">{{ w.pending.ready.length }} prêt{{ w.pending.ready.length > 1 ? 's' : '' }}</span>
+              <span v-if="arbitrables(w).length" class="badge review">{{ arbitrables(w).length }} à arbitrer</span>
+              <span v-if="w.pending.unplanned_count" class="badge wait">{{ w.pending.unplanned_count }} en attente</span>
+              <!-- Sur la LIGNE, pas seulement dans le détail : c'est là qu'on
+                   décide d'ouvrir. Une identification proposée par un modèle de
+                   langage mérite un coup d'œil que la même à 100 % venue de TMDB
+                   ne demande pas. -->
+              <span v-if="origines(w).ia" class="badge ia" title="Titre proposé par le résolveur IA, fiche confirmée par le fournisseur">
+                IA
+              </span>
+              <span v-else-if="origines(w).nom" class="badge devine" title="Deviné depuis le nom du fichier, sans fournisseur">
+                nom seul
+              </span>
             </span>
-            <span v-else-if="origines(w).nom" class="badge devine" title="Deviné depuis le nom du fichier, sans fournisseur">
-              nom seul
-            </span>
-          </span>
-        </button>
+          </button>
+        </div>
 
         <div v-if="open.has(w.key)" class="detail">
           <!-- Prêts : exécutables pour cette œuvre seule -->
@@ -1439,15 +1656,27 @@ onUnmounted(() => clearInterval(poller))
                   </template>
                   <template v-else-if="preview?.available">
                     <div class="thumbs">
+                      <!-- Déclarées boutons et atteignables au Tab : ces
+                           vignettes sont l'aperçu, pas une illustration — on
+                           les agrandit pour trancher, et un `<img>` cliquable
+                           nu n'existe pour aucun autre dispositif que la
+                           souris. -->
                       <img
                         v-for="pos in preview.positions"
                         :key="pos"
                         :src="`/api/media/plan/${p.id}/thumb?at=${pos}`"
-                        :alt="`à ${Math.round(pos * 100)} %`"
+                        :alt="`Aperçu à ${Math.round(pos * 100)} % du fichier`"
                         loading="lazy"
-                        title="Agrandir"
+                        role="button"
+                        tabindex="0"
+                        :aria-label="`Agrandir l'aperçu à ${Math.round(pos * 100)} %`"
                         class="zoomable"
                         @click="agrandir(
+                          `/api/media/plan/${p.id}/thumb?at=${pos}`,
+                          `${shortPath(p.source)} — à ${Math.round(pos * 100)} % du fichier`,
+                        )"
+                        @keydown="(e) => agrandirTouche(
+                          e,
                           `/api/media/plan/${p.id}/thumb?at=${pos}`,
                           `${shortPath(p.source)} — à ${Math.round(pos * 100)} % du fichier`,
                         )"
@@ -1462,6 +1691,9 @@ onUnmounted(() => clearInterval(poller))
                       noire ou figée à cet endroit trahit un téléchargement incomplet.
                     </p>
                   </template>
+                  <p v-else-if="preview?.panne" class="format-warn">
+                    Aperçu indisponible : {{ preview.panne }}. Le fichier n'est pas en cause.
+                  </p>
                   <p v-else-if="preview" class="format-warn">
                     Aperçu impossible : ffmpeg absent, ou fichier illisible.
                   </p>
@@ -1538,15 +1770,27 @@ onUnmounted(() => clearInterval(poller))
                   </template>
                   <template v-else-if="preview?.available">
                     <div class="thumbs">
+                      <!-- Déclarées boutons et atteignables au Tab : ces
+                           vignettes sont l'aperçu, pas une illustration — on
+                           les agrandit pour trancher, et un `<img>` cliquable
+                           nu n'existe pour aucun autre dispositif que la
+                           souris. -->
                       <img
                         v-for="pos in preview.positions"
                         :key="pos"
                         :src="`/api/media/plan/${p.id}/thumb?at=${pos}`"
-                        :alt="`à ${Math.round(pos * 100)} %`"
+                        :alt="`Aperçu à ${Math.round(pos * 100)} % du fichier`"
                         loading="lazy"
-                        title="Agrandir"
+                        role="button"
+                        tabindex="0"
+                        :aria-label="`Agrandir l'aperçu à ${Math.round(pos * 100)} %`"
                         class="zoomable"
                         @click="agrandir(
+                          `/api/media/plan/${p.id}/thumb?at=${pos}`,
+                          `${shortPath(p.source)} — à ${Math.round(pos * 100)} % du fichier`,
+                        )"
+                        @keydown="(e) => agrandirTouche(
+                          e,
                           `/api/media/plan/${p.id}/thumb?at=${pos}`,
                           `${shortPath(p.source)} — à ${Math.round(pos * 100)} % du fichier`,
                         )"
@@ -1561,6 +1805,9 @@ onUnmounted(() => clearInterval(poller))
                       noire ou figée à cet endroit trahit un téléchargement incomplet.
                     </p>
                   </template>
+                  <p v-else-if="preview?.panne" class="format-warn">
+                    Aperçu indisponible : {{ preview.panne }}. Le fichier n'est pas en cause.
+                  </p>
                   <p v-else-if="preview" class="format-warn">
                     Aperçu impossible : ffmpeg absent, ou fichier illisible.
                   </p>
@@ -1646,25 +1893,17 @@ onUnmounted(() => clearInterval(poller))
               <button class="small" :disabled="busy === 'trash'" @click="trashDuplicates(w)">
                 {{ busy === 'trash' ? 'Déplacement…' : 'Mettre en corbeille' }}
               </button>
-              <button
-                class="small danger"
+              <ConfirmAction
+                label="Supprimer selon la stratégie"
+                confirm-label="Confirmer la suppression"
+                :detail="`Garde l'exemplaire que la stratégie de ce type désigne et supprime `
+                  + `les autres, définitivement. Le serveur vérifie que celui qu'on garde `
+                  + `existe avant chaque suppression.`"
+                :busy="busy === 'delete'"
                 :disabled="busy === 'delete'"
-                title="Garde l'exemplaire que la stratégie de ce type désigne, supprime les autres"
-                @click="deleteDuplicates(w)"
-              >
-                {{
-                  confirmingDelete === w.key
-                    ? 'Confirmer la suppression'
-                    : 'Supprimer selon la stratégie'
-                }}
-              </button>
-              <button
-                v-if="confirmingDelete === w.key"
-                class="small"
-                @click="confirmingDelete = null"
-              >
-                Renoncer
-              </button>
+                disabled-reason="Une suppression est déjà en cours."
+                @confirm="deleteDuplicates(w)"
+              />
               <span v-if="dupeMessage[w.key]" class="dupe-msg">{{ dupeMessage[w.key] }}</span>
             </div>
             <!-- Un livre rangé n'est pas un livre lu : sans lecteur, vérifier
@@ -1855,7 +2094,8 @@ onUnmounted(() => clearInterval(poller))
 .exemplaires code { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); overflow-wrap: anywhere; }
 .exemplaires .verdict { font-size: 10.5px; color: var(--text-faint); }
 .exemplaires li.garde .verdict { color: var(--ok, var(--accent)); }
-.onglets { display: flex; gap: 4px; margin-bottom: 4px; }
+.onglets { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 4px; }
+.onglet-retour { font-size: 11.5px; color: var(--text-faint); }
 .onglets button {
   font-size: 13px; padding: 7px 15px; border-radius: 8px 8px 0 0;
   border-bottom: 2px solid transparent; background: transparent;
@@ -1908,10 +2148,6 @@ button.small.danger:hover:not(:disabled) {
 .toolbar .ghost { color: var(--text-faint); }
 .toolbar .ghost.active { border-color: var(--accent); color: var(--text); }
 .toolbar .ghost.danger:hover:not(:disabled) { color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, transparent); }
-.reset-avert { margin: 0; font-size: 12px; color: var(--warn); line-height: 1.7; max-width: 720px; }
-.reset-avert strong { color: var(--warn); }
-.reset-avert strong.garde { color: var(--ok); }
-.renoncer { margin-left: 10px; font-size: 11.5px; padding: 2px 10px; color: var(--text-faint); }
 
 .undo-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
 .undo-panel .head { display: flex; align-items: center; gap: 12px; }
@@ -1973,11 +2209,18 @@ button.small.danger:hover:not(:disabled) {
   background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err);
 }
 .failures .fix { margin: 6px 0 0; font-size: 12px; color: var(--text-dim); line-height: 1.6; max-width: 680px; }
+.pourquoi { margin: 5px 0 0; max-width: 680px; }
+.pourquoi summary {
+  font-size: 11.5px; color: var(--text-faint); cursor: pointer;
+  width: fit-content; padding: 2px 0;
+}
+.pourquoi summary:hover { color: var(--text-dim); }
+.pourquoi summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.pourquoi p { margin: 5px 0 0; font-size: 12px; color: var(--text-faint); line-height: 1.65; }
 .failures .actions { display: flex; gap: 8px; margin: 9px 0 0; flex-wrap: wrap; }
 .failures .act { font-size: 12px; padding: 4px 12px; }
 .failures .act.danger { color: var(--text-faint); }
 .failures .act.danger:hover:not(:disabled) { color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, transparent); }
-.failures .warn-strong { color: var(--err); }
 .failures .act:hover:not(:disabled) { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
 .failures .sample { display: block; margin: 6px 0 0; font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
 .evac { margin: 10px 0 0; max-width: 680px; }
@@ -2002,11 +2245,19 @@ button.small.danger:hover:not(:disabled) {
 .works > li { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
 .works > li.open { border-color: color-mix(in srgb, var(--accent) 30%, var(--border)); }
 
+/* Le rembourrage et le survol vivent sur l'enveloppe, plus sur le bouton : la
+   jaquette est sortie de celui-ci et doit rester dans la même bande cliquable,
+   à la même hauteur. */
+.row-wrap { display: flex; align-items: center; gap: 11px; padding: 8px 12px; }
+.row-wrap:hover { background: var(--surface-2); }
 .row {
-  width: 100%; display: flex; align-items: center; gap: 11px; padding: 8px 12px;
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; padding: 0;
   border: none; background: none; text-align: left; cursor: pointer;
 }
-.row:hover { background: var(--surface-2); }
+/* Le liseré rentre à l'intérieur : la carte est en `overflow: hidden` et un
+   `outline-offset` positif serait rogné sur ses bords — la ligne au clavier
+   deviendrait invisible précisément là où on en a besoin. */
+.row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; border-radius: 6px; }
 .chev { font-size: 10px; color: var(--text-faint); transition: transform .15s; flex: none; }
 .chev.closed { transform: rotate(-90deg); }
 
@@ -2014,6 +2265,9 @@ button.small.danger:hover:not(:disabled) {
 .thumb.empty { border: 1px dashed var(--border); }
 .zoomable { cursor: zoom-in; }
 .zoomable:hover { outline: 1px solid var(--accent); outline-offset: 1px; }
+/* Deux pixels pleins et non le liseré de survol : le survol suggère, le focus
+   doit affirmer — c'est le seul repère de qui ne voit pas le curseur. */
+.zoomable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .title { flex: 1; min-width: 0; font-size: 13.5px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .year { color: var(--text-faint); }
@@ -2038,7 +2292,13 @@ button.small { font-size: 11px; padding: 2px 9px; }
 
 .files { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .files li { display: flex; align-items: center; gap: 8px; font-size: 11.5px; flex-wrap: wrap; }
-.files code { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
+/* `overflow-wrap: anywhere` comme les autres blocs de chemin : un chemin n'a
+   aucune coupure naturelle, et sans cela il pousse la ligne au-delà de l'écran
+   au lieu de se replier. C'était le seul bloc `code` à ne pas l'avoir. */
+.files code {
+  font-family: var(--mono); font-size: 10.5px; color: var(--text-faint);
+  overflow-wrap: anywhere;
+}
 .files .to { color: var(--ok); }
 .files .arrow { color: var(--text-faint); }
 .files .more { color: var(--text-faint); font-style: italic; }
@@ -2070,4 +2330,69 @@ button.small.play { color: var(--text-faint); }
 
 .plus { display: flex; align-items: center; gap: 12px; justify-content: center; padding: 4px 0 8px; }
 .plus .compte { font-size: 11.5px; color: var(--text-faint); }
+
+/* La raison d'une indisponibilité : ton d'appoint, jamais celui d'une alerte.
+   Ce n'est pas une erreur — c'est l'état normal de l'application dit à voix
+   haute, et l'écrire en rouge apprendrait à ignorer le rouge. */
+.indispo {
+  margin: -6px 0 0; font-size: 12px; color: var(--text-faint);
+  line-height: 1.65; max-width: 720px;
+}
+
+/* Une panne locale : le reste de l'écran fonctionne, seul ce panneau est
+   aveugle. D'où le cadre plutôt qu'un bandeau en haut de page — l'erreur est
+   là où elle s'est produite, avec le bouton qui la relance. */
+.panne-inline {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 0; padding: 9px 12px; border-radius: 8px;
+  font-size: 12px; line-height: 1.6; color: var(--err);
+  background: color-mix(in srgb, var(--err) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--err) 28%, transparent);
+}
+.panne-inline button { color: var(--text); flex: none; }
+
+/* --- Écrans étroits ------------------------------------------------------ *
+ * Ce fichier n'avait aucune règle de largeur : deux mille lignes pensées pour
+ * un écran large, et rien pour un téléphone — alors que « où sont mes 600 Go »
+ * est exactement la question qu'on se pose depuis le canapé.
+ *
+ * Deux dégâts précis, invisibles au bureau :
+ *
+ * - la ligne d'œuvre ne se repliait pas, et les badges — `flex: none` et
+ *   `white-space: nowrap` dans une carte en `overflow: hidden` — étaient
+ *   COUPÉS net par le bord. Pas rétrécis, pas empilés : absents. Le compte de
+ *   doublons et le « à arbitrer » disparaissaient donc en silence, et ce sont
+ *   les deux seules raisons d'ouvrir une ligne.
+ * - les boutons `.small` faisaient vingt pixels de haut. On les vise, on les
+ *   rate, on repose le téléphone. */
+@media (max-width: 700px) {
+  /* La ligne se replie, et les badges prennent leur propre rang plutôt que de
+     disputer une largeur qui n'existe pas. */
+  .row-wrap { align-items: flex-start; }
+  .row { flex-wrap: wrap; row-gap: 5px; }
+  .badges { flex: 1 0 100%; justify-content: flex-start; }
+  .badge { white-space: normal; }
+
+  /* 32 px de cible, obtenus au rembourrage. Grossir la police à la place
+     déplacerait toute la hiérarchie typographique de l'écran pour résoudre un
+     problème de doigt. */
+  button.small { min-height: 32px; padding: 7px 12px; }
+  .filters button { min-height: 32px; padding: 6px 12px; }
+
+  /* Le champ de recherche prend la ligne : à 180 px il partageait le rang avec
+     le tri et les deux devenaient illisibles. */
+  .recherche { max-width: none; flex: 1 0 100%; }
+  .outils { row-gap: 8px; }
+
+  /* Le tiroir d'entretien débordait par la droite : ancré au bord de l'écran,
+     il gardait ses 250 px minimum et poussait la page en largeur. */
+  .tiroir { min-width: 0; width: min(280px, calc(100vw - 40px)); }
+
+  /* Un chemin monospace ne se coupe nulle part : sans cela il impose sa
+     largeur à la carte entière. */
+  .fautifs .chemin, .refus code, .undo-works .meta code { overflow-wrap: anywhere; }
+
+  .undo-works li { flex-wrap: wrap; row-gap: 6px; }
+  .detail { padding: 4px 10px 12px; }
+}
 </style>

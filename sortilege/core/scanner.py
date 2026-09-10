@@ -48,6 +48,49 @@ SKIP_DIRS = {
 SKIP_NAME_HINTS = ("sample", "trailer", "bande-annonce", "extrait")
 
 
+@dataclass(frozen=True, slots=True)
+class ScanRules:
+    """Ce qu'un parcours ecarte, et a partir de quelle taille il retient.
+
+    Passees en argument plutot que lues dans les preferences : le scanner ne
+    connait pas l'utilisateur, et c'est precisement ce qui permet de le tester
+    sans configuration. La traduction depuis les preferences se fait a la
+    frontiere HTTP, dans ``api/deps.py``.
+    """
+
+    min_size_bytes: int = MIN_SIZE_BYTES
+    skip_dirs: frozenset[str] = frozenset(SKIP_DIRS)
+    skip_hints: tuple[str, ...] = SKIP_NAME_HINTS
+
+    @classmethod
+    def extended(
+        cls,
+        *,
+        min_size_bytes: int | None = None,
+        extra_dirs: list[str] | None = None,
+        extra_hints: list[str] | None = None,
+    ) -> ScanRules:
+        """Les listes livrees, COMPLETEES par celles de l'utilisateur.
+
+        Jamais remplacees : « @eaDir » et « #recycle » n'ont aucune raison
+        d'etre reparcourus parce que quelqu'un veut en plus sortir son dossier
+        personnel du perimetre, et les lui faire ressaisir pour ajouter une
+        ligne serait un piege a oubli.
+        """
+        propres = {d.strip() for d in (extra_dirs or []) if d.strip()}
+        indices = tuple(h.strip().lower() for h in (extra_hints or []) if h.strip())
+        return cls(
+            min_size_bytes=MIN_SIZE_BYTES if min_size_bytes is None else max(0, min_size_bytes),
+            skip_dirs=frozenset(SKIP_DIRS) | propres,
+            skip_hints=SKIP_NAME_HINTS + indices,
+        )
+
+
+DEFAULT_RULES = ScanRules()
+"""Le comportement d'avant les preferences, et le defaut de tout appelant qui
+n'a pas d'utilisateur sous la main — un test, un outil en ligne de commande."""
+
+
 @dataclass(slots=True)
 class ScannedFile:
     """Un fichier trouve, avec tout ce qu'on sait de lui sans reseau."""
@@ -78,13 +121,20 @@ class ScannedFile:
     proposer de deplacer un fichier deja bien range est du bruit, et l'appliquer
     serait une operation nulle qui salit le journal d'annulation."""
 
+    min_size_bytes: int = MIN_SIZE_BYTES
+    """Plancher applique a CE fichier, retenu au moment du parcours.
+
+    Porte par le fichier et non relu au moment de la question : un scan garde
+    la regle sous laquelle il a ete fait, sinon un changement de reglage
+    reclasserait apres coup des fichiers deja affiches comme retenus."""
+
     @property
     def is_book(self) -> bool:
         return self.parsed.kind is MediaKind.BOOK
 
     @property
     def skipped_reason(self) -> str | None:
-        plancher = MIN_BOOK_BYTES if self.is_book else MIN_SIZE_BYTES
+        plancher = MIN_BOOK_BYTES if self.is_book else self.min_size_bytes
         if self.size_bytes < plancher:
             return "fichier trop petit (echantillon ou telechargement incomplet)"
         return None
@@ -101,13 +151,13 @@ class ScanResult:
         return len(self.files)
 
 
-def _should_skip_dir(name: str) -> bool:
-    return name in SKIP_DIRS or name.startswith(".")
+def _should_skip_dir(name: str, rules: ScanRules) -> bool:
+    return name in rules.skip_dirs or name.startswith(".")
 
 
-def _should_skip_file(path: Path) -> bool:
+def _should_skip_file(path: Path, rules: ScanRules) -> bool:
     lowered = path.stem.lower()
-    return any(hint in lowered for hint in SKIP_NAME_HINTS)
+    return any(hint in lowered for hint in rules.skip_hints)
 
 
 def _under(path: Path, root: Path | None) -> bool:
@@ -122,7 +172,7 @@ def _under(path: Path, root: Path | None) -> bool:
 
 
 def collect(
-    roots: list[Path], limit: int | None = None
+    roots: list[Path], limit: int | None = None, *, rules: ScanRules = DEFAULT_RULES
 ) -> tuple[list[tuple[Path, Path]], int, list[str]]:
     """Recense les fichiers video sans les analyser.
 
@@ -144,11 +194,11 @@ def collect(
             if limit is not None and len(found) >= limit:
                 return found, skipped, errors
 
-            if any(_should_skip_dir(part) for part in path.relative_to(root).parts[:-1]):
+            if any(_should_skip_dir(part, rules) for part in path.relative_to(root).parts[:-1]):
                 continue
             if not path.is_file() or not is_media(path):
                 continue
-            if _should_skip_file(path):
+            if _should_skip_file(path, rules):
                 skipped += 1
                 continue
 
@@ -174,10 +224,14 @@ def scan(
     deep: bool = True,
     limit: int | None = None,
     library_root: Path | None = None,
+    rules: ScanRules = DEFAULT_RULES,
     on_progress: Callable[[int, int, str], None] | None = None,
     on_partial: Callable[[ScanResult], None] | None = None,
 ) -> ScanResult:
     """Parcourt les racines et analyse chaque fichier video.
+
+    ``rules`` porte les exclusions et le plancher de taille. Le defaut est le
+    comportement livre ; l'interface y ajoute ce que l'utilisateur a declare.
 
     ``deep`` active la lecture du fichier lui-meme (ffprobe et .nfo). C'est
     nettement plus lent — quelques dizaines de millisecondes par fichier — donc
@@ -195,7 +249,7 @@ def scan(
     """
     result = ScanResult()
 
-    candidates, skipped, errors = collect(roots, limit)
+    candidates, skipped, errors = collect(roots, limit, rules=rules)
     result.skipped = skipped
     result.errors.extend(errors)
 
@@ -289,6 +343,7 @@ def scan(
                 relative_path=str(path.relative_to(root)),
                 in_library=_under(path, library_root),
                 book=livre,
+                min_size_bytes=rules.min_size_bytes,
             )
         )
 

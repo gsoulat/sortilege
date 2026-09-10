@@ -5,6 +5,8 @@ import FolderBrowser from './FolderBrowser.vue'
 import AiSettings from './AiSettings.vue'
 import AutomationSettings from './AutomationSettings.vue'
 import NotificationSettings from './NotificationSettings.vue'
+import MetadataSettings from './MetadataSettings.vue'
+import ScanSettings from './ScanSettings.vue'
 import TemplateBuilder from './TemplateBuilder.vue'
 import TranscodeSettings from './TranscodeSettings.vue'
 import MaintenanceSettings from './MaintenanceSettings.vue'
@@ -19,6 +21,8 @@ const KIND_LABELS_VIDEO = { movie: 'Films', episode: 'Séries TV', anime: 'Anime
 
 const s = ref(null)
 const prefs = ref(null)
+const chargement = ref(false)
+const loadError = ref(null)
 const saving = ref(false)
 const saveError = ref(null)
 const saved = ref(false)
@@ -55,6 +59,19 @@ function onNotificationsChange(patch) {
 function onMediaServerChange(patch) {
   Object.assign(prefs.value.media_server, patch)
   save({ media_server: patch })
+}
+
+// La clé TheMovieDB n'est jamais renvoyée par le serveur : comme pour l'IA et
+// le serveur multimédia, seul un patch part, sinon un enregistrement de langue
+// l'écraserait par la chaîne vide de l'état local.
+function onMetadataChange(patch) {
+  Object.assign(prefs.value.metadata, patch)
+  save({ metadata: patch })
+}
+
+function onScanChange(patch) {
+  Object.assign(prefs.value.scan, patch)
+  save({ scan: patch })
 }
 
 function onTranscodeChange(patch) {
@@ -116,9 +133,34 @@ function onPick(kind, absolute) {
   browsingKind.value = null
 }
 
+async function lire(url) {
+  const res = await fetch(url)
+  // Une réponse 502 arrive en HTML : `res.json()` lèverait, la promesse
+  // remonterait sans être attrapée, et l'écran resterait blanc sans un mot.
+  if (!res.ok) throw new Error(`réponse ${res.status}`)
+  return res.json()
+}
+
+/**
+ * Les deux appels sont solidaires : le rendu croise le déploiement et les
+ * préférences, un seul des deux ne donne pas un demi-écran mais un écran qui
+ * plante à la première ligne qui lit l'autre.
+ */
 async function load() {
-  s.value = await (await fetch('/api/settings')).json()
-  prefs.value = await (await fetch('/api/settings/preferences')).json()
+  chargement.value = true
+  try {
+    const [reglages, preferences] = await Promise.all([
+      lire('/api/settings'),
+      lire('/api/settings/preferences'),
+    ])
+    s.value = reglages
+    prefs.value = preferences
+    loadError.value = null
+  } catch (e) {
+    loadError.value = `Serveur injoignable (${e.message ?? 'sans réponse'}).`
+  } finally {
+    chargement.value = false
+  }
 }
 
 async function save(extra = {}) {
@@ -181,7 +223,26 @@ const KINDS = ['movie', 'episode', 'anime']
 </script>
 
 <template>
-  <div v-if="s && prefs" class="settings">
+  <!-- Trois etats, et non « donnees ou rien ». Tout le rendu pendait a
+       `v-if="s && prefs"` sans v-else : serveur eteint ou reponse 500, et
+       l'ecran des reglages restait entierement blanc — sans un mot sur ce qui
+       se passait, et sans rien a cliquer pour reessayer. -->
+  <div v-if="!(s && prefs) && chargement" class="attente">
+    <span class="pulsation"></span>
+    Chargement des réglages…
+  </div>
+
+  <div v-else-if="!(s && prefs)" class="panne">
+    <h2>Le serveur ne répond pas</h2>
+    <p>{{ loadError ?? 'Aucune réponse de Sortilège.' }}</p>
+    <p class="quoi-faire">
+      Vérifie que le conteneur tourne (<code>docker ps</code>), puis réessaie. Si la page
+      reste blanche, les journaux disent pourquoi : <code>docker logs sortilege</code>.
+    </p>
+    <button class="primary" :disabled="chargement" @click="load">Réessayer</button>
+  </div>
+
+  <div v-else class="settings">
     <nav class="onglets">
       <button
         v-for="o in ONGLETS"
@@ -203,6 +264,8 @@ const KINDS = ['movie', 'episode', 'anime']
       </p>
       <SourcePicker :prefs="prefs" @change="onSourceChange" />
     </section>
+
+    <ScanSettings v-if="prefs.scan" :scan="prefs.scan" @change="onScanChange" />
 
     <section>
       <h3>Destination par type</h3>
@@ -378,6 +441,12 @@ const KINDS = ['movie', 'episode', 'anime']
 
     <!-- ===== Identification : comment une œuvre est reconnue ===== -->
     <template v-if="onglet === 'identification'">
+    <MetadataSettings
+      v-if="prefs.metadata"
+      :metadata="prefs.metadata"
+      @change="onMetadataChange"
+    />
+
     <AiSettings :ai="prefs.ai" :providers="prefs.ai_providers" @change="onAiChange" />
 
     <DecisionsSettings />
@@ -454,6 +523,24 @@ input.budget {
 }
 .settings { display: flex; flex-direction: column; gap: 18px; }
 
+/* --- Les trois etats de la page ---------------------------------------- */
+.attente, .panne {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; min-height: 40vh; text-align: center; padding: 40px 20px;
+}
+.attente { color: var(--text-dim); font-size: 13px; }
+.pulsation {
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  animation: tourne 1s linear infinite;
+}
+@keyframes tourne { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .pulsation { animation: none; } }
+.panne h2 { margin: 0; font-size: 17px; }
+.panne p { margin: 0; font-size: 13px; color: var(--text-dim); max-width: 46em; }
+.panne .quoi-faire { color: var(--text-faint); font-size: 12.5px; }
+.panne code { font-family: var(--mono); font-size: 12px; }
+
 .onglets { display: flex; gap: 6px; flex-wrap: wrap; }
 .onglets button { font-size: 12.5px; padding: 5px 14px; color: var(--text-dim); }
 .strategie { display: flex; align-items: center; gap: 12px; margin-bottom: 9px; flex-wrap: wrap; }
@@ -521,6 +608,15 @@ code {
 button.primary {
   background: color-mix(in srgb, var(--accent) 20%, transparent);
   border-color: var(--accent-dim); color: var(--accent);
+}
+/* Ce style scopé a plus de spécificité que le `button:disabled` global : sans
+   cette règle, « Enregistrer » désactivé garderait sa couleur d'accent, et le
+   gris du feuillet global posé sur ce violet ne ferait que 3,73:1. Désactivé,
+   le bouton retombe sur le fond neutre, où --text-faint mesure 4,75:1. */
+button.primary:disabled {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text-faint);
 }
 .ok-msg { font-size: 12px; color: var(--ok); }
 .err-msg { font-size: 12px; color: var(--err); }

@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .scanner import collect
+from .scanner import DEFAULT_RULES, ScanRules, collect
 
 logger = logging.getLogger(__name__)
 
@@ -65,15 +65,22 @@ class Watcher:
         """
         self._processed.update(str(p) for p in paths)
 
-    def poll(self, roots: list[Path], *, now: float | None = None) -> list[Path]:
+    def poll(
+        self, roots: list[Path], *, now: float | None = None, rules: ScanRules = DEFAULT_RULES
+    ) -> list[Path]:
         """Renvoie les fichiers nouveaux ET stables depuis la derniere fois.
 
         Le recensement est la passe rapide du scanner : aucun ffprobe, aucune
         lecture de .nfo. Une surveillance qui tourne toutes les quinze minutes
         ne doit pas relire toute la bibliotheque a chaque fois.
+
+        ``rules`` doit etre celles du scan : une surveillance qui ignore les
+        exclusions de l'utilisateur reveillerait un cycle automatique sur des
+        fichiers que le scan ecarte ensuite — un tour de boucle pour rien, a
+        chaque intervalle.
         """
         now = now if now is not None else time.time()
-        candidates, _, errors = collect(roots)
+        candidates, _, errors = collect(roots, rules=rules)
         for error in errors:
             logger.debug("surveillance : %s", error)
 

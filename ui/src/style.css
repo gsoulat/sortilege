@@ -61,8 +61,10 @@
    * Quatre pas suffisent, et 12 px est un plancher : en dessous on ne
    * lit plus, on devine.
    *
-   * Les composants ne sont PAS encore migrés — ces variables sont là pour
-   * qu'ils le soient, un par un.
+   * La migration se fait composant par composant, et un pas ne vaut que
+   * s'il est appelé : une variable déclarée qui ne s'applique nulle part
+   * donne la croyance d'un système sans le système. Faits à ce jour :
+   * ConfirmAction, JournalView, MaintenanceSettings.
    * ------------------------------------------------------------------ */
 
   /* Annotations : mentions d'état, compteurs, horodatages, tout ce qui
@@ -106,8 +108,20 @@ button {
   padding: 6px 12px;
   transition: border-color .12s, background .12s, color .12s;
 }
-button:hover { border-color: var(--accent-dim); }
-button:disabled { opacity: .4; cursor: not-allowed; }
+button:hover:not(:disabled) { border-color: var(--accent-dim); }
+
+/* Un bouton indisponible doit se lire, pas s'effacer. `opacity: .4` ramenait
+   son texte à 3,23:1 sur --surface et 3,28:1 sur --surface-2 — sous le seuil
+   AA de 4,5:1, et même sous les 3:1 tolérés pour les grands caractères — sur
+   la soixantaine de boutons désactivables de l'application. L'opacité portant
+   sur l'élément entier, elle emportait aussi la bordure et le fond : le bouton
+   ne passait pas pour indisponible mais pour à moitié effacé.
+   Une couleur de texte explicite dit la même chose sans rien diluer.
+   --text-faint (#828ca1) mesure 5,21:1 sur --surface et 4,75:1 sur
+   --surface-2 — les deux fonds où un bouton se pose, le second étant le cas
+   défavorable. C'est aussi ce que ConfirmAction applique déjà à son propre
+   état désactivé. */
+button:disabled { color: var(--text-faint); cursor: not-allowed; }
 
 /* Un bouton qui détruit doit se lire comme tel AU REPOS. Jusqu'ici `.danger`
    valait `color: var(--text-faint)` et ne rougissait qu'au survol : le bouton

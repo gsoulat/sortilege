@@ -46,6 +46,14 @@ MAX_CONCURRENCY = 6
 par seconde ; on reste tres en dessous, la lenteur d'un scan n'etant jamais un
 probleme alors qu'un bannissement en est un."""
 
+AI_BATCH_SIZE = 12
+"""Fichiers ambigus soumis au resolveur en un seul appel.
+
+Constante et non reglage : le decoupage ne change ni le nombre de fichiers
+traites, ni le cout total, ni la qualite des reponses. Il n'y avait donc rien a
+arbitrer, et le proposer demandait une decision qu'aucune information affichee
+ne permettait de prendre — c'est pourquoi ce champ a quitte les preferences."""
+
 
 class Pipeline:
     """Assemble les etapes. Instancie pour la duree d'un scan, puis ferme."""
@@ -60,7 +68,6 @@ class Pipeline:
         destination_for=None,
         policy: Policy,
         ai=None,
-        ai_batch_size: int = 12,
         ai_threshold: float = 0.80,
         memory=None,
         known_titles: set[str] | None = None,
@@ -75,7 +82,6 @@ class Pipeline:
         self._destination_for = destination_for or (lambda kind, size: library_root)
         self._policy = policy
         self._ai = ai
-        self._ai_batch_size = max(1, ai_batch_size)
         self._ai_threshold = ai_threshold
         self._memory = memory
         # Titres deja presents en bibliotheque. Ils comptent comme voisins pour
@@ -539,8 +545,8 @@ class Pipeline:
         logger.info("resolveur IA : %s fichier(s) ambigus", len(pending))
         updated = list(plans)
 
-        for start in range(0, len(pending), self._ai_batch_size):
-            chunk = pending[start : start + self._ai_batch_size]
+        for start in range(0, len(pending), AI_BATCH_SIZE):
+            chunk = pending[start : start + AI_BATCH_SIZE]
             items = [
                 AmbiguousItem(
                     index=index,

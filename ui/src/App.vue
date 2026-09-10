@@ -3,10 +3,11 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import LoginView from './components/LoginView.vue'
 import WorkspaceView from './components/WorkspaceView.vue'
 import SettingsView from './components/SettingsView.vue'
+import JournalView from './components/JournalView.vue'
 
 const authenticated = ref(null) // null = on ne sait pas encore
 const health = ref(null)
-const view = ref('workspace')
+const view = ref('source')
 
 // « À ranger », « Ma collection » et « File de revue » montraient trois moitiés
 // du même objet et obligeaient à des allers-retours pour répondre à « où en est
@@ -20,10 +21,31 @@ const view = ref('workspace')
 // concurrente de la médiathèque, c'est la forme du chemin de rangement. Il vit
 // donc dans Réglages, à côté de la destination qu'il complète — et il
 // s'enregistre, ce qu'il ne faisait pas.
+//
+// « Ranger » et « Ma médiathèque » remontent ici depuis les onglets internes de
+// la médiathèque. Ce sont deux intentions, pas deux filtres : on vient dans
+// l'une pour vider la source et on en repart quand elle est vide ; on vient
+// dans l'autre pour inspecter ce qu'on possède, et elle n'est jamais vide.
+// Enterrées un cran plus bas, elles se cherchaient — et la barre du haut
+// n'offrait qu'une destination unique flanquée des réglages.
+//
+// Le journal a sa propre entrée plutôt qu'un panneau replié dans la barre
+// d'actions. Ce n'est pas un détail de rangement : annuler un déplacement est
+// la fonction que ni Radarr ni Sonarr ne savent faire — aucune trace de
+// « undo » dans toute leur interface. Une capacité qu'on cache derrière un
+// bouton passe pour un dépannage ; à sa place, elle se voit.
 const VIEWS = [
-  { id: 'workspace', label: 'Ma médiathèque' },
+  { id: 'source', label: 'Ranger' },
+  { id: 'library', label: 'Ma médiathèque' },
+  { id: 'journal', label: 'Journal' },
   { id: 'settings', label: 'Réglages' },
 ]
+
+// Les deux premières entrées partagent un composant : c'est le même écran, le
+// même chargement et les mêmes actions — seul l'ensemble d'œuvres affiché
+// change. En faire deux composants dupliquerait deux mille lignes pour un
+// filtre.
+const ESPACES = ['source', 'library']
 
 async function checkAuth() {
   try {
@@ -85,10 +107,13 @@ onUnmounted(() => {
       </div>
 
       <nav>
+        <!-- `aria-current` plutôt qu'une classe seule : la couleur dit l'onglet
+             courant à qui regarde, elle ne le dit à personne d'autre. -->
         <button
           v-for="v in VIEWS"
           :key="v.id"
           :class="{ active: view === v.id }"
+          :aria-current="view === v.id ? 'page' : undefined"
           @click="view = v.id"
         >{{ v.label }}</button>
       </nav>
@@ -108,7 +133,8 @@ onUnmounted(() => {
     </header>
 
     <main>
-      <WorkspaceView v-if="view === 'workspace'" />
+      <WorkspaceView v-if="ESPACES.includes(view)" :espace="view" />
+      <JournalView v-else-if="view === 'journal'" />
       <SettingsView v-else-if="view === 'settings'" />
     </main>
   </div>
@@ -160,4 +186,32 @@ nav button.active { color: var(--text); background: var(--surface-2); }
   color: var(--text-faint); background: none;
 }
 .logout:hover { color: var(--text); }
+
+/* --- Écrans étroits ------------------------------------------------------ *
+ * L'en-tête tient sur une ligne tant qu'il y a de la place ; à trois entrées
+ * de navigation il n'en a plus sur un téléphone. Le `flex-wrap` existant le
+ * replierait n'importe comment — la marque partirait seule sur sa ligne et les
+ * badges d'état se retrouveraient au-dessus de la navigation. On fixe donc
+ * l'ordre : identité et état ensemble en haut, navigation pleine largeur
+ * dessous, là où le pouce l'atteint.
+ *
+ * 700 px et non 768 : c'est la largeur à laquelle CETTE barre déborde, pas
+ * celle d'une tablette générique. */
+@media (max-width: 700px) {
+  .shell { padding: 0 14px 48px; }
+
+  header { gap: 10px 14px; padding: 14px 0 16px; margin-bottom: 20px; }
+
+  /* La navigation passe en dernier et prend toute la ligne. `margin-right`
+     poussait l'état à droite quand tout tenait sur un rang ; ce rôle revient
+     à l'état lui-même une fois la navigation descendue. */
+  nav { order: 3; flex: 1 0 100%; margin-right: 0; gap: 4px; }
+  .status { margin-left: auto; }
+
+  /* 32 px de haut : une cible qu'on atteint au doigt du premier coup. Par le
+     rembourrage, jamais par la taille du texte — grossir la police déplacerait
+     la hiérarchie typographique de tout l'écran pour un problème de doigt. */
+  nav button { padding: 8px 13px; min-height: 32px; }
+  .logout { padding: 7px 12px; min-height: 32px; }
+}
 </style>

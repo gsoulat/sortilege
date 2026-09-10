@@ -3,9 +3,10 @@
 Source principale : c'est aussi celle vers laquelle FileBot a bascule pour les
 series apres les restrictions d'API de TheTVDB.
 
-La langue est demandee en francais avec repli anglais : sans cela, une
-bibliotheque francaise renvoie des titres anglais et la similarite de titre
-s'effondre alors que l'identification est correcte.
+La langue est demandee en francais par defaut : sans cela, une bibliotheque
+francaise renvoie des titres anglais et la similarite de titre s'effondre alors
+que l'identification est correcte. Elle se regle, parce que le raisonnement
+s'inverse exactement pour une bibliotheque nommee en anglais ou en japonais.
 """
 
 from __future__ import annotations
@@ -26,6 +27,11 @@ _POPULARITY_CAP = 2000.0
 # w185 : assez grand pour reconnaitre une affiche, assez petit pour en
 # charger vingt sans ralentir la page.
 IMAGE_BASE = "https://image.tmdb.org/t/p/w185"
+
+DEFAULT_LANGUAGE = "fr-FR"
+"""Le defaut d'avant le reglage. Conserve tel quel : changer la langue d'une
+installation existante deplacerait les titres de toute sa bibliotheque au
+prochain rangement."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,9 +58,12 @@ class EpisodeInfo:
 class TMDBProvider(BaseHTTPProvider):
     name = "tmdb"
 
-    def __init__(self, api_key: str, **kwargs) -> None:
+    def __init__(self, api_key: str, language: str = DEFAULT_LANGUAGE, **kwargs) -> None:
         super().__init__(**kwargs)
         self._api_key = api_key
+        # Une langue vide serait acceptee par TMDB et ignoree en silence : on
+        # retomberait sur l'anglais sans que rien ne l'annonce.
+        self._language = language.strip() or DEFAULT_LANGUAGE
         # Cache dedie : le cache generique stocke des listes de candidats, pas
         # des tables d'episodes.
         self._seasons: dict[tuple[str, int], dict[int, EpisodeInfo] | None] = {}
@@ -103,7 +112,7 @@ class TMDBProvider(BaseHTTPProvider):
 
     def _params(self, **extra) -> dict[str, str]:
         base = {
-            "language": "fr-FR",
+            "language": self._language,
             "include_adult": "false",
             **{k: str(v) for k, v in extra.items() if v is not None},
         }

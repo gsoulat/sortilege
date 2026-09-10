@@ -26,7 +26,7 @@ from ..core.companions import find_empty_dirs, find_orphan_dirs, trash_destinati
 from ..core.journal import _move, prune_empty_dirs
 from ..core.scanner import ScanResult, scan
 from ..core.snapshot import SCAN_KEY, SnapshotError, scan_in, scan_out
-from .deps import get_memory, get_store
+from .deps import get_memory, get_store, scan_rules
 
 logger = logging.getLogger(__name__)
 
@@ -353,6 +353,10 @@ def _run(roots, deep: bool, limit: int | None, library_root) -> None:
             deep=deep,
             limit=limit,
             library_root=library_root,
+            # Relues ici, dans le thread, et non figees a la construction du
+            # travail : un scan lance juste apres un changement de reglage doit
+            # obeir au nouveau, pas a celui qui etait en vigueur au clic.
+            rules=scan_rules(),
             on_progress=progress,
             on_partial=partiel,
         )

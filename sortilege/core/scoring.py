@@ -76,12 +76,25 @@ class Signals:
     candidat. None = le conteneur ne porte pas de titre exploitable."""
 
 
+AUTO_APPLY_THRESHOLD = 0.92
+"""Au-dessus : on applique sans demander. Regle depuis l'environnement."""
+
+REJECT_THRESHOLD = 0.40
+"""En dessous : rejet direct, sans encombrer la file de revue."""
+
+# Ces deux valeurs sont declarees ICI et nulle part ailleurs. ``config.py`` les
+# reprend comme defaut de ses variables d'environnement : les ecrire aux deux
+# endroits marchait tant que personne n'en changeait qu'un seul, et le jour ou
+# cela arrive la divergence est muette — le comportement depend alors de qui,
+# de l'appelant ou du defaut, a servi.
+
+
 @dataclass(slots=True)
 class Policy:
     """Seuils, pilotes par l'environnement. Voir config.py."""
 
-    auto_apply_threshold: float = 0.92
-    reject_threshold: float = 0.40
+    auto_apply_threshold: float = AUTO_APPLY_THRESHOLD
+    reject_threshold: float = REJECT_THRESHOLD
     trust_ai: bool = True
     """Si False, une identification venue de l'IA ne peut jamais passer en
     AUTO — elle plafonne a REVIEW quelle que soit sa confiance."""

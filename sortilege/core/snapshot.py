@@ -35,7 +35,7 @@ from ..providers.base import Candidate
 from .parser import MediaKind, ParsedName
 from .planner import Plan
 from .probe import FileProbe
-from .scanner import ScannedFile, ScanResult
+from .scanner import MIN_SIZE_BYTES, ScannedFile, ScanResult
 from .scoring import Decision
 
 logger = logging.getLogger(__name__)
@@ -120,6 +120,7 @@ def scan_out(result: ScanResult, *, deep: bool) -> dict:
                 "size_bytes": f.size_bytes,
                 "relative_path": f.relative_path,
                 "in_library": f.in_library,
+                "min_size_bytes": f.min_size_bytes,
                 "parsed": _parsed_out(f.parsed),
                 "probe": _probe_out(f.probe),
             }
@@ -209,6 +210,10 @@ def scan_in(raw: object) -> tuple[ScanResult, bool]:
                 probe=FileProbe(**f["probe"]),
                 relative_path=f.get("relative_path", ""),
                 in_library=f.get("in_library", False),
+                # Champ ajoute apres coup : un instantane ecrit avant lui reste
+                # lisible et retombe sur le plancher livre, ce qui vaut mieux
+                # que jeter un scan de plusieurs minutes pour un entier.
+                min_size_bytes=f.get("min_size_bytes", MIN_SIZE_BYTES),
             )
             for f in data["files"]
         ]

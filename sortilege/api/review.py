@@ -30,6 +30,7 @@ from ..core.journal import (
     undo_last,
     undo_plans,
     undo_work,
+    work_key,
 )
 from ..core.mediaserver import refresh_library
 from ..core.pipeline import BATCH_SIZE, Pipeline
@@ -45,7 +46,7 @@ from ..core.store import title_key
 from ..providers.anilist import AniListProvider
 from ..providers.base import last_auth_error
 from ..providers.tmdb import TMDBProvider
-from .deps import get_journal, get_memory, get_store
+from .deps import get_journal, get_memory, get_store, tmdb_key, tmdb_language
 from .library import last_scan
 
 logger = logging.getLogger(__name__)
@@ -432,17 +433,19 @@ async def build_plans(limit: int = 100, reset: bool = False) -> dict[str, object
             status_code=400,
             detail="Aucun scan disponible. Lance d'abord un scan depuis la bibliothèque.",
         )
-    if not conf.tmdb_api_key:
+    cle = tmdb_key()
+    if not cle:
         raise HTTPException(
             status_code=400,
-            detail="Aucune clé TheMovieDB : sans fournisseur, il n'y a aucun candidat à comparer.",
+            detail="Aucune clé TheMovieDB : sans fournisseur, il n'y a aucun candidat à comparer. "
+            "Renseigne-la dans Réglages → Métadonnées.",
         )
 
     store = get_store()
     prefs = store.load()
 
     pipeline = Pipeline(
-        tmdb=TMDBProvider(conf.tmdb_api_key),
+        tmdb=TMDBProvider(cle, prefs.metadata.language),
         anilist=AniListProvider(),
         library_root=conf.library_root,
         templates={k: prefs.template_for(k) for k in ("movie", "episode", "anime")},
@@ -452,7 +455,6 @@ async def build_plans(limit: int = 100, reset: bool = False) -> dict[str, object
             reject_threshold=conf.reject_threshold,
         ),
         ai=_ai_resolver(),
-        ai_batch_size=prefs.ai.batch_size,
         ai_threshold=prefs.ai.threshold,
         memory=get_memory(),
         known_titles=_library_titles(),
@@ -581,16 +583,20 @@ def blockers() -> list[dict[str, str]]:
     permet pas — un ``message`` qui dit la consequence, et un ``where`` qui
     nomme l'ecran ou agir. Un blocage sans adresse laisse chercher.
     """
-    conf = get_settings()
     found: list[dict[str, str]] = []
 
-    if not conf.tmdb_api_key:
+    # L'adresse cite les deux endroits : la cle se saisit desormais dans
+    # l'interface, mais une installation ancienne la porte dans son .env et
+    # c'est peut-etre celle-la qui manque.
+    ou = "Réglages → Métadonnées (ou TMDB_API_KEY dans le .env)"
+
+    if not tmdb_key():
         found.append(
             {
                 "code": "tmdb_key_missing",
                 "message": "Aucune clé TheMovieDB : sans fournisseur de métadonnées, "
                 "aucun candidat n'est proposé, donc rien n'est identifié.",
-                "where": "Réglages → Système (TMDB_API_KEY dans le .env)",
+                "where": ou,
             }
         )
     elif refus := last_auth_error("tmdb"):
@@ -601,7 +607,7 @@ def blockers() -> list[dict[str, str]]:
             {
                 "code": "tmdb_key_refused",
                 "message": refus,
-                "where": "Réglages → Système (TMDB_API_KEY dans le .env)",
+                "where": ou,
             }
         )
 
@@ -1040,14 +1046,15 @@ async def search_candidates(plan_id: str, q: str, kind: str = "") -> dict[str, o
     if plan is None:
         raise HTTPException(status_code=404, detail="Plan inconnu ou deja applique.")
 
-    conf = get_settings()
-    if not conf.tmdb_api_key:
+    cle = tmdb_key()
+    if not cle:
         # Le dire plutot que renvoyer une liste vide : sans cela, la recherche
         # semble ne rien trouver alors qu'elle n'a jamais eu lieu, et on
         # cherche l'erreur du cote de sa requete.
         raise HTTPException(
             status_code=503,
-            detail="Aucune cle TheMovieDB : la recherche ne peut rien interroger.",
+            detail="Aucune cle TheMovieDB : la recherche ne peut rien interroger. "
+            "Renseigne-la dans Reglages → Metadonnees.",
         )
 
     # Le type CHERCHE peut differer de celui du plan, et c'est souvent la
@@ -1057,7 +1064,7 @@ async def search_candidates(plan_id: str, q: str, kind: str = "") -> dict[str, o
     # a corriger, et ne trouvait rien.
     cherche = kind if kind in ("movie", "episode", "anime") else plan.kind
 
-    tmdb = TMDBProvider(conf.tmdb_api_key)
+    tmdb = TMDBProvider(cle, tmdb_language())
     anilist = AniListProvider()
     trouves: list = []
     try:
@@ -1164,8 +1171,9 @@ async def choose(plan_id: str, body: ChooseRequest) -> dict[str, object]:
 
     store = get_store()
     prefs = store.load()
+    cle = tmdb_key()
     pipeline = Pipeline(
-        tmdb=TMDBProvider(conf.tmdb_api_key) if conf.tmdb_api_key else None,
+        tmdb=TMDBProvider(cle, prefs.metadata.language) if cle else None,
         anilist=AniListProvider(),
         library_root=conf.library_root,
         templates={k: prefs.template_for(k) for k in ("movie", "episode", "anime")},
@@ -1239,6 +1247,108 @@ def undo(body: UndoRequest) -> dict[str, object]:
         "journal_size": len(get_journal().read_all()),
         "remaining": _remaining(),
         "planned": len(_job.done_paths),
+    }
+
+
+OPERATIONS = {
+    "video": "Rangement",
+    "companion": "Compagnon",
+    "trash": "Corbeille",
+}
+"""Nature d'une operation journalisee, du code stable vers son libelle.
+
+Le code est ce que le filtre attend et ce que le journal porte sur le disque ;
+le libelle n'existe que pour l'affichage. Les deux voyagent ensemble pour que
+l'interface n'ait pas a tenir sa propre table de traduction — qui divergerait
+le jour ou une quatrieme nature apparaitra."""
+
+JOURNAL_PAGE_SIZE = 50
+MAX_JOURNAL_PAGE_SIZE = 200
+"""Au-dela, la reponse pese plus que ce qu'un ecran peut montrer, et une page
+qui met une seconde a arriver n'est plus une page."""
+
+
+@router.get("/journal/entries")
+def journal_entries(
+    page: int = 1,
+    per_page: int = JOURNAL_PAGE_SIZE,
+    operation: str | None = None,
+    q: str | None = None,
+) -> dict[str, object]:
+    """Le journal, entree par entree, du plus recent au plus ancien.
+
+    Distinct de ``GET /journal``, qui regroupe par oeuvre : c'est la maille a
+    laquelle on decide d'annuler une serie entiere. Ici on veut l'inverse — la
+    liste des changements, ligne a ligne, pour en defaire un seul.
+
+    ``plan_id`` est ce que ``POST /undo`` attend. Il designe le PLAN, donc la
+    video ET ses compagnons : annuler une ligne remet aussi le sous-titre a sa
+    place, sans quoi le retour arriere serait a moitie fait. Plusieurs lignes
+    peuvent donc porter le meme identifiant, et c'est voulu.
+
+    Le journal est relu en entier a chaque appel : il est en JSONL, sans index,
+    et pagine cote serveur uniquement pour borner la reponse. C'est tenable
+    parce qu'une entree pese quelques centaines d'octets — un an de rangement
+    intensif tient en quelques mega-octets — et cela evite d'introduire une
+    base a maintenir pour un fichier qu'on relit deja au demarrage.
+    """
+    if operation is not None and operation not in OPERATIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Nature d'operation inconnue : « {operation} ». "
+            f"Valeurs acceptees : {', '.join(OPERATIONS)}.",
+        )
+
+    page = max(1, page)
+    per_page = max(1, min(MAX_JOURNAL_PAGE_SIZE, per_page))
+
+    records = get_journal().read_all()
+    natures = {code: 0 for code in OPERATIONS}
+    for r in records:
+        if r.kind in natures:
+            natures[r.kind] += 1
+
+    recherche = (q or "").strip().lower()
+    retenus = [
+        r
+        for r in records
+        if (operation is None or r.kind == operation)
+        # La recherche porte sur le titre AFFICHE, pas sur le champ brut : les
+        # entrees anterieures a l'inscription du titre n'en ont pas, et elles
+        # seraient introuvables alors que la liste les montre sous un nom.
+        and (not recherche or recherche in work_key(r).lower())
+    ]
+
+    # Tri stable : a horodatage egal — un lot applique dans la meme seconde —
+    # l'ordre du fichier est conserve, donc l'ordre reel des operations.
+    ordered = sorted(retenus, key=lambda r: r.timestamp, reverse=True)
+    start = (page - 1) * per_page
+
+    return {
+        "total": len(ordered),
+        "journal_size": len(records),
+        "page": page,
+        "per_page": per_page,
+        "pages": max(1, -(-len(ordered) // per_page)),
+        "operations": [
+            {"code": code, "label": label, "count": natures[code]}
+            for code, label in OPERATIONS.items()
+        ],
+        "entries": [
+            {
+                "timestamp": r.timestamp,
+                "title": r.title or work_key(r),
+                "work_kind": r.work_kind,
+                "work_key": work_key(r),
+                "source": r.source,
+                "destination": r.destination,
+                "operation": r.kind,
+                "operation_label": OPERATIONS.get(r.kind, r.kind),
+                "method": r.method,
+                "plan_id": r.plan_id,
+            }
+            for r in ordered[start : start + per_page]
+        ],
     }
 
 

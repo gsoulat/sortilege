@@ -30,16 +30,20 @@ from ..core.preferences import (
     AISettings,
     AutomationSettings,
     MediaServerSettings,
+    MetadataSettings,
     NotificationSettings,
     OversizeSettings,
     PreferenceError,
     Preferences,
     QualitySettings,
+    ScanSettings,
     TranscodeSettings,
 )
 from ..core.probe import ffprobe_available
 from ..core.quality import STRATEGIES as QUALITY_STRATEGIES
-from .deps import get_memory, get_store
+from ..providers.base import forget_auth_errors, last_auth_error
+from ..providers.tmdb import TMDBProvider
+from .deps import get_memory, get_store, tmdb_key, tmdb_language
 
 router = APIRouter(prefix="/api/settings", tags=["reglages"])
 
@@ -50,7 +54,6 @@ class AIIn(BaseModel):
     model: str | None = None
     base_url: str | None = None
     threshold: float | None = None
-    batch_size: int | None = None
 
     api_key: str | None = None
     """Ecriture seule. Absent ou vide = on conserve la cle existante, ce qui
@@ -81,6 +84,22 @@ class MediaServerIn(BaseModel):
 
     api_key: str | None = None
     """Ecriture seule, comme les autres cles. « - » vide explicitement."""
+
+
+class MetadataIn(BaseModel):
+    language: str | None = None
+
+    tmdb_api_key: str | None = None
+    """Ecriture seule, comme les autres cles. Absent ou vide = on conserve
+    celle qui est enregistree — changer la langue ne doit pas obliger a
+    ressaisir la cle. Une chaine « - » vide explicitement le champ, ce qui fait
+    retomber l'application sur TMDB_API_KEY si le .env en porte une."""
+
+
+class ScanIn(BaseModel):
+    min_size_mb: int | None = None
+    extra_skip_dirs: list[str] | None = None
+    extra_skip_hints: list[str] | None = None
 
 
 class QualityIn(BaseModel):
@@ -118,6 +137,8 @@ class PreferencesIn(BaseModel):
     oversize: OversizeIn | None = None
     notifications: NotificationsIn | None = None
     media_server: MediaServerIn | None = None
+    metadata: MetadataIn | None = None
+    scan: ScanIn | None = None
     quality: QualityIn | None = None
     transcode: TranscodeIn | None = None
 
@@ -163,11 +184,23 @@ def read_preferences() -> dict[str, object]:
             "model": prefs.ai.model,
             "base_url": prefs.ai.base_url,
             "threshold": prefs.ai.threshold,
-            "batch_size": prefs.ai.batch_size,
             # La cle ne sort jamais : cette reponse finit dans la console du
             # navigateur et dans son cache.
             "api_key_set": bool(prefs.ai.api_key),
         },
+        "metadata": {
+            "language": prefs.metadata.language,
+            # La cle ne sort jamais, comme les autres. On dit en revanche D'OU
+            # elle vient : sans cela, une installation qui la porte dans son
+            # .env afficherait un champ vide a cote d'une application qui
+            # identifie parfaitement, et le premier reflexe serait de la
+            # ressaisir.
+            "tmdb_key_set": bool(prefs.metadata.tmdb_api_key),
+            "tmdb_key_from_env": bool(
+                not prefs.metadata.tmdb_api_key.strip() and conf.tmdb_api_key.strip()
+            ),
+        },
+        "scan": asdict(prefs.scan),
         "automation": asdict(prefs.automation),
         "quality": asdict(prefs.quality),
         "ai_models": {p.key: list(p.models) for p in PROVIDERS},
@@ -295,6 +328,33 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
             patch["api_key"] = key
         server = MediaServerSettings(**{**asdict(current.media_server), **patch})
 
+    meta = current.metadata
+    if body.metadata is not None:
+        patch = body.metadata.model_dump(exclude_none=True)
+        # Exactement le motif du serveur multimedia : une cle vide signifie
+        # « ne change pas », parce que l'interface renvoie le formulaire entier
+        # a chaque enregistrement sans connaitre la valeur actuelle. « - » est
+        # le seul moyen de dire « efface » — sans lui, une cle saisie par
+        # erreur ne pourrait plus jamais etre retiree depuis l'interface.
+        key = patch.pop("tmdb_api_key", "").strip()
+        if key == "-":
+            patch["tmdb_api_key"] = ""
+        elif key:
+            patch["tmdb_api_key"] = key
+        if "language" in patch:
+            patch["language"] = patch["language"].strip()
+        meta = MetadataSettings(**{**asdict(current.metadata), **patch})
+
+    parcours = current.scan
+    if body.scan is not None:
+        patch = body.scan.model_dump(exclude_none=True)
+        for champ in ("extra_skip_dirs", "extra_skip_hints"):
+            if champ in patch:
+                # Les lignes vides d'un champ multiligne sont un accident de
+                # saisie, pas une exclusion sur « » — qui matcherait tout.
+                patch[champ] = [v.strip() for v in patch[champ] if v.strip()]
+        parcours = ScanSettings(**{**asdict(current.scan), **patch})
+
     qualite = current.quality
     if body.quality is not None:
         # Un budget negatif n'a pas de sens et un budget minuscule rendrait
@@ -323,6 +383,8 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
         notifications=notif,
         transcode=trans,
         media_server=server,
+        metadata=meta,
+        scan=parcours,
         quality=qualite,
     )
 
@@ -360,6 +422,52 @@ async def test_notification() -> dict[str, object]:
             detail="Discord n'a pas accepte le message. Verifie que le webhook existe toujours.",
         )
     return {"sent": True}
+
+
+TEST_QUERY = "Dune"
+"""Titre interroge par l'essai de cle. Court, sans accent, et present dans le
+catalogue de TheMovieDB dans toutes les langues : une recherche vide ne
+prouverait rien sur la cle, seulement sur le titre choisi."""
+
+
+@router.post("/metadata/test")
+async def test_metadata() -> dict[str, object]:
+    """Interroge REELLEMENT TheMovieDB avec la cle enregistree.
+
+    Une cle peut etre bien formee, enregistree, et refusee : la confusion entre
+    la cle v3 et le jeton v4 se lit comme un 401 muet, et sans essai elle ne se
+    manifeste que plus tard, sous la forme d'un scan qui n'identifie rien. Ce
+    que le fournisseur sait dire du refus est repris tel quel — il nomme la
+    confusion v3/v4, seule cause frequente ici.
+    """
+    cle = tmdb_key()
+    if not cle:
+        raise HTTPException(
+            status_code=400,
+            detail="Aucune clé TheMovieDB enregistrée. Saisis-la puis enregistre avant de tester.",
+        )
+
+    # La memoire des refus est videe AVANT l'essai : sans cela, un 401 releve
+    # lors d'un scan precedent serait resservi comme verdict de ce test, y
+    # compris apres correction de la cle. Un essai doit repondre sur l'instant,
+    # pas repeter ce qu'il savait deja.
+    forget_auth_errors()
+    provider = TMDBProvider(cle, tmdb_language())
+    try:
+        resultats = await provider.search_movie(TEST_QUERY, None)
+    finally:
+        await provider.aclose()
+
+    if not resultats:
+        raise HTTPException(
+            status_code=502,
+            detail=last_auth_error("tmdb")
+            or "TheMovieDB n'a rien renvoyé. Vérifie la clé et l'accès réseau du conteneur.",
+        )
+
+    # Le titre trouve est renvoye : c'est ce qui prouve que la LANGUE est prise
+    # en compte, et pas seulement que la cle passe.
+    return {"ok": True, "language": tmdb_language(), "sample": resultats[0].title}
 
 
 @router.post("/media-server/test")
@@ -439,9 +547,13 @@ def read_settings() -> dict[str, object]:
             {
                 "name": "TheMovieDB",
                 "role": "Films et séries",
-                "configured": bool(s.tmdb_api_key),
+                # La cle EFFECTIVE, preferences comprises : ce diagnostic dit
+                # si l'identification peut fonctionner, pas si le .env est
+                # rempli. Les deux ont diverge le jour ou la cle a pu se
+                # saisir dans l'interface.
+                "configured": bool(tmdb_key()),
                 "required": True,
-                "hint": "TMDB_API_KEY",
+                "hint": "Réglages → Métadonnées, ou TMDB_API_KEY",
             },
             {
                 "name": "AniList",
@@ -500,12 +612,20 @@ def _diagnostics(s) -> list[dict[str, object]]:
         }
     )
 
+    cle = tmdb_key()
     checks.append(
         {
             "name": "TheMovieDB",
-            "ok": bool(s.tmdb_api_key),
-            "detail": "Clé présente"
-            if s.tmdb_api_key
+            "ok": bool(cle),
+            # D'ou vient la cle, et pas seulement qu'elle existe : les deux
+            # sources se valent a l'usage, mais on ne corrige pas au meme
+            # endroit.
+            "detail": (
+                "Clé présente (réglages)"
+                if get_store().load().metadata.tmdb_api_key.strip()
+                else "Clé présente (TMDB_API_KEY)"
+            )
+            if cle
             else "Sans clé, aucun candidat n'est proposé et rien ne peut être identifié",
         }
     )

@@ -1,5 +1,6 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
+import ConfirmAction from './ConfirmAction.vue'
 
 const props = defineProps({
   mediaServer: { type: Object, required: true },
@@ -51,36 +52,67 @@ async function testServer() {
   }
 }
 
+/**
+ * Pourquoi une action est indisponible, en toutes lettres et à l'écran.
+ *
+ * Ce fichier portait douze boutons désactivables et un seul disait pourquoi :
+ * les onze autres se contentaient de griser, ce qui se lit « cassé » et non
+ * « pas maintenant ». Un `title` n'aurait rien réglé — il n'existe ni au doigt
+ * ni au clavier.
+ *
+ * Une phrase par CAUSE, pas par bouton : quand trois boutons attendent la même
+ * réponse du serveur, la répéter trois fois n'apprend rien la deuxième fois.
+ * Chaîne vide = rien à expliquer, l'action est disponible.
+ */
+const raisonEnregistrer = computed(() =>
+  draftUrl.value.trim() || draftKey.value.trim()
+    ? ''
+    : 'Rien à enregistrer : saisis une adresse, une clé, ou les deux.',
+)
+
+const raisonTest = computed(() =>
+  testing.value ? 'Appel en cours — le serveur a quelques secondes pour répondre.' : '',
+)
+
 // --- Corbeille -------------------------------------------------------------
 
 const trash = ref(null)
+// La panne de lecture, distincte de la corbeille elle-même. `trash` à null
+// veut dire « pas encore lu », et rien d'autre : lui faire porter en plus
+// « lu, et raté », c'est afficher « Lecture… » sur un serveur mort. Personne
+// ne réessaie ce qu'il croit en cours.
+const trashErreur = ref(null)
 const days = ref(30)
 const purging = ref(false)
 const purgeMessage = ref(null)
 
 async function loadTrash() {
+  trashErreur.value = null
   try {
-    trash.value = await (await fetch('/api/collection/trash')).json()
-  } catch {
+    const res = await fetch('/api/collection/trash')
+    // Le code avant le corps. Une 500 renvoie du JSON qu'on affectait tel
+    // quel, et `trash.batches.length` levait sur `undefined` au rendu suivant ;
+    // une 502 arrive en HTML et fait lever `json()`.
+    if (!res.ok) throw new Error(`réponse ${res.status}`)
+    trash.value = await res.json()
+  } catch (e) {
     trash.value = null
+    trashErreur.value = e.message ?? 'sans réponse'
   }
 }
-
-const confirmingAll = ref(false)
 
 /**
  * `all` vide TOUT, sans condition d'âge. C'est le geste attendu quand on
  * cherche de la place, mais il ne doit pas partir d'un champ laissé à zéro :
  * le serveur exige une confirmation explicite, et l'interface la demande.
+ *
+ * La confirmation elle-même n'est plus ici : `ConfirmAction` la porte pour les
+ * deux vidages. Le tri par âge s'exécutait au premier clic — l'action la plus
+ * destructrice du produit était la seule à ne rien demander.
  */
 async function purge({ all = false } = {}) {
-  if (all && !confirmingAll.value) {
-    confirmingAll.value = true
-    return
-  }
   purging.value = true
   purgeMessage.value = null
-  confirmingAll.value = false
   try {
     const res = await fetch('/api/collection/trash/purge', {
       method: 'POST',
@@ -89,13 +121,23 @@ async function purge({ all = false } = {}) {
         all ? { older_than_days: 0, confirm_all: true } : { older_than_days: Number(days.value) },
       ),
     })
-    const body = await res.json()
+    // Un échec de passerelle répond en HTML : lire le corps sans filet ferait
+    // lever ici, et le message d'échec n'arriverait jamais à l'écran.
+    const body = await res.json().catch(() => ({}))
     if (res.ok) {
       trash.value = body
-      purgeMessage.value =
-        `${body.removed_files} fichier(s) supprimé(s) définitivement, ${gb(body.freed_bytes)} Go libérés.`
+      trashErreur.value = null
+      purgeMessage.value = {
+        ok: true,
+        texte: `${body.removed_files} fichier(s) supprimé(s) définitivement, ${gb(body.freed_bytes)} Go libérés.`,
+      }
     } else {
-      purgeMessage.value = body.detail ?? 'Échec.'
+      purgeMessage.value = { ok: false, texte: body.detail ?? `Échec du vidage (réponse ${res.status}).` }
+    }
+  } catch {
+    purgeMessage.value = {
+      ok: false,
+      texte: 'Serveur injoignable. Ce qui a été supprimé, s\'il l\'a été, apparaîtra à la relecture.',
     }
   } finally {
     purging.value = false
@@ -103,6 +145,29 @@ async function purge({ all = false } = {}) {
 }
 
 const gb = (bytes) => (bytes / 1024 ** 3).toFixed(1)
+const pluriel = (n, mot) => `${n} ${mot}${n > 1 ? 's' : ''}`
+
+/**
+ * Ce que « Vider » emporte VRAIMENT, au jour près. Annoncer le total de la
+ * corbeille serait faux — le champ de jours en épargne une partie — et parler
+ * de « fichiers » sans compte ne fait décider personne. Le serveur retient les
+ * lots dont l'âge atteint le seuil : on applique le même test.
+ */
+const cibleAge = computed(() => {
+  const seuil = Number(days.value) || 0
+  const lots = (trash.value?.batches ?? []).filter((b) => b.age_days >= seuil)
+  return {
+    fichiers: lots.reduce((n, b) => n + b.files, 0),
+    octets: lots.reduce((n, b) => n + b.bytes, 0),
+  }
+})
+
+// Les deux vidages tombent ensemble et pour la même raison : une phrase pour
+// la rangée, pas une par bouton. « Vider » garde en plus sa raison propre —
+// celle-là dépend du champ de jours, elle n'est pas partagée.
+const raisonPurge = computed(() =>
+  purging.value ? 'Vidage en cours — les deux boutons reprennent dès que le serveur répond.' : '',
+)
 
 // --- Dossiers vides restes des rangements anterieurs ---------------------
 //
@@ -113,14 +178,23 @@ const vides = ref(null)
 const cherchantVides = ref(false)
 const nettoyant = ref(false)
 const videMessage = ref(null)
+const videErreur = ref(null)
 
 async function chercherVides() {
   cherchantVides.value = true
   videMessage.value = null
+  videErreur.value = null
   try {
-    vides.value = await (await fetch('/api/library/empty-dirs')).json()
-  } catch {
-    videMessage.value = 'Serveur injoignable.'
+    const res = await fetch('/api/library/empty-dirs')
+    if (!res.ok) throw new Error(`réponse ${res.status}`)
+    vides.value = await res.json()
+  } catch (e) {
+    // On jette la liste précédente au lieu de la garder à l'écran : elle
+    // décrivait le disque d'avant, et c'est sur elle qu'on cliquerait
+    // « Supprimer ». Un inventaire périmé est pire qu'aucun inventaire quand
+    // le bouton d'à côté efface.
+    vides.value = null
+    videErreur.value = e.message ?? 'sans réponse'
   } finally {
     cherchantVides.value = false
   }
@@ -134,19 +208,33 @@ async function nettoyerVides() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ confirm: true }),
     })
-    const body = await res.json()
+    const body = await res.json().catch(() => ({}))
     if (res.ok) {
       vides.value = body
-      videMessage.value =
-        `${body.removed} dossier(s) supprimé(s)` +
-        (body.failed?.length ? `, ${body.failed.length} en échec.` : '.')
+      videMessage.value = {
+        ok: true,
+        texte:
+          `${body.removed} dossier(s) supprimé(s)` +
+          (body.failed?.length ? `, ${body.failed.length} en échec.` : '.'),
+      }
     } else {
-      videMessage.value = body.detail ?? 'Échec.'
+      videMessage.value = { ok: false, texte: body.detail ?? `Échec (réponse ${res.status}).` }
+    }
+  } catch {
+    videMessage.value = {
+      ok: false,
+      texte: 'Serveur injoignable. Relance la recherche pour savoir ce qui reste.',
     }
   } finally {
     nettoyant.value = false
   }
 }
+
+const raisonVides = computed(() => {
+  if (cherchantVides.value) return 'Recherche en cours — le disque est parcouru dossier par dossier.'
+  if (nettoyant.value) return 'Suppression en cours — les actions de ce bloc attendent la réponse du serveur.'
+  return ''
+})
 
 // --- Coquilles : des dossiers qui ont des fichiers mais plus de video -----
 //
@@ -157,26 +245,29 @@ const coquilles = ref(null)
 const cherchantCoquilles = ref(false)
 const nettoyantCoquilles = ref(false)
 const coquilleMessage = ref(null)
-const confirmSuppr = ref(false)
+const coquilleErreur = ref(null)
 
 async function chercherCoquilles() {
   cherchantCoquilles.value = true
   coquilleMessage.value = null
+  coquilleErreur.value = null
   try {
-    coquilles.value = await (await fetch('/api/library/orphan-dirs')).json()
-  } catch {
-    coquilleMessage.value = 'Serveur injoignable.'
+    const res = await fetch('/api/library/orphan-dirs')
+    if (!res.ok) throw new Error(`réponse ${res.status}`)
+    coquilles.value = await res.json()
+  } catch (e) {
+    // Même règle que pour les dossiers vides : pas de liste périmée sous un
+    // bouton qui supprime.
+    coquilles.value = null
+    coquilleErreur.value = e.message ?? 'sans réponse'
   } finally {
     cherchantCoquilles.value = false
   }
 }
 
+// La mise en corbeille se rattrape, la suppression non : seule la seconde
+// passe par une confirmation, portée par `ConfirmAction` dans le gabarit.
 async function nettoyerCoquilles(mode) {
-  if (mode === 'delete' && !confirmSuppr.value) {
-    confirmSuppr.value = true
-    return
-  }
-  confirmSuppr.value = false
   nettoyantCoquilles.value = true
   try {
     const res = await fetch('/api/library/orphan-dirs/prune', {
@@ -184,20 +275,35 @@ async function nettoyerCoquilles(mode) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ confirm: true, mode }),
     })
-    const body = await res.json()
+    const body = await res.json().catch(() => ({}))
     if (res.ok) {
       coquilles.value = body
-      coquilleMessage.value =
-        `${body.removed_dirs} dossier(s) supprimé(s), ${body.handled_files} fichier(s) ` +
-        (mode === 'delete' ? 'supprimé(s)' : 'mis en corbeille') +
-        (body.failed?.length ? `, ${body.failed.length} en échec.` : '.')
+      coquilleMessage.value = {
+        ok: true,
+        texte:
+          `${body.removed_dirs} dossier(s) supprimé(s), ${body.handled_files} fichier(s) ` +
+          (mode === 'delete' ? 'supprimé(s)' : 'mis en corbeille') +
+          (body.failed?.length ? `, ${body.failed.length} en échec.` : '.'),
+      }
     } else {
-      coquilleMessage.value = body.detail ?? 'Échec.'
+      coquilleMessage.value = { ok: false, texte: body.detail ?? `Échec (réponse ${res.status}).` }
+    }
+  } catch {
+    coquilleMessage.value = {
+      ok: false,
+      texte: 'Serveur injoignable. Relance la recherche pour savoir ce qui reste.',
     }
   } finally {
     nettoyantCoquilles.value = false
   }
 }
+
+const raisonCoquilles = computed(() => {
+  if (cherchantCoquilles.value) return 'Recherche en cours — le disque est parcouru dossier par dossier.'
+  if (nettoyantCoquilles.value)
+    return 'Opération en cours — les deux actions de ce bloc attendent la réponse du serveur.'
+  return ''
+})
 
 const purgingThumbs = ref(false)
 const thumbMessage = ref(null)
@@ -207,16 +313,20 @@ async function purgeThumbs() {
   thumbMessage.value = null
   try {
     const res = await fetch('/api/media/thumbs/purge', { method: 'POST' })
-    const body = await res.json()
+    const body = await res.json().catch(() => ({}))
     thumbMessage.value = res.ok
-      ? `${body.removed} aperçu(s) supprimé(s). Ils se reconstruiront à la demande.`
-      : (body.detail ?? 'Échec.')
+      ? { ok: true, texte: `${body.removed} aperçu(s) supprimé(s). Ils se reconstruiront à la demande.` }
+      : { ok: false, texte: body.detail ?? `Échec (réponse ${res.status}).` }
   } catch {
-    thumbMessage.value = 'Serveur injoignable.'
+    thumbMessage.value = { ok: false, texte: 'Serveur injoignable — le cache est intact.' }
   } finally {
     purgingThumbs.value = false
   }
 }
+
+const raisonThumbs = computed(() =>
+  purgingThumbs.value ? 'Vidage du cache en cours — un aperçu à la fois.' : '',
+)
 
 // --- Remise en conformité --------------------------------------------------
 
@@ -228,17 +338,31 @@ async function renameLibrary() {
   renameResult.value = null
   try {
     const res = await fetch('/api/review/rename-library', { method: 'POST' })
-    const body = await res.json()
+    const body = await res.json().catch(() => ({}))
     renameResult.value = res.ok
-      ? body.proposed
-        ? `${body.proposed} fichier(s) à renommer sur ${body.works} œuvre(s). ` +
-          'Ils attendent ta validation dans « File de revue ».'
-        : 'Tout est déjà conforme au gabarit courant.'
-      : (body.detail ?? 'Échec.')
+      ? {
+          ok: true,
+          texte: body.proposed
+            ? `${body.proposed} fichier(s) à renommer sur ${body.works} œuvre(s). ` +
+              'Ils attendent ta validation dans « File de revue ».'
+            : 'Tout est déjà conforme au gabarit courant.',
+        }
+      : { ok: false, texte: body.detail ?? `Échec (réponse ${res.status}).` }
+  } catch {
+    renameResult.value = {
+      ok: false,
+      texte: 'Serveur injoignable. Rien n\'a été proposé, rien n\'a été déplacé.',
+    }
   } finally {
     renaming.value = false
   }
 }
+
+const raisonRenommage = computed(() =>
+  renaming.value
+    ? 'Analyse en cours — chaque fichier de la bibliothèque est comparé au gabarit.'
+    : '',
+)
 
 onMounted(loadTrash)
 </script>
@@ -287,6 +411,7 @@ onMounted(loadTrash)
           Enregistrer
         </button>
       </div>
+      <p v-if="raisonEnregistrer" class="indispo" role="status">{{ raisonEnregistrer }}</p>
       <p class="hint">
         Dans Jellyfin : <em>Tableau de bord → Avancé → Clés d'API → +</em>. Elle donne
         accès au serveur, donc elle est stockée comme une clé : saisie une fois, jamais
@@ -301,6 +426,7 @@ onMounted(loadTrash)
       <span v-if="testResult" :class="['result', testResult.ok ? 'ok' : 'err']">
         {{ testResult.text }}
       </span>
+      <span v-if="raisonTest" class="indispo" role="status">{{ raisonTest }}</span>
     </div>
   </section>
 
@@ -312,7 +438,18 @@ onMounted(loadTrash)
       suppression non — mais rien ne vide la corbeille, et elle grossit indéfiniment.
     </p>
 
-    <p v-if="!trash" class="empty">Lecture…</p>
+    <!-- L'échec passe AVANT l'attente, sans quoi il s'y cache : les deux états
+         valaient un même `trash` à null, et une lecture ratée annonçait
+         « Lecture… » jusqu'à la fin des temps. -->
+    <p v-if="trashErreur" class="panne-inline">
+      La corbeille n'a pas pu être lue ({{ trashErreur }}). Rien n'est perdu ni
+      supprimé pour autant : c'est l'inventaire qui manque, pas les fichiers.
+      <!-- Toujours cliquable : quand ce panneau s'affiche, les boutons de
+           vidage ne sont pas rendus, un `:disabled` ici ne coifferait aucun
+           état atteignable — et se lirait quand même comme une impasse. -->
+      <button class="small" @click="loadTrash">Réessayer</button>
+    </p>
+    <p v-else-if="!trash" class="empty">Lecture…</p>
     <p v-else-if="!trash.batches.length" class="empty">La corbeille est vide.</p>
 
     <template v-else>
@@ -335,25 +472,34 @@ onMounted(loadTrash)
           <input type="number" min="0" max="365" v-model="days" />
           jours
         </label>
-        <button class="danger" :disabled="purging" @click="purge()">
-          {{ purging ? 'Suppression…' : 'Vider' }}
-        </button>
+        <ConfirmAction
+          label="Vider"
+          :confirm-label="`Confirmer — supprimer ${pluriel(cibleAge.fichiers, 'fichier')}`"
+          :detail="`Supprime ${pluriel(cibleAge.fichiers, 'fichier')}, ${gb(cibleAge.octets)} Go, définitivement. Rien ne se restaure ensuite.`"
+          :busy="purging"
+          :disabled="purging || !cibleAge.fichiers"
+          :disabled-reason="cibleAge.fichiers ? '' : `Aucun lot n'a ${days} jour${days > 1 ? 's' : ''} ou plus.`"
+          @confirm="purge()"
+        />
         <span class="sep"></span>
-        <button class="danger strong" :disabled="purging" @click="purge({ all: true })">
-          {{ confirmingAll ? `Confirmer : supprimer les ${gb(trash.total_bytes)} Go` : 'Tout vider' }}
-        </button>
+        <ConfirmAction
+          label="Tout vider"
+          :confirm-label="`Confirmer — supprimer les ${gb(trash.total_bytes)} Go`"
+          :detail="`Supprime ${pluriel(trash.total_files, 'fichier')}, ${gb(trash.total_bytes)} Go, définitivement — y compris ce qui vient d'être évacué. Rien ne se restaure ensuite.`"
+          :busy="purging"
+          :disabled="purging"
+          @confirm="purge({ all: true })"
+        />
       </div>
+      <p v-if="raisonPurge" class="indispo" role="status">{{ raisonPurge }}</p>
       <p class="hint">
         C'est le seul endroit de l'application qui supprime réellement, et le seul qui
         rende de la place. Un détour par la corbeille du NAS a été envisagé puis écarté :
         il ne libère rien non plus, il donne juste deux corbeilles à vider au lieu d'une.
-        <template v-if="confirmingAll">
-          <strong class="warn-strong">
-            Un second clic supprime tout, y compris ce qui vient d'être évacué. Irréversible.
-          </strong>
-        </template>
       </p>
-      <p v-if="purgeMessage" class="ok-text">{{ purgeMessage }}</p>
+      <p v-if="purgeMessage" :class="purgeMessage.ok ? 'ok-text' : 'err-text'">
+        {{ purgeMessage.texte }}
+      </p>
     </template>
 
     <div class="vignettes">
@@ -365,7 +511,10 @@ onMounted(loadTrash)
         {{ purgingThumbs ? 'Vidage…' : 'Vider le cache des aperçus' }}
       </button>
     </div>
-    <p v-if="thumbMessage" class="ok-text">{{ thumbMessage }}</p>
+    <p v-if="raisonThumbs" class="indispo" role="status">{{ raisonThumbs }}</p>
+    <p v-if="thumbMessage" :class="thumbMessage.ok ? 'ok-text' : 'err-text'">
+      {{ thumbMessage.texte }}
+    </p>
   </section>
 
   <section v-if="montre('renommage')">
@@ -386,24 +535,33 @@ onMounted(loadTrash)
       <button :disabled="cherchantVides" @click="chercherVides">
         {{ cherchantVides ? 'Recherche…' : 'Chercher les dossiers vides' }}
       </button>
-      <button
+      <ConfirmAction
         v-if="vides?.count"
-        class="danger"
+        :label="`Supprimer ces ${vides.count} dossiers`"
+        :confirm-label="`Confirmer — supprimer ${pluriel(vides.count, 'dossier')}`"
+        :detail="`Supprime ${pluriel(vides.count, 'dossier')} vides, définitivement. Aucun fichier n'est concerné : ils ne contiennent rien.`"
+        :busy="nettoyant"
         :disabled="nettoyant"
-        @click="nettoyerVides"
-      >
-        {{ nettoyant ? 'Suppression…' : `Supprimer ces ${vides.count} dossiers` }}
-      </button>
+        @confirm="nettoyerVides"
+      />
     </div>
+    <p v-if="raisonVides" class="indispo" role="status">{{ raisonVides }}</p>
 
-    <p v-if="vides && !vides.count" class="empty">Aucun dossier vide.</p>
+    <p v-if="videErreur" class="panne-inline">
+      Les dossiers vides n'ont pas pu être listés ({{ videErreur }}). Aucun dossier
+      n'a été touché : c'est le relevé qui manque.
+      <button class="small" :disabled="cherchantVides" @click="chercherVides">Réessayer</button>
+    </p>
+    <p v-else-if="vides && !vides.count" class="empty">Aucun dossier vide.</p>
     <ul v-else-if="vides" class="vides">
       <li v-for="d in vides.dirs" :key="d"><code>{{ d }}</code></li>
       <li v-if="vides.count > vides.dirs.length" class="more">
         … et {{ vides.count - vides.dirs.length }} autres
       </li>
     </ul>
-    <p v-if="videMessage" class="ok-text">{{ videMessage }}</p>
+    <p v-if="videMessage" :class="videMessage.ok ? 'ok-text' : 'err-text'">
+      {{ videMessage.texte }}
+    </p>
 
     <h3 class="sous-titre">Dossiers sans vidéo</h3>
     <p class="note">
@@ -427,13 +585,26 @@ onMounted(loadTrash)
         <button :disabled="nettoyantCoquilles" @click="nettoyerCoquilles('trash')">
           Mettre en corbeille ({{ gb(coquilles.bytes) }} Go)
         </button>
-        <button class="danger" :disabled="nettoyantCoquilles" @click="nettoyerCoquilles('delete')">
-          {{ confirmSuppr ? `Confirmer : supprimer ces ${coquilles.count} dossiers` : 'Supprimer' }}
-        </button>
+        <ConfirmAction
+          label="Supprimer"
+          :confirm-label="`Confirmer — supprimer ces ${coquilles.count} dossiers`"
+          :detail="`Supprime ${pluriel(coquilles.count, 'dossier')} et leur contenu, ${gb(coquilles.bytes)} Go, définitivement. La mise en corbeille, elle, se rattrape.`"
+          :busy="nettoyantCoquilles"
+          :disabled="nettoyantCoquilles"
+          @confirm="nettoyerCoquilles('delete')"
+        />
       </template>
     </div>
+    <p v-if="raisonCoquilles" class="indispo" role="status">{{ raisonCoquilles }}</p>
 
-    <p v-if="coquilles && !coquilles.count" class="empty">Aucun dossier sans vidéo.</p>
+    <p v-if="coquilleErreur" class="panne-inline">
+      Les dossiers sans vidéo n'ont pas pu être listés ({{ coquilleErreur }}). Aucun
+      dossier n'a été touché : c'est le relevé qui manque.
+      <button class="small" :disabled="cherchantCoquilles" @click="chercherCoquilles">
+        Réessayer
+      </button>
+    </p>
+    <p v-else-if="coquilles && !coquilles.count" class="empty">Aucun dossier sans vidéo.</p>
     <ul v-else-if="coquilles" class="vides">
       <li v-for="d in coquilles.dirs" :key="d.path">
         <code>{{ d.path }}</code>
@@ -443,7 +614,9 @@ onMounted(loadTrash)
         … et {{ coquilles.count - coquilles.dirs.length }} autres
       </li>
     </ul>
-    <p v-if="coquilleMessage" class="ok-text">{{ coquilleMessage }}</p>
+    <p v-if="coquilleMessage" :class="coquilleMessage.ok ? 'ok-text' : 'err-text'">
+      {{ coquilleMessage.texte }}
+    </p>
   </section>
 
   <section v-if="montre('renommage')">
@@ -462,7 +635,10 @@ onMounted(loadTrash)
     <button :disabled="renaming" @click="renameLibrary">
       {{ renaming ? 'Analyse…' : 'Analyser la bibliothèque' }}
     </button>
-    <p v-if="renameResult" class="ok-text">{{ renameResult }}</p>
+    <p v-if="raisonRenommage" class="indispo" role="status">{{ raisonRenommage }}</p>
+    <p v-if="renameResult" :class="renameResult.ok ? 'ok-text' : 'err-text'">
+      {{ renameResult.texte }}
+    </p>
   </section>
 </template>
 
@@ -471,61 +647,101 @@ section {
   background: var(--surface); border: 1px solid var(--border);
   border-radius: 10px; padding: 16px 18px; margin-bottom: 14px;
 }
-h3 {
-  margin: 0 0 10px; font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim);
-}
-.note { margin: 0 0 12px; font-size: 12px; color: var(--text-faint); line-height: 1.6; max-width: 680px; }
-.note strong { color: var(--text-dim); }
-.empty { margin: 0; font-size: 12.5px; color: var(--text-faint); font-style: italic; }
+/* Ce fichier est le premier migré vers l'échelle typographique de `style.css`.
+   Il comptait treize tailles en dur entre 10,5 et 13 px, dont dix sous les
+   12 px que l'échelle pose comme plancher : sous ce seuil on ne lit plus, on
+   devine. Chaque taille dit maintenant à quoi elle sert — annotation, appoint,
+   lecture — au lieu de dire à quelle heure la règle a été écrite. */
 
-.switch { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 10px; }
+/* Un titre doit être PLUS clair que ce qu'il coiffe. En --text-dim, ces
+   intitulés étaient plus ternes que la prose qu'ils annonçaient : la hiérarchie
+   s'inversait, l'œil tombait du titre vers le corps. --text-title est le seul
+   ton du jeu qui dépasse --text, il est fait pour ça.
+   La forme reste celle de la maison — capitales, interlettrage, 600 — parce
+   que six sections de réglages la partagent sur le même écran ; seuls la
+   couleur et le plancher de taille changent. */
+h3 {
+  margin: 0 0 10px; font-size: var(--t-xs); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .07em; color: var(--text-title);
+}
+.note { margin: 0 0 12px; font-size: var(--t-sm); color: var(--text-faint); line-height: 1.6; max-width: 680px; }
+.note strong { color: var(--text-dim); }
+.empty { margin: 0; font-size: var(--t-sm); color: var(--text-faint); font-style: italic; }
+
+.switch { display: flex; align-items: center; gap: 8px; font-size: var(--t-sm); margin-bottom: 10px; }
 .switch input { accent-color: var(--accent); }
-.hint { margin: 7px 0 0; font-size: 11.5px; color: var(--text-faint); line-height: 1.6; max-width: 680px; }
+.hint { margin: 7px 0 0; font-size: var(--t-sm); color: var(--text-faint); line-height: 1.6; max-width: 680px; }
 .switch .hint { margin: 0; }
 
 .field { margin-top: 12px; }
-.field > label { display: block; font-size: 11.5px; color: var(--text-dim); margin-bottom: 5px; }
+.field > label { display: block; font-size: var(--t-sm); color: var(--text-dim); margin-bottom: 5px; }
 .row { display: flex; gap: 8px; align-items: center; }
 .field input[type="text"], .field input[type="password"] {
-  flex: 1; width: 100%; min-width: 0; font-size: 12.5px; padding: 6px 9px;
+  flex: 1; width: 100%; min-width: 0; font-size: var(--t-sm); padding: 6px 9px;
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 6px; color: var(--text); font-family: var(--mono);
 }
 
 .test { margin-top: 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.result { font-size: 12px; }
+.result { font-size: var(--t-xs); }
 .result.ok, .ok-text { color: var(--ok); }
-.result.err { color: var(--err); }
-.ok-text { margin: 10px 0 0; font-size: 12.5px; }
+.result.err, .err-text { color: var(--err); }
+.ok-text, .err-text { margin: 10px 0 0; font-size: var(--t-xs); line-height: 1.6; max-width: 680px; }
 
-.summary { margin: 0 0 10px; font-size: 12.5px; color: var(--text-dim); }
+/* La ligne qui porte les chiffres de la corbeille — combien de Go, combien de
+   fichiers. C'est la valeur qu'on vient chercher dans cette section : elle se
+   lit, elle ne s'annote pas. Seul emploi du pas de lecture ici. */
+.summary { margin: 0 0 10px; font-size: var(--t-md); color: var(--text-dim); }
 .batches { list-style: none; margin: 0 0 14px; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; }
-.batches li { display: flex; gap: 12px; align-items: baseline; font-size: 12px; }
-.batches .day { font-family: var(--mono); font-size: 11px; min-width: 82px; }
+.batches li { display: flex; gap: 12px; align-items: baseline; font-size: var(--t-xs); }
+.batches .day { font-family: var(--mono); font-size: var(--t-xs); min-width: 90px; }
 .batches .age, .batches .files { color: var(--text-faint); }
-.batches .size { margin-left: auto; font-family: var(--mono); font-size: 11px; }
+.batches .size { margin-left: auto; font-family: var(--mono); font-size: var(--t-xs); }
 
 .purge { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.purge label { font-size: 12.5px; color: var(--text-dim); display: flex; align-items: center; gap: 7px; }
+.purge label { font-size: var(--t-sm); color: var(--text-dim); display: flex; align-items: center; gap: 7px; }
 .purge input[type="number"] {
-  width: 64px; font-size: 12.5px; padding: 4px 7px; text-align: center;
+  width: 68px; font-size: var(--t-sm); padding: 4px 7px; text-align: center;
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 5px; color: var(--text); font-family: var(--mono);
 }
 .purge .sep { flex: 1; }
 .vides-actions { display: flex; gap: 10px; flex-wrap: wrap; }
 .vides { list-style: none; margin: 12px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; }
-.vides code { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
-.vides .detail { display: block; font-size: 10.5px; color: var(--text-faint); opacity: .75; margin-left: 10px; }
+.vides code { font-family: var(--mono); font-size: var(--t-xs); color: var(--text-faint); }
+.vides .detail { display: block; font-size: var(--t-xs); color: var(--text-faint); opacity: .75; margin-left: 10px; }
 .sous-titre { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--border); }
-.note code { font-family: var(--mono); font-size: 11px; }
-.vides .more { font-size: 11.5px; color: var(--text-faint); font-style: italic; margin-top: 4px; }
+.note code { font-family: var(--mono); font-size: var(--t-xs); }
+.vides .more { font-size: var(--t-xs); color: var(--text-faint); font-style: italic; margin-top: 4px; }
 
 .vignettes { display: flex; align-items: center; gap: 12px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); flex-wrap: wrap; }
-.vignettes .warn-text { flex: 1; min-width: 240px; font-size: 11.5px; color: var(--text-faint); line-height: 1.55; }
-.danger { color: var(--err); }
-.danger.strong { border-color: color-mix(in srgb, var(--err) 30%, transparent); color: var(--err); }
-.warn-strong { display: block; margin-top: 7px; color: var(--err); }
-.danger:hover:not(:disabled) { color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, transparent); }
+.vignettes .warn-text { flex: 1; min-width: 240px; font-size: var(--t-sm); color: var(--text-faint); line-height: 1.55; }
+
+/* Pourquoi une action est indisponible. Ton d'appoint, jamais celui d'une
+   alerte : ce n'est pas une panne, c'est l'état normal de l'écran dit à voix
+   haute. L'écrire en rouge apprendrait à ignorer le rouge. */
+.indispo {
+  margin: 8px 0 0; font-size: var(--t-xs); color: var(--text-faint);
+  line-height: 1.6; max-width: 680px;
+}
+.test .indispo { margin: 0; }
+
+/* Une panne locale : le reste de l'écran fonctionne, seul ce relevé est
+   aveugle. D'où le cadre plutôt qu'un bandeau en haut de page — l'erreur est
+   là où elle s'est produite, avec le bouton qui la relance. */
+.panne-inline {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 10px 0 0; padding: 9px 12px; border-radius: 8px;
+  font-size: var(--t-xs); line-height: 1.6; color: var(--err);
+  background: color-mix(in srgb, var(--err) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--err) 28%, transparent);
+}
+.panne-inline button { color: var(--text); flex: none; }
+.panne-inline button:disabled { color: var(--text-faint); }
+button.small { font-size: var(--t-xs); padding: 3px 10px; }
+/* `.danger`, `.danger.strong` et `.warn-strong` sont partis avec les boutons
+   qu'ils habillaient : ConfirmAction porte désormais le rouge au repos, l'état
+   armé et la phrase d'avertissement. Les garder ici, c'était garder une
+   seconde définition de « ce bouton efface » qui divergerait à la première
+   retouche. */
 </style>

@@ -19,7 +19,8 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+import re
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 from threading import Lock
 
@@ -49,6 +50,14 @@ DEFAULT_DESTINATIONS: dict[str, str] = {
 }
 
 
+LANGUAGE_TAG = re.compile(r"[a-z]{2}-[A-Z]{2}")
+"""Forme attendue par TheMovieDB : « fr-FR », « en-US », « pt-BR ».
+
+Verifiee ici plutot que laissee passer : une valeur mal formee ne provoque pas
+d'erreur cote fournisseur, elle est ignoree — on recoit alors des titres
+anglais sans qu'aucun message ne dise pourquoi."""
+
+
 class PreferenceError(ValueError):
     """Preference refusee — message destine a l'utilisateur."""
 
@@ -75,7 +84,60 @@ class AISettings:
     """En dessous de ce score, le resolveur est sollicite. Au-dessus, le
     resultat deterministe est deja bon : payer un appel n'apporterait rien."""
 
-    batch_size: int = 12
+    # Pas de taille de lot ici : voir AI_BATCH_SIZE dans pipeline.py. Le reglage
+    # etait acceptable en ecriture, relu par le serveur, et n'apparaissait sur
+    # aucun ecran — personne ne pouvait le decider, et il n'y a rien a arbitrer :
+    # la valeur ne change ni le cout ni la qualite, seulement le decoupage.
+
+
+@dataclass
+class MetadataSettings:
+    """Fournisseur de metadonnees : la cle TheMovieDB et la langue demandee.
+
+    La cle vit ici et non dans l'environnement, pour la meme raison que celle
+    du resolveur IA : obtenir une cle est le premier geste d'une installation,
+    et le seul qui imposait jusqu'ici d'editer un fichier puis de redemarrer la
+    pile. Elle n'est JAMAIS renvoyee au navigateur — l'API n'expose qu'un
+    booleen « configuree ».
+
+    L'environnement reste lu en repli (``TMDB_API_KEY``) : les installations
+    existantes ne doivent pas s'arreter d'identifier le jour de la mise a jour.
+    """
+
+    tmdb_api_key: str = ""
+    language: str = "fr-FR"
+    """Langue des titres et resumes demandes au fournisseur.
+
+    Determinante et pas seulement cosmetique : le titre renvoye est celui qui
+    est compare au nom du fichier. Une bibliotheque nommee en anglais
+    interrogee en francais fait s'effondrer la similarite de titre, donc le
+    score, et remplit la file de revue d'identifications pourtant justes."""
+
+
+@dataclass
+class ScanSettings:
+    """Ce que le parcours des sources ecarte avant meme de l'analyser.
+
+    Ces trois valeurs etaient des constantes, donc des decisions prises a la
+    place de l'utilisateur : un court-metrage ou un episode en 480p passait
+    sous le plancher et disparaissait SANS TRACE, et aucun dossier personnel ne
+    pouvait etre sorti du perimetre.
+    """
+
+    min_size_mb: int = 50
+    """Plancher d'un fichier video. En dessous, c'est presque toujours un
+    echantillon ou un telechargement avorte — mais « presque » justifiait de
+    pouvoir descendre."""
+
+    extra_skip_dirs: list[str] = field(default_factory=list)
+    """Noms de dossiers a ignorer, EN PLUS de ceux qui le sont toujours."""
+
+    extra_skip_hints: list[str] = field(default_factory=list)
+    """Fragments de nom de fichier a ignorer, en plus de « sample », « trailer »
+    et compagnie. Compares en minuscules, n'importe ou dans le nom."""
+
+    def min_size_bytes(self) -> int:
+        return max(0, self.min_size_mb) * 1024 * 1024
 
 
 @dataclass
@@ -214,6 +276,8 @@ class Preferences:
     oversize: OversizeSettings = field(default_factory=OversizeSettings)
     notifications: NotificationSettings = field(default_factory=NotificationSettings)
     media_server: MediaServerSettings = field(default_factory=MediaServerSettings)
+    metadata: MetadataSettings = field(default_factory=MetadataSettings)
+    scan: ScanSettings = field(default_factory=ScanSettings)
     quality: QualitySettings = field(default_factory=QualitySettings)
     transcode: TranscodeSettings = field(default_factory=TranscodeSettings)
 
@@ -222,6 +286,20 @@ class Preferences:
 
     def destination_for(self, kind: str) -> str:
         return self.destinations.get(kind) or DEFAULT_DESTINATIONS.get(kind, "")
+
+
+def _bloc(gabarit, brut: dict | None):
+    """Relit un bloc de preferences en IGNORANT ce qu'il ne connait plus.
+
+    Un reglage retire du code laisse une cle orpheline dans le fichier deja
+    ecrit sur le disque. La passer au constructeur leve un TypeError qui n'est
+    rattrape nulle part : l'application repartirait alors avec TOUTES les
+    preferences aux defauts — destinations, gabarits, sources — pour un champ
+    qui ne sert plus. Un reglage supprime doit s'oublier, pas tout emporter.
+    """
+    connus = {f.name for f in fields(gabarit)}
+    retenus = {k: v for k, v in (brut or {}).items() if k in connus}
+    return gabarit(**{**asdict(gabarit()), **retenus})
 
 
 class PreferenceStore:
@@ -269,25 +347,15 @@ class PreferenceStore:
                 enabled_sources=list(raw.get("enabled_sources") or []),
                 destinations={**DEFAULT_DESTINATIONS, **(raw.get("destinations") or {})},
                 templates=dict(raw.get("templates") or {}),
-                ai=AISettings(**{**asdict(AISettings()), **(raw.get("ai") or {})}),
-                automation=AutomationSettings(
-                    **{**asdict(AutomationSettings()), **(raw.get("automation") or {})}
-                ),
-                oversize=OversizeSettings(
-                    **{**asdict(OversizeSettings()), **(raw.get("oversize") or {})}
-                ),
-                notifications=NotificationSettings(
-                    **{**asdict(NotificationSettings()), **(raw.get("notifications") or {})}
-                ),
-                media_server=MediaServerSettings(
-                    **{**asdict(MediaServerSettings()), **(raw.get("media_server") or {})}
-                ),
-                quality=QualitySettings(
-                    **{**asdict(QualitySettings()), **(raw.get("quality") or {})}
-                ),
-                transcode=TranscodeSettings(
-                    **{**asdict(TranscodeSettings()), **(raw.get("transcode") or {})}
-                ),
+                ai=_bloc(AISettings, raw.get("ai")),
+                automation=_bloc(AutomationSettings, raw.get("automation")),
+                oversize=_bloc(OversizeSettings, raw.get("oversize")),
+                notifications=_bloc(NotificationSettings, raw.get("notifications")),
+                media_server=_bloc(MediaServerSettings, raw.get("media_server")),
+                metadata=_bloc(MetadataSettings, raw.get("metadata")),
+                scan=_bloc(ScanSettings, raw.get("scan")),
+                quality=_bloc(QualitySettings, raw.get("quality")),
+                transcode=_bloc(TranscodeSettings, raw.get("transcode")),
             )
             return self._cache
 
@@ -424,6 +492,25 @@ class PreferenceStore:
             if not prefs.media_server.base_url.strip():
                 raise PreferenceError(
                     "Renseigne l'adresse du serveur avant d'activer le rafraichissement."
+                )
+
+        if not LANGUAGE_TAG.fullmatch(prefs.metadata.language.strip()):
+            raise PreferenceError(
+                f"« {prefs.metadata.language} » n'est pas une langue valide. Attendu « fr-FR », "
+                "« en-US », « ja-JP » — deux lettres de langue, un tiret, deux lettres de pays."
+            )
+
+        if prefs.scan.min_size_mb < 0:
+            raise PreferenceError("la taille minimale ne peut pas etre negative")
+        if prefs.scan.min_size_mb > 100_000:
+            # Cent gigaoctets ecarteraient absolument tout : ce n'est pas un
+            # reglage prudent, c'est un scan qui ne trouvera plus jamais rien.
+            raise PreferenceError("la taille minimale doit rester en dessous de 100 000 Mo")
+        for nom in prefs.scan.extra_skip_dirs:
+            if "/" in nom or "\\" in nom:
+                raise PreferenceError(
+                    f"« {nom} » : indique un NOM de dossier, pas un chemin. "
+                    "L'exclusion s'applique a ce nom ou qu'il se trouve sous les sources."
                 )
 
         for kind in VIDEO_KINDS:

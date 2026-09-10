@@ -112,9 +112,9 @@ Deux garde-fous non négociables :
   Un plan est un objet, pas une action.
 - **Les doublons partent à la corbeille, jamais à la suppression.** Un
   algorithme qui se trompe sur un doublon fait perdre le seul exemplaire.
-- **Aucun secret ne redescend au navigateur.** Clé d'IA, jeton TMDB, webhook
-  Discord : champs en écriture seule, l'API n'expose qu'un booléen
-  « configuré ». Ces réponses finissent dans le cache du navigateur.
+- **Aucun secret ne redescend au navigateur.** Clé d'IA, clé TMDB, clé du serveur
+  multimédia, webhook Discord : champs en écriture seule, l'API n'expose qu'un
+  booléen « configuré ». Ces réponses finissent dans le cache du navigateur.
 - **Le jeton TMDB v4 ne passe jamais en paramètre d'URL** — les URL finissent
   dans les journaux d'accès — mais dans l'en-tête `Authorization`.
 - **L'URL de webhook est contrainte aux domaines Discord.** Elle est saisie
@@ -126,11 +126,24 @@ Deux garde-fous non négociables :
 
 ```bash
 cp .env.example .env
-# remplir les cles et les chemins, puis
+# remplir les chemins, le mot de passe et la cle secrete, puis
 docker compose up -d
 ```
 
 Interface sur `http://localhost:8117`.
+
+Rien d'autre à mettre dans le `.env`. La clé TheMovieDB, la langue des
+métadonnées, la clé du résolveur IA, le webhook Discord et le serveur multimédia
+se saisissent dans **Réglages**, et un bouton d'essai interroge réellement le
+service pour dire si la clé passe. Obtenir une clé ne doit pas obliger à rouvrir
+un fichier et à redémarrer la pile. `TMDB_API_KEY` reste lue en repli, pour les
+installations qui la portent déjà — ce qui est enregistré dans l'interface prime.
+
+Trois décisions du parcours s'y règlent aussi : la taille minimale d'un fichier
+vidéo, et les dossiers et motifs de nom à ignorer **en plus** de ceux qui le sont
+toujours (`@eaDir`, `#recycle`, `sample`…). C'est le seul moyen de sortir un
+dossier personnel du périmètre, et de faire entrer un court-métrage que le
+plancher de 50 Mo écartait sans le dire.
 
 ## Développement
 
