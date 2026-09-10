@@ -1,6 +1,165 @@
 # CHANGELOG
 
 
+## v0.47.0 (2026-09-10)
+
+### Bug Fixes
+
+- **franchise**: Cesser de couper une serie en deux selon le lot
+  ([`70e373b`](https://github.com/gsoulat/sortilege/commit/70e373b2415e5bdf8e536e32c66b234793d2a966))
+
+Le defaut le plus couteux vu jusqu'ici, parce qu'il abime la bibliotheque au lieu de simplement mal
+  l'afficher.
+
+« Star Trek: Discovery » telecharge SEUL partait dans « Series/Star Trek Discovery (2017) ».
+  Telecharge le meme jour que « Star Trek: Picard », il partait dans « Series/Star Trek/Star Trek
+  Discovery (2017) ».
+
+Deux destinations pour une meme serie, selon ce qui l'accompagnait dans le lot. Resultat sur le
+  disque : la moitie des Star Trek dans le dossier de franchise, l'autre moitie a cote — et un
+  serveur multimedia qui y voit deux series aux saisons incompletes.
+
+La cause : la franchise se deduisait des titres du LOT en cours, plus ceux d'un index qui vit en
+  memoire et n'existe qu'apres un « Relire la bibliotheque ». Une decision qui deplace des fichiers
+  ne peut pas dependre d'un cache facultatif.
+
+Les voisins se lisent maintenant sur le DISQUE, qui dit toujours la meme chose : un niveau de
+  dossiers sous les destinations de series, dossiers de franchise ouverts. Une fois « Star Trek »
+  pose la, toute serie de la franchise l'y rejoint, quel que soit le lot.
+
+Un cas de plus a traiter au passage : les voisins lus sur le disque ont perdu leur deux-points en
+  devenant des noms de dossier — « Star Trek: Discovery » y figure sous « Star Trek Discovery »,
+  dont plus rien ne se derive. Le prefixe suffit alors, a condition qu'il reste quelque chose apres
+  : sans cette borne, « Star Trek » se declarerait sa propre franchise en se voyant lui-meme.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+- **parseur**: Lire « Ep18 » comme « E18 »
+  ([`d4c7300`](https://github.com/gsoulat/sortilege/commit/d4c7300a6785f20870f235efd90a737cf2ad5965))
+
+« Code Quantum S3- Ep18 FRENCH DVDrip Xvid » passait pour un FILM. Apres « S3 » et son separateur,
+  le motif attendait un chiffre juste apres le « E » et butait sur le « p ». Le titre gardait alors
+  « S3- Ep18 » : chaque episode devenait une oeuvre distincte, et la mediatheque affichait dix-huit
+  films nommes « Code Quantum S3- EpNN ».
+
+La forme « Ep » est courante dans les vieilles releases francaises, en simple comme en double
+  episode.
+
+Et un filtre qui reste visible a zero. « Doublons », « Surpoids » et « Hors strategie »
+  disparaissaient quand leur compteur tombait a zero : « il manque le filtre doublons » devenait
+  indiscernable de « il n'y a pas de doublons ». Ils restent affiches, grises, avec la raison au
+  survol — et quand la bibliotheque n'a jamais ete lue, une ligne explique d'un coup pourquoi TOUS
+  les compteurs sont a zero, avec le bouton pour la lire.
+
+Meme regle que partout ailleurs : un etat muet est indiscernable d'une panne.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+- **release**: Publier aussi les commits « refactor »
+  ([`0cc3b7d`](https://github.com/gsoulat/sortilege/commit/0cc3b7d39898ffb552a28d31fb8702f8a3eaba2c))
+
+La refonte de l'interface est passee la CI au vert SANS produire aucune image : semantic-release ne
+  retient par defaut que « feat » et « fix », et elle etait ecrite en « refactor ». Le travail etait
+  donc pousse et inaccessible — un echec silencieux, exactement le defaut que cette refonte
+  corrigeait ailleurs.
+
+« refactor » et « perf » livrent du code a l'utilisateur au meme titre qu'un correctif : ils
+  produisent desormais une version corrective.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+### Features
+
+- **gabarits**: Retirer le dossier de franchise des series
+  ([`1005cd0`](https://github.com/gsoulat/sortilege/commit/1005cd0c63774499698725f0f6537ad50f04ccfe))
+
+Ni Jellyfin ni Plex ne regroupent d'apres l'arborescence. Les collections de Jellyfin viennent des
+  identifiants de collection TMDB, via un plugin, et ne concernent QUE les films : il n'existe
+  aucune collection de series. Le dossier « Star Trek/ » ne servait donc a aucun serveur multimedia,
+  et coutait un niveau de plus a traverser.
+
+Les series se rangent desormais a plat : « Star Trek Discovery (2017)/Season 02/... ». Les films
+  gardent leur dossier de saga — la, la collection vient de TMDB, elle est stable, et l'on navigue
+  souvent dans ces dossiers a la main.
+
+Le jeton {collection} reste disponible : il suffit de le remettre en tete du gabarit des series dans
+  les reglages, ou le gabarit s'enregistre maintenant.
+
+Pour les bibliotheques deja rangees sous l'ancien prereglage, « Remettre la bibliotheque en
+  conformite » (Reglages → Bibliotheque) compare l'existant au gabarit courant et propose les
+  deplacements dans la file de revue. Rien ne part d'un seul clic : un renommage de masse se valide
+  comme le reste.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+### Refactoring
+
+- **interface**: Aucun etat muet, et six defauts corriges
+  ([`ae4657c`](https://github.com/gsoulat/sortilege/commit/ae4657cb07d7e06c719edeef7a218667bfd35910))
+
+Refonte issue de l'audit. Une seule regle la gouverne : **aucun etat muet**. Un bouton desactive dit
+  pourquoi, une liste vide dit si le travail est fini ou s'il n'a pas commence, une fonction qui ne
+  s'est pas declenchee dit ce qui l'en a empechee. Douze des dix-sept problemes signales dans la
+  journee etaient des silences, pas des erreurs de calcul.
+
+**Les six defauts**
+
+1. Page blanche au premier echec reseau. Le message d'erreur etait enferme dans la condition qu'il
+  devait remplacer. Trois etats explicites desormais : chargement, panne avec bouton « Reessayer »
+  et marche a suivre, donnees. Une reponse 502 arrive en HTML, ou `res.json()` levait sans etre
+  attrapee : le code HTTP est verifie avant.
+
+2. Un scan qui ne trouve rien se presentait comme un succes. Les erreurs et les fichiers ecartes du
+  scanner remontent maintenant jusqu'a l'ecran.
+
+3. Une cle TMDB invalide ne disait jamais son nom. Le fournisseur retient desormais le refus
+  (401/403) et nomme la forme lue — cle v3 contre jeton v4 — et les blocages calcules depuis
+  toujours cote serveur sont enfin transportes et affiches en tete de la vue, avant la liste.
+
+4. Les suppressions definitives etaient plus discretes que le reste : au repos, le bouton qui efface
+  prenait la couleur du texte le plus pale. Rouge au repos, plus un composant de confirmation unique
+  en deux temps qui remplacera les six mecanismes ecrits a la main.
+
+5. Toute la prose d'aide etait sous le seuil de contraste — 2,96:1 la ou il en faut 4,5. Remontee a
+  5,21:1, une echelle typographique de quatre pas remplace onze tailles improvisees, et les titres
+  de section sont enfin plus clairs que le corps au lieu d'etre plus ternes.
+
+6. Fuite de connexions du resolveur IA : un client HTTP par calcul de plans et par cycle
+  automatique, jamais ferme. `close()` entre dans le protocole et `Pipeline.aclose()` l'appelle.
+
+**La structure**
+
+- « Gabarits » quitte la navigation de premier niveau et rejoint la destination qu'il complete — et
+  il ENREGISTRE, ce qu'il ne faisait pas : on composait, on changeait d'onglet, tout etait perdu. -
+  « Simuler » devient une case attachee au bouton principal : c'etait le meme appel serveur avec un
+  drapeau different. - Les actions d'entretien passent derriere un menu, chacune disant ce qu'elle
+  fait. Quatre boutons de meme poids ne disaient pas lequel sert tous les jours. - La mediatheque se
+  coupe en deux sous-vues, dont « Recuperer de la place » qui reunit doublons, surpoids et
+  hors-strategie. C'est la question posee — ou sont mes six cents gigaoctets — et elle etait
+  repartie sur deux onglets.
+
+**Deux corrections d'usage signalees en cours de route**
+
+- « 109 » vaut saison 1 episode 09. Convention tres repandue dans les releases francaises, invisible
+  pour tous les motifs qui cherchent un S ou un x : le fichier passait pour un film, et corriger le
+  type a la main produisait « Season /Titre - SE.avi ». Les garde-fous tiennent a ce qu'on refuse —
+  l'episode 00 n'existe pas, ce qui sauve « 300 » ; quatre chiffres sortent du motif, ce qui sauve «
+  Blade Runner 2049 » ; et un groupe de fansub fait gagner la numerotation absolue, ce qui sauve «
+  Frieren - 147 ».
+
+- Un choix ne se verrouille plus. Une fois le plan passe en « pret », le bouton d'arbitrage
+  disparaissait : une identification manuelle erronee n'etait plus corrigeable sans tout effacer. Le
+  selecteur remonte au niveau du detail, ou il sert aux deux blocs.
+
+Code mort retire au passage : `sleep_until_window`, le bloc « ai » de l'API des reglages, et quatre
+  variables d'environnement sans effet dont une bloquait le demarrage. Le badge « IA activee »
+  rapportait cette variable morte : il mentait dans les deux sens, il lit maintenant l'etat reel.
+
+818 tests. Interface verifiee dans un navigateur.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.46.2 (2026-09-10)
 
 ### Bug Fixes
