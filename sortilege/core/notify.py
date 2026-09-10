@@ -140,27 +140,37 @@ async def send(
 def cycle_notification(report) -> Notification | None:
     """Traduit un rapport de cycle en notification — ou en silence.
 
-    C'est ici que se joue l'utilite du canal. Un cycle qui n'a rien trouve n'a
-    rien a dire : le signaler quand meme noierait les rares messages qui
-    comptent.
+    C'est ici que se joue l'utilite du canal, et la premiere version se
+    trompait de critere : elle parlait des qu'un fichier avait ete DETECTE.
+
+    Or « detecte » est un ETAT, pas un evenement. Les memes fichiers sont revus
+    a chaque tour, et un fichier qui ne peut pas etre planifie — deja passe par
+    le calcul, ou en attente d'arbitrage — reste detecte indefiniment. Toutes
+    les quinze minutes, jour et nuit, le canal recevait donc « Cycle automatique
+    termine — rien de nouveau a identifier ». Un canal qui repete la meme chose
+    quatre fois par heure n'est plus lu, et les rares messages qui comptent
+    disparaissent avec le reste.
+
+    Le seul evenement qui merite d'interrompre quelqu'un, c'est qu'un fichier
+    ait REELLEMENT ete range. Le reste se consulte dans l'application, quand on
+    decide d'aller voir. Les echecs, eux, passent par un autre chemin et gardent
+    leur propre reglage.
     """
-    if report.applied == 0 and report.queued == 0 and report.detected == 0:
+    if not report.applied:
         return None
 
-    fields: list[tuple[str, str]] = []
-    if report.detected:
-        fields.append(("Detectes", str(report.detected)))
-    if report.applied:
-        fields.append(("Ranges", str(report.applied)))
+    fields: list[tuple[str, str]] = [("Ranges", str(report.applied))]
     if report.queued:
         fields.append(("A arbitrer", str(report.queued)))
+    if report.remaining:
+        fields.append(("Restants", str(report.remaining)))
 
     # Des fichiers en attente d'arbitrage sont une demande d'action : c'est le
     # seul cas ou la couleur doit attirer l'oeil sans etre une erreur.
     level = "warn" if report.queued else "ok"
     return Notification(
-        title="Cycle automatique termine",
-        body=report.message or "Rien a signaler.",
+        title=f"{report.applied} fichier(s) range(s)",
+        body=report.message or "Rangement automatique termine.",
         level=level,
         fields=tuple(fields),
     )

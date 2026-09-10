@@ -88,12 +88,28 @@ class Report:
     detected: int = 0
     applied: int = 0
     queued: int = 0
+    remaining: int = 0
     message: str = ""
 
 
 def test_un_cycle_sans_rien_ne_dit_rien() -> None:
     """Le point central : sans ce silence, le canal devient du bruit."""
     assert cycle_notification(Report()) is None
+
+
+def test_des_fichiers_seulement_detectes_ne_disent_rien() -> None:
+    """LE cas qui noyait le canal. « Detecte » est un ETAT, pas un evenement :
+    les memes fichiers sont revus a chaque tour, et un fichier qu'on ne peut pas
+    planifier reste detecte indefiniment. Toutes les quinze minutes, jour et
+    nuit, le canal recevait « rien de nouveau a identifier »."""
+    assert cycle_notification(Report(detected=5, message="rien de nouveau a identifier")) is None
+
+
+def test_une_file_d_arbitrage_seule_ne_dit_rien() -> None:
+    """Elle attend dans l'application, ou on la consulte quand on decide d'y
+    aller. Interrompre quelqu'un pour ca, c'est le meme bruit sous un autre
+    nom."""
+    assert cycle_notification(Report(detected=9, queued=7)) is None
 
 
 def test_un_rangement_est_annonce() -> None:
@@ -104,7 +120,8 @@ def test_un_rangement_est_annonce() -> None:
 
 
 def test_une_file_en_attente_attire_l_oeil() -> None:
-    """Des fichiers a arbitrer sont une demande d'action, pas un echec."""
+    """Des fichiers a arbitrer sont une demande d'action, pas un echec — mais
+    seulement dans un message que quelque chose d'autre justifiait deja."""
     notif = cycle_notification(Report(detected=9, applied=2, queued=7))
     assert notif.level == "warn"
     assert ("A arbitrer", "7") in notif.fields

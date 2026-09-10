@@ -62,8 +62,13 @@ async function test() {
     <p class="note">
       Le rangement automatique tourne sans personne devant l'écran. Sortilège dit dans
       un canal ce qu'il a fait — et surtout ce qui a échoué, puisque c'est précisément
-      ce que personne ne va voir autrement. Un cycle qui n'a rien trouvé ne dit rien :
-      un message toutes les quinze minutes finirait par être ignoré.
+      ce que personne ne va voir autrement.
+    </p>
+    <p class="note">
+      <strong>Un message uniquement quand un fichier a été rangé.</strong> Un cycle qui
+      détecte sans pouvoir ranger, ou qui met des fichiers en attente d'arbitrage, ne dit
+      rien : ça s'attend dans l'application, et un message toutes les quinze minutes
+      finit par ne plus être lu du tout.
     </p>
 
     <div class="field">
