@@ -264,3 +264,36 @@ def test_un_anime_en_numerotation_absolue_n_est_pas_lu_a_trois_chiffres() -> Non
     assert lu.kind is MediaKind.ANIME
     assert lu.absolute_episode == 147
     assert lu.season is None
+
+
+# --- « Ep » plutot que « E » -------------------------------------------------
+#
+# Cas reel : « Code Quantum S3- Ep18 FRENCH DVDrip Xvid ». Apres « S3 » et son
+# separateur, le motif attendait un chiffre juste apres le « E » et butait sur
+# le « p ». Le fichier passait pour un FILM, et le titre gardait « S3- Ep18 » :
+# chaque episode devenait une oeuvre distincte, dix-huit films nommes « Code
+# Quantum S3- EpNN ».
+
+
+@pytest.mark.parametrize(
+    "nom",
+    [
+        "Code Quantum S3- Ep18 FRENCH DVDrip Xvid.avi",
+        "Code Quantum S3-Ep18.avi",
+        "Code Quantum S03 Ep18.avi",
+        "Code Quantum.S3.Ep18.avi",
+        "Code Quantum S3 E18.avi",
+    ],
+)
+def test_ep_vaut_e(nom: str) -> None:
+    lu = parse(Path("/src") / nom)
+
+    assert lu.kind is MediaKind.EPISODE
+    assert (lu.season, lu.episode) == (3, 18)
+    assert lu.title == "Code Quantum"
+
+
+def test_le_double_episode_accepte_aussi_ep() -> None:
+    lu = parse(Path("/src/Stranger Things S04 Ep01-Ep02.mkv"))
+
+    assert (lu.season, lu.episode, lu.episode_end) == (4, 1, 2)

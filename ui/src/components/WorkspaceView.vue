@@ -85,6 +85,13 @@ const counts = computed(() => data.value?.counts ?? {})
  * fichiers, sans qu'un seul écran ne prononce le mot « clé ».
  */
 const blocages = computed(() => data.value?.blockers ?? [])
+
+/**
+ * La bibliothèque n'a jamais été indexée. Tous les compteurs de la sous-vue
+ * « place » se calculent dessus : sans elle, ils valent zéro sans que rien ne
+ * distingue « rien à récupérer » de « rien n'a été mesuré ».
+ */
+const sansIndex = computed(() => !(counts.value.library_works ?? 0))
 const working = computed(
   () => jobs.value.scan?.running || jobs.value.plan?.running || jobs.value.index?.running,
 )
@@ -1200,27 +1207,56 @@ onUnmounted(() => clearInterval(poller))
         </button>
       </div>
 
+      <!-- Ces filtres restent VISIBLES a zero. Ils disparaissaient quand leur
+           compteur tombait a zero, ce qui rendait « il manque le filtre
+           doublons » indiscernable de « il n'y a pas de doublons » — et une
+           bibliotheque jamais indexee affiche zero partout. -->
       <div v-else class="filters">
         <button :class="{ active: filter === 'place' }" @click="filter = 'place'">
           Tout ce qui pèse pour rien ({{ parOnglet.length }})
         </button>
-        <button v-if="counts.duplicates" :class="{ active: filter === 'dupes' }" @click="filter = 'dupes'">
-          Doublons ({{ counts.duplicates }})
+        <button
+          :class="{ active: filter === 'dupes', muet: !counts.duplicates }"
+          :disabled="!counts.duplicates"
+          :title="counts.duplicates ? '' : sansIndex
+            ? 'La bibliothèque n\'a pas encore été lue : rien à comparer'
+            : 'Aucun doublon détecté'"
+          @click="filter = 'dupes'"
+        >
+          Doublons ({{ counts.duplicates ?? 0 }})
         </button>
-        <button v-if="counts.heavy" class="heavy-filter" :class="{ active: filter === 'heavy' }"
-                @click="filter = 'heavy'"
-                :title="`Au moins ${data.heavy_ratio} fois le poids habituel de leur type`">
-          Surpoids ({{ counts.heavy }})
+        <button
+          class="heavy-filter"
+          :class="{ active: filter === 'heavy', muet: !counts.heavy }"
+          :disabled="!counts.heavy"
+          :title="counts.heavy
+            ? `Au moins ${data.heavy_ratio} fois le poids habituel de leur type`
+            : 'Aucun fichier anormalement lourd'"
+          @click="filter = 'heavy'"
+        >
+          Surpoids ({{ counts.heavy ?? 0 }})
         </button>
-        <button v-if="counts.off_strategy" :class="{ active: filter === 'offstrat' }"
-                @click="filter = 'offstrat'"
-                :title="'Fichiers dont la résolution ne suit pas la stratégie choisie pour leur type'">
-          Hors stratégie ({{ counts.off_strategy }})
+        <button
+          :class="{ active: filter === 'offstrat', muet: !counts.off_strategy }"
+          :disabled="!counts.off_strategy"
+          :title="'Fichiers dont la résolution ne suit pas la stratégie choisie pour leur type'"
+          @click="filter = 'offstrat'"
+        >
+          Hors stratégie ({{ counts.off_strategy ?? 0 }})
           <span v-if="counts.recoverable_bytes" class="gain">
             −{{ gb(counts.recoverable_bytes) }} Go
           </span>
         </button>
       </div>
+
+      <!-- Le cas qui explique tous les zeros d'un coup. -->
+      <p v-if="sansIndex" class="hint-index">
+        La bibliothèque n'a jamais été lue : doublons, surpoids et écarts à la stratégie
+        se calculent dessus, donc tout affiche zéro.
+        <button class="small" :disabled="busy || working" @click="index">
+          Lire la bibliothèque maintenant
+        </button>
+      </p>
 
       <!-- Un écran vide qui ne dit rien laisse croire à une panne. Ici il dit
            ce qui a été cherché, et ce qui reste à régler pour trouver mieux. -->
@@ -1663,6 +1699,13 @@ onUnmounted(() => clearInterval(poller))
 </template>
 
 <style scoped>
+/* Un filtre a zero reste lisible : le griser sans l'effacer dit « mesuré, et
+   il n'y en a pas », la ou son absence ne dit rien du tout. */
+.filters button.muet { opacity: .55; cursor: default; }
+.hint-index {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin: 2px 0 0; font-size: 12px; color: var(--text-dim);
+}
 .sous-vues { display: flex; gap: 6px; }
 .sous-vues button {
   font-size: 12.5px; padding: 6px 13px; border-radius: 7px;

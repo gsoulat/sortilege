@@ -50,10 +50,16 @@ class MediaKind(StrEnum):
 # Teste avant le motif simple — sinon « S01E01E02 » est lu comme « S01E01 » et
 # le second episode disparait sans que rien ne le signale.
 _MULTI_EPISODE = re.compile(
-    r"[Ss](?P<season>\d{1,2})[\s._-]*[Ee](?P<episode>\d{1,3})[\s._-]*-?[Ee](?P<episode_end>\d{1,3})"
+    r"[Ss](?P<season>\d{1,2})[\s._-]*[Ee]p?[\s._-]*(?P<episode>\d{1,3})"
+    r"[\s._-]*-?[Ee]p?[\s._-]*(?P<episode_end>\d{1,3})"
 )
 
-_SEASON_EPISODE = re.compile(r"[Ss](?P<season>\d{1,2})[\s._-]*[Ee](?P<episode>\d{1,3})")
+# « Ep » autant que « E ». « Code Quantum S3- Ep18 » est un cas tres courant des
+# vieilles releases francaises, et il passait pour un FILM : apres « S3 » et son
+# separateur, le motif attendait un chiffre juste apres le « E » et butait sur
+# le « p ». Le titre gardait alors « S3- Ep18 », donc chaque episode devenait
+# une oeuvre distincte — dix-huit films nommes « Code Quantum S3- EpNN ».
+_SEASON_EPISODE = re.compile(r"[Ss](?P<season>\d{1,2})[\s._-]*[Ee]p?[\s._-]*(?P<episode>\d{1,3})")
 _SEASON_X_EPISODE = re.compile(r"(?<!\d)(?P<season>\d{1,2})[xX](?P<episode>\d{2,3})(?!\d)")
 _VERBOSE = re.compile(
     r"[Ss]aison[\s._-]*(?P<season>\d{1,2})[\s._-]*[EeÉé]pisode[\s._-]*(?P<episode>\d{1,3})"
