@@ -1,6 +1,51 @@
 # CHANGELOG
 
 
+## v0.46.1 (2026-09-10)
+
+### Bug Fixes
+
+- **ia**: Un vrai menu deroulant pour le modele, pas des suggestions
+  ([`b8b1858`](https://github.com/gsoulat/sortilege/commit/b8b18583234b143991fbafd9bc6ae5b8ee15a22a))
+
+Le champ proposait les modeles par une liste de suggestions (datalist). Sur la plupart des
+  navigateurs, cette liste ne se voit PAS tant qu'on ne tape rien : ce qu'on avait sous les yeux
+  restait une case vide devant laquelle il fallait deviner un nom de modele. La fonction existait,
+  elle etait simplement invisible — ce qui revient au meme pour qui s'en sert.
+
+Un menu deroulant, donc, avec le modele par defaut du fournisseur en premiere entree et une derniere
+  entree « Autre » qui fait apparaitre un champ libre. La liste est figee a la publication de cette
+  version : un modele sorti depuis doit rester utilisable sans attendre une mise a jour de
+  Sortilege.
+
+Le menu bascule aussi sur « Autre » quand le modele enregistre ne fait pas partie de la liste — venu
+  d'une version anterieure, ou saisi a la main. Afficher un choix qui ne correspond pas a ce qui est
+  reellement utilise serait pire que pas de menu du tout.
+
+Verifie dans un navigateur : les modeles suivent le fournisseur choisi, et « Autre » ouvre bien le
+  champ de saisie.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+- **livres**: Rendre la destination et le gabarit des livres reglables
+  ([`29f3ef3`](https://github.com/gsoulat/sortilege/commit/29f3ef36d699e9ee7112bff0012d66815cc8282c))
+
+Les livres etaient ranges sous « Livres » avec un gabarit fige : l'interface de reglages ne
+  connaissait que trois types. Une fonction livree mais non reglable est a moitie livree.
+
+Deux listes de types plutot qu'une, et c'est la raison du decoupage : un livre se range et se nomme
+  comme le reste, mais il n'a ni resolution, ni debit, ni strategie de qualite. L'ajouter a la liste
+  unique lui aurait fait apparaitre un reglage « preferer le 720p » et une destination « fichiers
+  volumineux », qui ne veulent rien dire pour un roman.
+
+Le constructeur de gabarits gagne le type « Livres » et ses jetons — auteur, serie, tome, editeur,
+  ISBN — avec un apercu sur trois cas reels : une saga, un roman isole, un fichier dont on n'a lu
+  que le titre. Reciproquement, ces jetons disparaissent des gabarits video : {isbn} n'a rien a
+  faire dans le nom d'un film.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.46.0 (2026-09-10)
 
 ### Features
