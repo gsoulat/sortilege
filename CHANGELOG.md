@@ -1,6 +1,40 @@
 # CHANGELOG
 
 
+## v0.40.0 (2026-09-10)
+
+### Features
+
+- **entretien**: Nettoyer les dossiers de release sans video
+  ([`e1e50fd`](https://github.com/gsoulat/sortilege/commit/e1e50fd5612e55e59a68c6a3476d13e615625b25))
+
+Le balayage precedent ne cherchait que le VIDE. Or un dossier de release range garde tres souvent ce
+  qui n'accompagnait rien : une jaquette au nom de la release, un .nfo, un .xml de metadonnees,
+  parfois des sous-titres. Il n'est donc jamais vide au sens strict — il n'est plus qu'une coquille,
+  et rien ne proposait de s'en debarrasser.
+
+Le critere est volontairement strict, et c'est ce qui le rend utilisable : aucune video, ET rien
+  d'autre que des accessoires connus. Deux consequences voulues :
+
+- un dossier contenant encore sa video n'est jamais propose, meme si le reste n'est qu'une jaquette
+  — c'est le garde-fou principal, un film pas encore range ne doit pas perdre ses compagnons ; - un
+  dossier contenant une archive, un document ou un type inattendu fait s'abstenir. Mieux vaut
+  laisser un residu que supprimer ce qu'on n'a pas su reconnaitre.
+
+Le contenu part en CORBEILLE par defaut. Ce ne sont pas des dossiers vides : ce sont de vrais
+  fichiers, et une jaquette perdue est sans consequence — mais c'est le genre de certitude qu'on n'a
+  qu'apres coup. La suppression directe reste offerte, en deux clics, pour recuperer la place sans
+  seconde corvee.
+
+Rien n'est journalise, deliberement : le journal d'annulation sert a retrouver des VIDEOS deplacees,
+  et y verser des centaines de jaquettes le diluerait au point de le rendre illisible le jour ou
+  l'on en a vraiment besoin. La corbeille joue ce role ici.
+
+7 tests, dont ceux qui verifient ce qu'on refuse de toucher.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.39.0 (2026-09-10)
 
 ### Features
