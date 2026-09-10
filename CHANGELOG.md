@@ -1,6 +1,33 @@
 # CHANGELOG
 
 
+## v0.46.2 (2026-09-10)
+
+### Bug Fixes
+
+- **arbitrage**: Chercher dans le bon catalogue quand le type est faux
+  ([`8edd90e`](https://github.com/gsoulat/sortilege/commit/8edd90ecf5b2e00417cf1cb4fc4e131867a2a37b))
+
+« The Vampire Diaries » lu comme un film : la recherche manuelle n'interrogeait que le catalogue des
+  FILMS, ou la serie ne figure evidemment pas. On voyait que l'identification etait fausse, on
+  cherchait a la corriger, et on ne trouvait rien — impasse complete, et le fichier restait dans la
+  source pour toujours.
+
+Le type cherche se choisit donc a cote du champ de recherche, independamment de celui que le parseur
+  avait cru lire. Changer de type relance la recherche : c'est le geste attendu quand on vient de
+  dire « en fait, c'est une serie ».
+
+Et le choix est SUIVI D'EFFET : le plan reconstruit prend le type du candidat retenu, donc son
+  gabarit et sa destination. Ranger malgre tout avec le gabarit des films aurait annule la
+  correction qu'on venait de faire — le fichier serait parti dans « Films/ » sous un titre de serie.
+
+Un garde-fou avec : une serie sans numero d'episode ne se range pas, le gabarit produirait « Saison
+  / Titre - SE ». On le dit au lieu de le fabriquer, et le fichier reste a arbitrer avec la marche a
+  suivre.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.46.1 (2026-09-10)
 
 ### Bug Fixes
