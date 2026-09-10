@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 
 const props = defineProps({
   ai: { type: Object, required: true },
@@ -11,9 +11,45 @@ const emit = defineEmits(['change'])
 // pas la lier au modèle. Vide = « ne change pas ».
 const newKey = ref('')
 
+// Modèles connus et diagnostic du résolveur arrivent dans la même réponse que
+// le reste des préférences, mais la vue parente ne transmet que le bloc `ai` :
+// on redemande ici plutôt que d'élargir son contrat pour deux champs qui ne
+// servent qu'à ce composant.
+const models = ref({})
+const ready = ref(null)
+const checking = ref(false)
+
+async function loadContext() {
+  checking.value = true
+  try {
+    const prefs = await (await fetch('/api/settings/preferences')).json()
+    models.value = prefs.ai_models ?? {}
+    ready.value = prefs.ai_ready ?? null
+  } catch {
+    // Serveur injoignable : pas de suggestions et pas de verdict, plutôt qu'un
+    // diagnostic inventé qui enverrait chercher une panne au mauvais endroit.
+    ready.value = null
+  } finally {
+    checking.value = false
+  }
+}
+
+onMounted(loadContext)
+
+// « Prêt » se calcule côté serveur et dépend de ce qu'on vient de changer (clé,
+// modèle, fournisseur). Le parent remplace l'objet `ai` par la réponse de
+// l'enregistrement : ce changement de référence est le seul signal fiable que
+// la sauvegarde a abouti, donc le bon moment pour redemander le verdict.
+watch(() => props.ai, loadContext)
+
 const current = computed(
   () => props.providers.find((p) => p.key === props.ai.provider) ?? props.providers[0],
 )
+
+// Volontairement pas un <select> : la liste est figée à la publication de cette
+// version, et un modèle sorti depuis doit rester saisissable sans attendre une
+// mise à jour de Sortilège.
+const currentModels = computed(() => models.value[props.ai.provider] ?? [])
 
 const modelPlaceholder = computed(() => current.value?.default_model || 'nom du modèle')
 const urlPlaceholder = computed(() => current.value?.base_url || 'https://…/v1')
@@ -53,6 +89,22 @@ function saveKey() {
       Activer le résolveur
     </label>
 
+    <p v-if="checking" class="etat attente">
+      <span class="dot"></span>
+      Vérification…
+    </p>
+    <p v-else-if="ai.enabled && ready" :class="['etat', ready.ok ? 'ok' : 'ko']">
+      <span class="dot"></span>
+      <span v-if="ready.ok">Résolveur opérationnel.</span>
+      <span v-else>Inutilisable en l'état : {{ ready.reason }}.</span>
+    </p>
+
+    <p class="precision">
+      Opérationnel ne veut pas dire actif : le résolveur n'est appelé que pour les
+      fichiers ambigus, ceux dont le score passe sous le seuil. Un lot entièrement
+      identifié n'en déclenche aucun, et c'est le comportement attendu.
+    </p>
+
     <div v-if="ai.enabled" class="fields">
       <div class="row">
         <label for="ai-provider">Fournisseur</label>
@@ -66,12 +118,22 @@ function saveKey() {
         <label for="ai-model">Modèle</label>
         <input
           id="ai-model"
+          list="ai-modeles"
+          autocomplete="off"
           :value="ai.model"
           :placeholder="modelPlaceholder"
           spellcheck="false"
           @change="patch({ model: $event.target.value })"
         />
+        <datalist id="ai-modeles">
+          <option v-for="m in currentModels" :key="m" :value="m"></option>
+        </datalist>
       </div>
+      <p class="hint">
+        Les modèles connus du fournisseur sont proposés à la saisie. Le champ reste
+        libre : un modèle plus récent que cette version de Sortilège s'y tape
+        directement. Vide, le modèle par défaut du fournisseur est utilisé.
+      </p>
 
       <div v-if="ai.provider !== 'anthropic'" class="row">
         <label for="ai-url">URL de base</label>
@@ -139,7 +201,16 @@ h3 {
 .hint { margin: 2px 0 10px 101px; font-size: 11.5px; color: var(--text-faint); line-height: 1.5; max-width: 520px; }
 
 .switch { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
-.switch input { width: auto; }
+.switch input { width: auto; accent-color: var(--accent); }
+
+/* Collé sous la case à cocher, pas relégué en bas de section : c'est en cochant
+   « activer » qu'on se demande pourquoi rien ne se passe. */
+.etat { display: flex; align-items: center; gap: 8px; margin: 9px 0 0 26px; font-size: 12px; }
+.etat .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; flex: none; }
+.etat.ok { color: var(--ok); }
+.etat.ko { color: var(--warn); }
+.etat.attente { color: var(--text-faint); }
+.precision { margin: 7px 0 0 26px; font-size: 11.5px; color: var(--text-faint); line-height: 1.6; max-width: 620px; }
 
 .fields { margin-top: 14px; display: flex; flex-direction: column; }
 .row { display: grid; grid-template-columns: 90px 1fr; gap: 11px; align-items: center; margin-bottom: 4px; }
@@ -158,5 +229,6 @@ h3 {
 @media (max-width: 700px) {
   .row { grid-template-columns: 1fr; gap: 4px; }
   .hint { margin-left: 0; }
+  .etat, .precision { margin-left: 0; }
 }
 </style>
