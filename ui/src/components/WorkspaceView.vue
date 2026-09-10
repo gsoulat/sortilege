@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import CandidatePicker from './CandidatePicker.vue'
 import ImageZoom from './ImageZoom.vue'
 
@@ -29,6 +29,7 @@ const busy = ref(null)
 // pas quand la ligne concernée est au milieu de six cents autres.
 const dupeMessage = ref({})
 const confirmingDelete = ref(null)
+const confirmingPrune = ref(false)
 const open = ref(new Set())
 const picking = ref(null)
 const choosing = ref(false)
@@ -42,23 +43,87 @@ const working = computed(
   () => jobs.value.scan?.running || jobs.value.plan?.running || jobs.value.index?.running,
 )
 
+/**
+ * Deux onglets, parce que ce sont deux gestes qui n'ont rien à voir.
+ *
+ * « Source » répond à « qu'est-ce qui traîne et qu'il faut ranger ». On y vient
+ * pour vider, et on en repart quand il est vide. « Ma médiathèque » répond à
+ * « qu'est-ce que je possède, et qu'est-ce qui cloche dedans ». On y vient pour
+ * inspecter, et elle n'est jamais vide.
+ *
+ * Les mélanger, c'était enterrer les quelques lignes actionnables sous des
+ * centaines de lignes au repos — et ne pouvoir filtrer correctement ni les unes
+ * ni les autres.
+ */
+const onglet = ref('source')
+const recherche = ref('')
+const tri = ref('defaut')
+
 const FILTERS = {
   all: () => true,
-  todo: (w) => w.pending.total > 0,
+  // Onglet source
+  ready: (w) => w.pending.ready.length > 0,
+  review: (w) => w.pending.review.length > 0,
+  unplanned: (w) => w.pending.unplanned_count > 0,
+  // Onglet médiathèque
   gaps: (w) => (w.owned?.missing_count ?? 0) > 0,
   dupes: (w) => (w.owned?.duplicates?.length ?? 0) > 0,
   heavy: (w) => w.heaviness >= (data.value?.heavy_ratio ?? 2),
+  offstrat: (w) => (w.off_strategy?.length ?? 0) > 0,
+}
+
+/** Sans accents ni casse : « Amelie » doit trouver « Amélie ». */
+function pliage(texte) {
+  return (texte ?? '')
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '')
+    .toLowerCase()
+}
+
+const TRIS = {
+  // L'ordre du serveur : ce qui demande une action d'abord. C'est le bon défaut
+  // pour la source, où l'on vient pour agir.
+  defaut: null,
+  titre: (a, b) => a.title.localeCompare(b.title, 'fr'),
+  poids: (a, b) => b.bytes_per_file - a.bytes_per_file,
+  manquants: (a, b) => (b.owned?.missing_count ?? 0) - (a.owned?.missing_count ?? 0),
+  recuperable: (a, b) => recuperable(b) - recuperable(a),
+}
+
+function recuperable(w) {
+  return (w.off_strategy ?? []).reduce((somme, f) => somme + f.savings_bytes, 0)
 }
 
 // Filtre de type, indépendant de l'état : on veut pouvoir croiser « les séries »
 // avec « celles qui pèsent lourd ».
 const kind = ref('all')
 
-const works = computed(() =>
-  (data.value?.works ?? [])
-    .filter(FILTERS[filter.value])
-    .filter((w) => kind.value === 'all' || w.kind === kind.value),
+/** L'onglet décide de ce qui entre dans la liste, avant tout autre filtre. */
+const parOnglet = computed(() =>
+  (data.value?.works ?? []).filter(
+    onglet.value === 'source' ? (w) => w.pending.total > 0 : (w) => w.owned,
+  ),
 )
+
+const works = computed(() => {
+  const q = pliage(recherche.value.trim())
+  const liste = parOnglet.value
+    .filter(FILTERS[filter.value] ?? FILTERS.all)
+    .filter((w) => kind.value === 'all' || w.kind === kind.value)
+    .filter((w) => !q || pliage(w.title).includes(q))
+  const ordre = TRIS[tri.value]
+  return ordre ? [...liste].sort(ordre) : liste
+})
+
+// Changer d'onglet remet les filtres à zéro : « Épisodes manquants » n'a aucun
+// sens côté source, et laisser un filtre actif d'un onglet à l'autre donnerait
+// une liste vide sans qu'on comprenne pourquoi.
+watch(onglet, () => {
+  filter.value = 'all'
+  tri.value = onglet.value === 'source' ? 'defaut' : 'titre'
+  recherche.value = ''
+  charge.value = PALIER
+})
 
 const kindCounts = computed(() => {
   const out = { movie: 0, episode: 0, anime: 0 }
@@ -68,7 +133,9 @@ const kindCounts = computed(() => {
 
 /** Les plus lourds d'abord : c'est l'ordre utile quand on cherche de la place. */
 const bySize = computed(() => [...works.value].sort((a, b) => b.bytes_per_file - a.bytes_per_file))
-const listed = computed(() => (filter.value === 'heavy' ? bySize.value : works.value))
+const listed = computed(() =>
+  filter.value === 'heavy' && tri.value === 'defaut' ? bySize.value : works.value,
+)
 
 /** Ce que le travail en cours est en train de faire, en une ligne. */
 const activity = computed(() => {
@@ -424,6 +491,34 @@ async function trashDuplicates(work) {
 }
 
 /**
+ * Nettoie TOUS les doublons de la bibliothèque d'un coup.
+ *
+ * Le serveur travaille sur son propre index, pas sur ce que la page affiche :
+ * une liste tronquée à deux cents œuvres ferait oublier les autres, sans que
+ * rien ne le signale. Et il ne refait pas l'arbitrage — l'exemplaire gardé est
+ * celui que la stratégie du type a déjà désigné.
+ */
+async function pruneDuplicates() {
+  if (!confirmingPrune.value) {
+    confirmingPrune.value = true
+    return
+  }
+  busy.value = 'prune'
+  try {
+    const out = await call('/api/collection/duplicates/prune', { confirm: true })
+    if (out) {
+      message.value =
+        `${out.deleted} exemplaire(s) en trop supprimé(s), ${gb(out.freed_bytes)} Go libérés` +
+        (out.failed ? `, ${out.failed} en échec.` : '.')
+      await load()
+    }
+  } finally {
+    confirmingPrune.value = false
+    busy.value = null
+  }
+}
+
+/**
  * Supprime sans passer par la corbeille. Deux clics : le premier arme, le
  * second exécute — parce que rien ne défera celui-ci.
  *
@@ -753,13 +848,36 @@ onUnmounted(() => clearInterval(poller))
       </ul>
     </section>
 
-    <div class="filters">
-      <button :class="{ active: filter === 'all' }" @click="filter = 'all'">
-        Tout ({{ counts.works }})
+    <!-- Deux gestes distincts : vider la source, inspecter la médiathèque. -->
+    <div class="onglets">
+      <button :class="{ actif: onglet === 'source' }" @click="onglet = 'source'">
+        Source <span class="pastille">{{ counts.source_works ?? 0 }}</span>
       </button>
-      <button v-if="counts.ready + counts.review + counts.unplanned" class="warn"
-              :class="{ active: filter === 'todo' }" @click="filter = 'todo'">
-        À traiter ({{ counts.ready + counts.review + counts.unplanned }})
+      <button :class="{ actif: onglet === 'library' }" @click="onglet = 'library'">
+        Ma médiathèque <span class="pastille">{{ counts.library_works ?? 0 }}</span>
+      </button>
+    </div>
+
+    <div v-if="onglet === 'source'" class="filters">
+      <button :class="{ active: filter === 'all' }" @click="filter = 'all'">
+        Tout ({{ parOnglet.length }})
+      </button>
+      <button v-if="counts.ready" class="warn" :class="{ active: filter === 'ready' }"
+              @click="filter = 'ready'">
+        Prêts à ranger ({{ counts.ready }})
+      </button>
+      <button v-if="counts.review" :class="{ active: filter === 'review' }" @click="filter = 'review'">
+        À arbitrer ({{ counts.review }})
+      </button>
+      <button v-if="counts.unplanned" :class="{ active: filter === 'unplanned' }"
+              @click="filter = 'unplanned'">
+        Pas encore identifiés ({{ counts.unplanned }})
+      </button>
+    </div>
+
+    <div v-else class="filters">
+      <button :class="{ active: filter === 'all' }" @click="filter = 'all'">
+        Tout ({{ parOnglet.length }})
       </button>
       <button v-if="counts.missing" :class="{ active: filter === 'gaps' }" @click="filter = 'gaps'">
         Épisodes manquants ({{ counts.missing }})
@@ -770,8 +888,47 @@ onUnmounted(() => clearInterval(poller))
       <button v-if="counts.heavy" class="heavy-filter" :class="{ active: filter === 'heavy' }"
               @click="filter = 'heavy'"
               :title="`Au moins ${data.heavy_ratio} fois le poids habituel de leur type`">
-        Anormalement lourds ({{ counts.heavy }})
+        Surpoids ({{ counts.heavy }})
       </button>
+      <button v-if="counts.off_strategy" :class="{ active: filter === 'offstrat' }"
+              @click="filter = 'offstrat'"
+              :title="'Fichiers dont la résolution ne suit pas la stratégie choisie pour leur type'">
+        Hors stratégie ({{ counts.off_strategy }})
+        <span v-if="counts.recoverable_bytes" class="gain">
+          −{{ gb(counts.recoverable_bytes) }} Go
+        </span>
+      </button>
+    </div>
+
+    <div v-if="onglet === 'library' && filter === 'dupes' && counts.duplicates" class="lot">
+      <span class="warn-text">
+        Ne garde qu'un exemplaire par emplacement : celui que la stratégie de son type
+        désigne. Porte sur TOUTE la bibliothèque, pas seulement sur les lignes affichées.
+      </span>
+      <button class="small danger" :disabled="busy === 'prune'" @click="pruneDuplicates">
+        {{ confirmingPrune ? `Confirmer — ${counts.duplicates} emplacement(s)` : 'Nettoyer tous les doublons' }}
+      </button>
+      <button v-if="confirmingPrune" class="small" @click="confirmingPrune = false">Renoncer</button>
+    </div>
+
+    <div class="outils">
+      <input
+        v-model="recherche"
+        type="search"
+        class="recherche"
+        :placeholder="onglet === 'source' ? 'Chercher dans la source…' : 'Chercher un titre…'"
+      />
+      <label class="tri">
+        Trier par
+        <select v-model="tri">
+          <option value="defaut">Ce qui demande une action</option>
+          <option value="titre">Titre</option>
+          <option value="poids">Poids par fichier</option>
+          <option v-if="onglet === 'library'" value="manquants">Épisodes manquants</option>
+          <option v-if="onglet === 'library'" value="recuperable">Place récupérable</option>
+        </select>
+      </label>
+      <span v-if="recherche && works.length" class="compte">{{ works.length }} résultat(s)</span>
     </div>
 
     <div class="filters kinds">
@@ -791,7 +948,14 @@ onUnmounted(() => clearInterval(poller))
     </div>
 
     <p v-if="!works.length" class="empty">
-      Rien ici. Lance « Analyser les sources » pour commencer.
+      <template v-if="recherche">Aucun titre ne correspond à « {{ recherche }} ».</template>
+      <template v-else-if="onglet === 'source'">
+        Rien ne traîne dans la source. C'est l'état recherché — lance « Analyser les sources »
+        si tu viens d'ajouter des fichiers.
+      </template>
+      <template v-else>
+        La bibliothèque est vide pour ce filtre. « Relire la bibliothèque » la reconstruit.
+      </template>
     </p>
 
     <ul class="works">
@@ -1060,9 +1224,14 @@ onUnmounted(() => clearInterval(poller))
               <button
                 class="small danger"
                 :disabled="busy === 'delete'"
+                title="Garde l'exemplaire que la stratégie de ce type désigne, supprime les autres"
                 @click="deleteDuplicates(w)"
               >
-                {{ confirmingDelete === w.key ? 'Confirmer la suppression' : 'Supprimer' }}
+                {{
+                  confirmingDelete === w.key
+                    ? 'Confirmer la suppression'
+                    : 'Supprimer selon la stratégie'
+                }}
               </button>
               <button
                 v-if="confirmingDelete === w.key"
@@ -1075,9 +1244,24 @@ onUnmounted(() => clearInterval(poller))
             </div>
             <ul v-if="w.owned.duplicates.length" class="dupes">
               <li v-for="d in w.owned.duplicates" :key="d.label">
-                <span class="label">{{ d.label }}</span>
-                <span class="wasted">{{ gb(d.wasted_bytes) }} Go en double</span>
-                <code>garde {{ d.keep }}</code>
+                <div class="dupe-line">
+                  <span class="label">{{ d.label }}</span>
+                  <span class="wasted">{{ gb(d.wasted_bytes) }} Go en double</span>
+                  <span v-if="d.strategy" class="strat">stratégie « {{ d.strategy }} »</span>
+                </div>
+                <!-- Chaque exemplaire avec ce qu'il vaut : « garde celui-ci »
+                     sans dire ce que valent les autres demande une confiance
+                     aveugle juste avant une suppression. -->
+                <ul class="exemplaires">
+                  <li v-for="f in d.files ?? []" :key="f.path" :class="{ garde: f.kept }">
+                    <span class="etiquette" :class="{ cible: f.kept }">
+                      {{ f.resolution || 'résolution inconnue' }}
+                    </span>
+                    <span class="poids">{{ gb(f.size_bytes) }} Go</span>
+                    <span class="verdict">{{ f.kept ? 'gardé' : 'en trop' }}</span>
+                    <code>{{ f.path }}</code>
+                  </li>
+                </ul>
               </li>
             </ul>
           </section>
@@ -1102,6 +1286,45 @@ onUnmounted(() => clearInterval(poller))
 </template>
 
 <style scoped>
+.lot {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 9px 12px; border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 7%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 22%, transparent);
+}
+.dupe-line { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.dupe-line .strat { font-size: 11px; color: var(--text-faint); }
+.exemplaires { list-style: none; margin: 5px 0 0 14px; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.exemplaires li { display: flex; gap: 8px; align-items: center; font-size: 11.5px; flex-wrap: wrap; }
+.exemplaires code { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); overflow-wrap: anywhere; }
+.exemplaires .verdict { font-size: 10.5px; color: var(--text-faint); }
+.exemplaires li.garde .verdict { color: var(--ok, var(--accent)); }
+.onglets { display: flex; gap: 4px; margin-bottom: 4px; }
+.onglets button {
+  font-size: 13px; padding: 7px 15px; border-radius: 8px 8px 0 0;
+  border-bottom: 2px solid transparent; background: transparent;
+}
+.onglets button.actif {
+  color: var(--text); border-bottom-color: var(--accent);
+  background: var(--surface);
+}
+.onglets .pastille {
+  font-size: 10.5px; margin-left: 6px; padding: 1px 6px; border-radius: 20px;
+  background: var(--surface-2); color: var(--text-dim);
+}
+.outils { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: -2px; }
+.recherche {
+  flex: 1; min-width: 180px; max-width: 320px; font-size: 12.5px; padding: 5px 10px;
+  background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text);
+}
+.tri { font-size: 11.5px; color: var(--text-faint); display: flex; gap: 6px; align-items: center; }
+.tri select {
+  font-size: 11.5px; padding: 4px 8px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 6px; color: var(--text);
+}
+.outils .compte { font-size: 11.5px; color: var(--text-faint); }
+.filters .gain { color: var(--accent); margin-left: 5px; font-family: var(--mono); font-size: 10.5px; }
 .fichiers { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .fichiers li { display: flex; align-items: center; gap: 8px; font-size: 11.5px; flex-wrap: wrap; }
 .fichiers code {

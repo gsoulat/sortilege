@@ -330,6 +330,55 @@ def delete_duplicates(body: DeleteDuplicatesRequest) -> dict[str, object]:
     }
 
 
+class PruneDuplicatesRequest(BaseModel):
+    confirm: bool = False
+    """Obligatoire, comme pour la suppression unitaire."""
+
+    trash: bool = False
+    """Passer par la corbeille plutot que supprimer. La suppression directe est
+    le defaut ici : quand on nettoie toute une bibliotheque d'un coup, deplacer
+    des centaines de gigaoctets vers une corbeille qu'il faudra vider ensuite
+    double le travail sans rien proteger de plus."""
+
+
+@router.post("/duplicates/prune")
+def prune_duplicates(body: PruneDuplicatesRequest) -> dict[str, object]:
+    """Ne garde qu'un exemplaire par emplacement, celui que la STRATEGIE designe.
+
+    Le choix n'est pas refait ici : ``collection.group`` a deja classe chaque
+    exemplaire selon la strategie du type — 2160p d'abord en « Qualité
+    maximale », 720p d'abord en « Économie de place ». Refaire l'arbitrage a cet
+    endroit reviendrait a entretenir deux regles pour une meme question, et
+    elles finiraient par diverger.
+
+    Cette route travaille sur l'index du SERVEUR et non sur ce que l'interface
+    affiche : une page tronquee a deux cents oeuvres ferait oublier les autres,
+    silencieusement.
+    """
+    if not body.confirm:
+        raise HTTPException(400, "operation non confirmee")
+
+    groupes = [
+        DuplicateGroupIn(keep=g.best.relative_path, paths=[f.relative_path for f in g.redundant])
+        for work in current_works()
+        for g in work.duplicates
+        if g.redundant
+    ]
+    if not groupes:
+        return {"deleted": 0, "failed": 0, "freed_bytes": 0, "results": []}
+
+    logger.info(
+        "nettoyage des doublons : %s emplacement(s), %s exemplaire(s) en trop",
+        len(groupes),
+        sum(len(g.paths) for g in groupes),
+    )
+
+    if body.trash:
+        sortie = trash_duplicates(TrashRequest(paths=[p for g in groupes for p in g.paths]))
+        return {**sortie, "deleted": sortie["trashed"], "freed_bytes": 0}
+    return delete_duplicates(DeleteDuplicatesRequest(groups=groupes, confirm=True))
+
+
 class PurgeRequest(BaseModel):
     older_than_days: int = 30
     """Age minimal d'un lot pour etre supprime. 0 = tout, sans exception."""

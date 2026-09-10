@@ -19,6 +19,7 @@ import logging
 
 from fastapi import APIRouter
 
+from ..core import quality
 from ..core.planner import Plan
 from ..core.workspace import HEAVY_RATIO, WorkspaceEntry, build, summarize
 from . import collection, library, review
@@ -131,6 +132,20 @@ def _entry_out(entry: WorkspaceEntry) -> dict[str, object]:
                     "wasted_bytes": g.wasted_bytes,
                     "keep": g.best.relative_path,
                     "redundant": [f.relative_path for f in g.redundant],
+                    # Le detail de chaque exemplaire, pour que le choix soit
+                    # VERIFIABLE. « garde celui-ci » sans dire ce qu'il vaut ni
+                    # ce que valent les autres demande une confiance aveugle
+                    # avant une suppression.
+                    "files": [
+                        {
+                            "path": f.relative_path,
+                            "resolution": f.resolution,
+                            "size_bytes": f.size_bytes,
+                            "kept": f is g.best,
+                        }
+                        for f in sorted(g.files, key=lambda f: f.rank, reverse=True)
+                    ],
+                    "strategy": quality.strategy(g.best.strategy_key).label,
                 }
                 for g in owned.duplicates
             ],

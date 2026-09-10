@@ -298,6 +298,11 @@ def summarize(entries: list[WorkspaceEntry]) -> dict[str, int]:
     """Les compteurs de la barre d'action, calcules une fois pour toutes."""
     return {
         "works": len(entries),
+        # Les deux onglets : ce qui attend dans la source, et ce qui est range.
+        # Une meme oeuvre peut compter dans les deux — un episode en attente
+        # d'une serie deja presente en bibliotheque.
+        "source_works": sum(1 for e in entries if e.pending.total),
+        "library_works": sum(1 for e in entries if e.owned),
         "owned_files": sum(e.owned.file_count for e in entries if e.owned),
         "ready": sum(len(e.pending.ready) for e in entries),
         "review": sum(len(e.pending.review) for e in entries),
@@ -307,6 +312,8 @@ def summarize(entries: list[WorkspaceEntry]) -> dict[str, int]:
         "duplicates": sum(len(e.owned.duplicates) for e in entries if e.owned),
         "total_bytes": sum(e.owned.total_bytes for e in entries if e.owned),
         "heavy": sum(1 for e in entries if e.heaviness >= HEAVY_RATIO),
+        "off_strategy": sum(len(e.off_strategy) for e in entries),
+        "recoverable_bytes": sum(c.savings_bytes for e in entries for c in e.off_strategy),
     }
 
 
