@@ -279,6 +279,7 @@ const REASONS = {
     fix: "L'identification n'a rien donné pour ces fichiers.",
   },
   size_mismatch: {
+    action: 'arbitrer',
     // Ce n'est PAS un échec, et l'appeler ainsi induit en erreur : c'est un
     // refus délibéré, et il demande une décision qu'aucun algorithme ne peut
     // prendre à ta place.
@@ -648,6 +649,21 @@ onUnmounted(() => clearInterval(poller))
             <span class="voir">{{ ouvert === g.key ? 'masquer' : 'voir les fichiers' }}</span>
           </button>
           <p class="fix">{{ g.fix }}</p>
+          <!-- Arbitrage par la taille : deux encodages, il faut choisir. -->
+          <div v-if="g.action === 'arbitrer'" class="actions">
+            <button class="act" :disabled="evacuating" @click="evacuate(g, { mode: 'keep_smaller' })">
+              Garder le plus petit ({{ g.items.length }})
+            </button>
+            <button class="act" :disabled="evacuating" @click="evacuate(g, { mode: 'keep_larger' })">
+              Garder le plus gros
+            </button>
+          </div>
+          <p v-if="g.action === 'arbitrer'" class="fix">
+            Le fichier écarté part en <strong>corbeille</strong>, pas à la poubelle, et
+            l'opération est journalisée — « Annuler… » la défait comme n'importe quel
+            rangement.
+          </p>
+
           <div v-if="g.action === 'evacuate'" class="actions">
             <button class="act" :disabled="evacuating" @click="evacuate(g)">
               {{ evacuating ? 'En cours…' : `Mettre ces ${g.items.length} copies en corbeille` }}

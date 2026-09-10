@@ -452,7 +452,130 @@ def delete_ranged_source(plan: Plan) -> ApplyResult:
     )
 
 
-def evacuate_ranged_source(plan: Plan, journal: Journal, trash_root: Path | None) -> ApplyResult:
+def keep_by_size(
+    plan: Plan, journal: Journal, trash_root: Path | None, *, keep: str = "smaller"
+) -> ApplyResult:
+    """Tranche entre deux encodages d'une meme oeuvre, par la taille.
+
+    Le cas : le fichier est deja range, mais la copie en telechargement n'a pas
+    la meme taille. Ce sont deux encodages distincts — un remux et un encodage
+    leger, typiquement — et aucun signal automatique ne dit lequel garder. La
+    taille, elle, est un critere que l'utilisateur peut choisir : la place, ou
+    la qualite.
+
+    Le fichier ecarte part en CORBEILLE, pas a la poubelle. Se tromper de
+    critere sur trois cents fichiers serait sinon irrattrapable, et « le plus
+    petit » n'est pas toujours le bon choix — c'est meme le contraire pour qui
+    tient a l'image.
+
+    Les deux mouvements sont journalises separement, donc annulables :
+    remplacer un fichier de bibliotheque est l'operation la plus lourde que
+    fasse cette application, et elle doit pouvoir se defaire.
+    """
+    if plan.destination is None:
+        return ApplyResult(plan.id, False, str(plan.source), None, "aucune destination")
+    if not plan.source.is_file() or not plan.destination.is_file():
+        return ApplyResult(
+            plan.id,
+            False,
+            str(plan.source),
+            str(plan.destination),
+            "l'un des deux fichiers a disparu",
+            reason="source_missing",
+        )
+
+    taille_copie = plan.source.stat().st_size
+    taille_rangee = plan.destination.stat().st_size
+
+    if taille_copie == taille_rangee:
+        return ApplyResult(
+            plan.id,
+            False,
+            str(plan.source),
+            str(plan.destination),
+            "les deux fichiers ont la meme taille : rien a departager",
+            reason="size_mismatch",
+        )
+
+    copie_gagne = (
+        taille_copie < taille_rangee if keep == "smaller" else taille_copie > taille_rangee
+    )
+
+    if not copie_gagne:
+        # Le fichier deja range l'emporte : la copie est simplement en trop.
+        resultat = evacuate_ranged_source(plan, journal, trash_root, force=True)
+        if resultat.ok:
+            resultat.message = (
+                f"le fichier range ({_lisible(taille_rangee)}) est conserve, "
+                f"la copie ({_lisible(taille_copie)}) evacuee"
+            )
+        return resultat
+
+    if trash_root is None:
+        return ApplyResult(
+            plan.id,
+            False,
+            str(plan.source),
+            str(plan.destination),
+            "aucune corbeille configuree",
+            reason="no_trash",
+        )
+
+    # La copie l'emporte. Le fichier range part D'ABORD en corbeille, ce qui
+    # libere la destination : deplacer la copie avant echouerait sur une
+    # destination occupee, le refus d'ecraser etant applique dans _move.
+    lot = datetime.now(UTC).strftime("%Y-%m-%d")
+    ecarte = trash_destination(trash_root, lot, plan.destination)
+    if ecarte.exists():
+        ecarte.unlink()
+
+    try:
+        methode = _move(plan.destination, ecarte)
+    except OSError as exc:
+        return ApplyResult(
+            plan.id,
+            False,
+            str(plan.source),
+            str(plan.destination),
+            f"impossible d'ecarter le fichier range : {exc}" + _permission_hint(plan.destination),
+            reason=_os_reason(exc),
+        )
+    _record(journal, plan, plan.destination, ecarte, methode, "trash")
+
+    try:
+        methode = _move(plan.source, plan.destination)
+    except OSError as exc:
+        # Remettre en place ce qu'on vient d'ecarter. Echouer a mi-chemin
+        # laisserait la bibliotheque SANS le fichier — pire que de n'avoir
+        # rien tente.
+        try:
+            _move(ecarte, plan.destination)
+        except OSError:
+            logger.exception("restauration impossible apres echec : %s", plan.destination)
+        return ApplyResult(
+            plan.id,
+            False,
+            str(plan.source),
+            str(plan.destination),
+            f"remplacement impossible : {exc}" + _permission_hint(plan.source),
+            reason=_os_reason(exc),
+        )
+    _record(journal, plan, plan.source, plan.destination, methode, "video")
+
+    return ApplyResult(
+        plan.id,
+        True,
+        str(plan.source),
+        str(plan.destination),
+        f"remplace par la copie ({_lisible(taille_copie)} au lieu de "
+        f"{_lisible(taille_rangee)}), l'ancien fichier est en corbeille",
+        reason="ok",
+    )
+
+
+def evacuate_ranged_source(
+    plan: Plan, journal: Journal, trash_root: Path | None, *, force: bool = False
+) -> ApplyResult:
     """Evacue une source dont le fichier est DEJA a destination.
 
     Le cas est frequent apres un rangement interrompu ou rejoue : le fichier a
@@ -497,7 +620,10 @@ def evacuate_ranged_source(plan: Plan, journal: Journal, trash_root: Path | None
 
     source_size = plan.source.stat().st_size
     target_size = plan.destination.stat().st_size
-    if source_size != target_size:
+    # ``force`` vient d'une decision deja prise sur la taille : la
+    # refuser une seconde fois empecherait d'appliquer ce que
+    # l'utilisateur a choisi.
+    if source_size != target_size and not force:
         return ApplyResult(
             plan.id,
             False,

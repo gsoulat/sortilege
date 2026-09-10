@@ -24,6 +24,7 @@ from ..core.journal import (
     delete_ranged_source,
     evacuate_ranged_source,
     group_by_work,
+    keep_by_size,
     undo_last,
     undo_plans,
     undo_work,
@@ -625,7 +626,9 @@ class EvacuateRequest(BaseModel):
     occupee par un fichier identique."""
 
     mode: str = "trash"
-    """« trash » met en corbeille, « delete » supprime directement.
+    """Ce qu'on fait des copies : « trash », « delete », ou un arbitrage par la
+    taille — « keep_smaller » / « keep_larger » — quand les deux fichiers
+    different et qu'il faut choisir lequel garder.
 
     La corbeille reste le defaut. Mais quand le fichier est verifie present a
     destination ET de meme taille, la source n'est pas un fichier : c'est un
@@ -719,7 +722,14 @@ async def evacuate(body: EvacuateRequest) -> dict[str, object]:
                 # Corbeille choisie PAR FICHIER : sur un NAS ou telechargements
                 # et bibliotheque sont deux partages, une corbeille commune
                 # imposerait de recopier chaque fichier au lieu de le renommer.
-                if body.mode == "delete":
+                if body.mode in ("keep_smaller", "keep_larger"):
+                    result = keep_by_size(
+                        plan,
+                        journal,
+                        trash_root_for(plan.source, conf.library_root, conf.source_roots),
+                        keep="smaller" if body.mode == "keep_smaller" else "larger",
+                    )
+                elif body.mode == "delete":
                     result = delete_ranged_source(plan)
                 else:
                     result = evacuate_ranged_source(
