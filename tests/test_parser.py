@@ -147,3 +147,55 @@ def test_l_annee_reste_lue_malgre_la_signature() -> None:
 
     assert lu.title == "Almost Family"
     assert lu.year == 2025
+
+
+# --- Suffixe de saison ------------------------------------------------------
+#
+# Cas reel : « Walker Texas Ranger Saison 2 » et « Walker.Texas.Ranger.S02 »
+# donnaient deux titres differents — « Walker Texas Ranger 2 » et « Walker
+# Texas Ranger S02 » — donc DEUX oeuvres distinctes pour une seule serie. Le
+# mot « saison » etait bien retire comme bruit, mais le numero restait.
+
+
+@pytest.mark.parametrize(
+    "dossier",
+    [
+        "Walker Texas Ranger Saison 2",
+        "Walker.Texas.Ranger.S02",
+        "Walker Texas Ranger Season 02",
+        "Walker Texas Ranger S2",
+    ],
+)
+def test_une_serie_ne_s_eclate_pas_selon_l_ecriture_de_sa_saison(dossier: str) -> None:
+    """Toutes ces ecritures designent la meme serie : elles doivent donner le
+    meme titre, sans quoi la bibliotheque en compte plusieurs."""
+    lu = parse(Path("/src") / dossier / "02x01 - Episode.avi", [dossier])
+
+    assert lu.title == "Walker Texas Ranger"
+    assert lu.season == 2
+
+
+@pytest.mark.parametrize(
+    ("nom", "titre"),
+    [
+        # Le « s » de « Ocean's » suivi d'un nombre ressemble a s'y meprendre a
+        # un numero de saison. Il est precede d'une apostrophe, pas d'un
+        # separateur — c'est toute la difference, et sans elle le titre
+        # devenait « Ocean' ».
+        ("Ocean's 11 2001.mkv", "Ocean's 11"),
+        ("Ocean's 8 2018.mkv", "Ocean's 8"),
+        ("Le Cercle 2.mkv", "Le Cercle 2"),
+        ("Star Wars 2.mkv", "Star Wars 2"),
+        ("Jackass 3 2010.mkv", "Jackass 3"),
+    ],
+)
+def test_un_nombre_du_titre_n_est_pas_pris_pour_une_saison(nom: str, titre: str) -> None:
+    assert parse(Path("/src") / nom).title == titre
+
+
+def test_un_dossier_de_saison_seul_garde_son_nom() -> None:
+    """« Saison 2 » comme nom de dossier ne doit pas devenir vide : la remontee
+    vers le dossier parent en depend."""
+    lu = parse(Path("/src/Severance/Saison 2/S02E01.mkv"), ["Severance", "Saison 2"])
+
+    assert lu.title == "Severance"

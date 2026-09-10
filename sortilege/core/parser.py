@@ -111,6 +111,21 @@ _SITE_TAIL = re.compile(
     re.IGNORECASE,
 )
 
+# Suffixe de saison en fin de titre : « Walker Texas Ranger Saison 2 »,
+# « Walker.Texas.Ranger.S02 ». Le mot « saison » etait bien retire comme bruit,
+# mais le NUMERO restait — « Walker Texas Ranger 2 » d'un cote, « Walker Texas
+# Ranger S02 » de l'autre, et une meme serie se retrouvait eclatee en autant
+# d'oeuvres distinctes que de facons d'ecrire sa saison.
+#
+# La saison est deja lue a part : la laisser dans le titre ne peut que nuire,
+# a l'affichage comme a la recherche chez le fournisseur.
+# Le « s » doit etre precede d'un SEPARATEUR, pas d'une simple limite de mot :
+# « Ocean's 11 » finit par « s 11 » et devenait « Ocean' ». Un apostrophe fait
+# limite de mot, pas separateur — c'est toute la difference.
+_TRAILING_SEASON = re.compile(
+    r"(?:^|[\s._-])[Ss](?:aison|eason)?[\s._-]*\d{1,2}\s*$", re.IGNORECASE
+)
+
 _SEPARATORS = re.compile(r"[._]+")
 _MULTISPACE = re.compile(r"\s{2,}")
 
@@ -250,6 +265,12 @@ def _clean_title(raw: str, cut_at: int | None) -> str:
     # au seul nom du site vaut mieux nomme par ce nom que pas nomme du tout.
     if (sans_site := _SITE_TAIL.sub("", title)).strip(" -_"):
         title = sans_site
+    # AVANT le retrait du bruit : « saison » y est efface comme mot bruite, et
+    # le numero resterait orphelin. On ne retient le retrait que s'il laisse un
+    # titre — un dossier nomme « Saison 2 » doit rester tel quel pour que la
+    # remontee vers le dossier parent joue.
+    if _TRAILING_SEASON.sub("", title).strip(" -_"):
+        title = _TRAILING_SEASON.sub("", title)
     title = _NOISE.sub(" ", title)
     title = re.sub(r"[\[\](){}]", " ", title)
     # Les tirets cadratins sont voulus : les releases francaises et les fansubs
