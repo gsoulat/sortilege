@@ -112,6 +112,17 @@ def test_une_taille_differente_est_refusee(space: Path, journal: Journal) -> Non
     assert plan.source.is_file(), "rien n'a ete touche"
 
 
+def test_les_tailles_sont_annoncees_en_unite_humaine(space: Path, journal: Journal) -> None:
+    """« 9,83 Go » se compare d'un coup d'oeil, la ou « 10552265410 octets »
+    demande de compter les chiffres — et c'est cette comparaison qui doit
+    permettre de trancher entre les deux fichiers."""
+    from sortilege.core.journal import _lisible
+
+    assert _lisible(10_552_265_410) == "9,83 Go"
+    assert _lisible(5_293_727_744) == "4,93 Go"
+    assert _lisible(512) == "512 octets"
+
+
 def test_un_fichier_jamais_range_est_refuse(space: Path, journal: Journal) -> None:
     """Sans ce controle, la fonction supprimerait une source qui n'est nulle
     part ailleurs — la perte seche."""

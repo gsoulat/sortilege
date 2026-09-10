@@ -244,6 +244,11 @@ async function apply(ids = null) {
 // disant chacune « déplacement impossible : /un/chemin/différent » se lisent
 // exactement comme une seule.
 const failures = ref([])
+// Quel motif est deplie. Un compte et une explication ne suffisent pas : sans
+// la liste, on sait POURQUOI ca a echoue mais pas SUR QUOI, et il n'y a rien
+// a faire de cette information.
+const ouvert = ref(null)
+const MAX_LISTE = 100
 const evacuating = ref(false)
 const evacProgress = ref(null)
 
@@ -636,10 +641,12 @@ onUnmounted(() => clearInterval(poller))
       <h3>Ce qui a bloqué</h3>
       <ul>
         <li v-for="g in failureGroups" :key="g.key">
-          <div class="head">
+          <button class="head" @click="ouvert = ouvert === g.key ? null : g.key">
+            <span class="chev" :class="{ closed: ouvert !== g.key }">▾</span>
             <span class="count">{{ g.items.length }}</span>
             <span class="label">{{ g.label }}</span>
-          </div>
+            <span class="voir">{{ ouvert === g.key ? 'masquer' : 'voir les fichiers' }}</span>
+          </button>
           <p class="fix">{{ g.fix }}</p>
           <div v-if="g.action === 'evacuate'" class="actions">
             <button class="act" :disabled="evacuating" @click="evacuate(g)">
@@ -676,7 +683,17 @@ onUnmounted(() => clearInterval(poller))
               </li>
             </ul>
           </div>
-          <code class="sample">{{ g.sample }}</code>
+          <code v-if="ouvert !== g.key" class="sample">{{ g.sample }}</code>
+
+          <ul v-else class="fautifs">
+            <li v-for="(r, i) in g.items.slice(0, MAX_LISTE)" :key="i">
+              <code class="chemin">{{ shortPath(r.source) }}</code>
+              <span class="motif">{{ r.message }}</span>
+            </li>
+            <li v-if="g.items.length > MAX_LISTE" class="more">
+              … et {{ g.items.length - MAX_LISTE }} autres
+            </li>
+          </ul>
         </li>
       </ul>
     </section>
@@ -1044,7 +1061,21 @@ onUnmounted(() => clearInterval(poller))
   text-transform: uppercase; letter-spacing: .07em; color: var(--err);
 }
 .failures > ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
-.failures .head { display: flex; align-items: center; gap: 9px; font-size: 13.5px; }
+.failures .head {
+  display: flex; align-items: center; gap: 9px; font-size: 13.5px;
+  width: 100%; border: none; background: none; padding: 0;
+  color: var(--text); text-align: left; cursor: pointer;
+}
+.failures .head:hover .label { color: var(--text); }
+.failures .chev { font-size: 10px; color: var(--text-faint); transition: transform .15s; }
+.failures .chev.closed { transform: rotate(-90deg); }
+.failures .voir { margin-left: auto; font-size: 11px; color: var(--text-faint); }
+
+.fautifs { list-style: none; margin: 9px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; max-height: 340px; overflow-y: auto; }
+.fautifs li { display: flex; flex-direction: column; gap: 1px; }
+.fautifs .chemin { font-family: var(--mono); font-size: 11px; color: var(--text-dim); }
+.fautifs .motif { font-size: 10.5px; color: var(--text-faint); }
+.fautifs .more { font-size: 11.5px; color: var(--text-faint); font-style: italic; }
 .failures .count {
   font-family: var(--mono); font-size: 11.5px; padding: 1px 7px; border-radius: 4px;
   background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err);

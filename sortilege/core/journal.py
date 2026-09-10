@@ -308,6 +308,15 @@ def _why_not_writable(plan: Plan) -> str | None:
     return None
 
 
+def _lisible(octets: int) -> str:
+    """Taille en unite humaine. « 9,8 Go » se compare d'un coup d'oeil, la ou
+    « 10552265410 octets » demande de compter les chiffres."""
+    for unite, seuil in (("Go", 1024**3), ("Mo", 1024**2), ("Ko", 1024)):
+        if octets >= seuil:
+            return f"{octets / seuil:.2f} {unite}".replace(".", ",")
+    return f"{octets} octets"
+
+
 def _os_reason(exc: OSError) -> str:
     """Traduit une erreur systeme en motif regroupable.
 
@@ -414,8 +423,8 @@ def delete_ranged_source(plan: Plan) -> ApplyResult:
             str(plan.source),
             str(plan.destination),
             (
-                f"tailles differentes ({source_size} vs {target_size} octets) : "
-                "ce n'est pas le meme fichier, rien n'a ete touche"
+                f"la copie fait {_lisible(source_size)}, le fichier range "
+                f"{_lisible(target_size)} — ce n'est pas le meme fichier, rien n'a ete touche"
             ),
             reason="size_mismatch",
         )
@@ -495,8 +504,8 @@ def evacuate_ranged_source(plan: Plan, journal: Journal, trash_root: Path | None
             str(plan.source),
             str(plan.destination),
             (
-                f"tailles differentes ({source_size} vs {target_size} octets) : "
-                "ce n'est pas le meme fichier, rien n'a ete touche"
+                f"la copie fait {_lisible(source_size)}, le fichier range "
+                f"{_lisible(target_size)} — ce n'est pas le meme fichier, rien n'a ete touche"
             ),
             reason="size_mismatch",
         )
