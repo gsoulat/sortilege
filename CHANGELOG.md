@@ -1,6 +1,39 @@
 # CHANGELOG
 
 
+## v0.43.3 (2026-09-10)
+
+### Bug Fixes
+
+- **mediatheque**: Ne plus cacher les fichiers restes dans la source
+  ([`27228a6`](https://github.com/gsoulat/sortilege/commit/27228a6b20c9f95e5c5947bcf2f153ae9429a71e))
+
+Des dossiers pleins dans la source, et plus rien qui les signale : le filtre excluait tout chemin
+  DEJA PASSE par le calcul d'identification. Mais « deja identifie » ne veut pas dire « range ». Un
+  fichier dont le plan a ete rejete, ou perdu entre deux redemarrages, restait physiquement sur le
+  disque tout en ayant disparu de la liste.
+
+Le bon critere etait deja la, une ligne plus bas : un fichier range n'existe plus a son ancien
+  chemin, puisqu'il a ete DEPLACE. C'est le disque qui tranche, pas un historique tenu a cote. Le
+  compteur ne remonte pas pour autant — c'est ce que la seconde moitie de la regle garantit, et les
+  deux cas sont testes.
+
+Corrige aussi les lignes vides. « 02x01 - Chasseurs de Prime.avi » depose sans dossier de serie
+  au-dessus ne donne aucun titre : le motif episodique est en tete du nom, il ne reste rien a
+  gauche. Tous ces fichiers partageaient donc la meme cle vide et se fondaient en UNE entree sans
+  libelle — une ligne blanche a la place de cinquante fichiers bien reels. Ils sont desormais
+  separes par leur chemin et affiches sous leur nom de fichier.
+
+Et des journaux qui disent ce que le scan a compris :
+
+- « scan termine : 235 analyse(s), 66 deja en bibliotheque, 12 ecarte(s) » - un avertissement
+  nommant les fichiers sans titre lisible - SORTILEGE_LOG_LEVEL=DEBUG ajoute une ligne par fichier
+  avec ce que le parseur a lu de son nom — verbeux par construction, donc hors du defaut, mais c'est
+  le seul moyen de comprendre pourquoi une oeuvre precise sort mal.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.43.2 (2026-09-10)
 
 ### Bug Fixes
