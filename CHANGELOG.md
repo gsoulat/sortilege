@@ -1,6 +1,44 @@
 # CHANGELOG
 
 
+## v0.42.0 (2026-09-10)
+
+### Features
+
+- **arbitrage**: Trancher entre deux encodages par la taille
+  ([`c6d55d7`](https://github.com/gsoulat/sortilege/commit/c6d55d7ed673c8ca453100e9ec901595e7d71636))
+
+Trois cents fichiers deja ranges dont la copie n'a pas la meme taille — 6,06 Go contre 1,87 Go. Ce
+  sont deux encodages distincts d'une meme oeuvre, un remux et une version legere, et aucun signal
+  automatique ne dit lequel garder. Jusqu'ici l'application refusait, a juste titre, et laissait
+  l'utilisateur devant trois cents decisions a prendre a la main.
+
+La taille est un critere qu'il peut choisir : la place, ou la qualite. Les deux sens sont offerts,
+  parce que « le plus petit » n'est pas toujours le bon choix — c'est meme le contraire pour qui
+  tient a l'image.
+
+C'est l'operation la plus lourde de cette application : elle REMPLACE un fichier de bibliotheque.
+  Trois garanties l'encadrent, et les tests portent davantage sur elles que sur le cas nominal :
+
+**Le fichier ecarte part en corbeille**, jamais a la poubelle. Se tromper de critere sur trois cents
+  fichiers d'un coup ne se rattraperait pas autrement.
+
+**Les deux mouvements sont journalises separement**, donc « Annuler » defait le remplacement comme
+  n'importe quel rangement.
+
+**Un echec a mi-chemin restaure la bibliotheque.** Le fichier range est ecarte en premier — il le
+  faut, sinon la destination reste occupee et le refus d'ecraser fait echouer la suite. Mais si le
+  remplacement echoue apres coup, la bibliotheque se retrouverait SANS le fichier : pire que de
+  n'avoir rien tente. L'ecarte est donc remis en place, et un test provoque exactement ce scenario.
+
+Deux tailles egales ne sont pas departagees : sans ecart le critere ne dit rien, et agir au hasard
+  serait pire que de s'abstenir.
+
+9 tests.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.41.0 (2026-09-10)
 
 ### Features
