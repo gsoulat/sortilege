@@ -1,6 +1,69 @@
 # CHANGELOG
 
 
+## v0.49.0 (2026-09-10)
+
+### Features
+
+- Brancher ce qui avait ete ecrit, et une page de journal
+  ([`44b6264`](https://github.com/gsoulat/sortilege/commit/44b6264e6a4a923a85c7277b7d50cdf4208053c9))
+
+L'audit avait montre qu'une refonte livree pouvait etre a moitie cablee : une echelle typographique
+  definie et jamais appliquee, un composant de confirmation de 238 lignes que personne n'importait,
+  et six mecanismes maison intacts sous lui. Ce lot ferme cet ecart, et un agent independant a
+  verifie chaque point plutot que de croire ceux qui les avaient ecrits.
+
+**Ce qui est desormais branche**
+
+- `ConfirmAction` sur les huit sites de confirmation. Les six variables maison ont disparu — dont
+  celle qui laissait « Vider la corbeille » effacer definitivement au premier clic, sur un champ de
+  jours qui accepte zero. - La cle TMDB se regle dans l'interface, en ecriture seule, avec un bouton
+  d'essai qui rapporte le motif exact du refus : le serveur sait dire « cle v3 attendue, jeton v4
+  recu ». C'etait le SEUL endroit ou l'application etait inutilisable sans editer un fichier et
+  redemarrer le conteneur. `TMDB_API_KEY` reste lue en repli, aucune installation n'est cassee. - La
+  langue des metadonnees, la taille minimale d'un fichier video et deux listes d'exclusion
+  deviennent reglables. La taille minimale ecartait des fichiers SANS TRACE : un court-metrage, un
+  episode en 480p. - Une page « Journal » au premier niveau : la liste de ce qui a reellement bouge
+  sur le disque, groupee par jour, annulable entree par entree ou oeuvre par oeuvre. C'est la
+  fonction que ni Radarr ni Sonarr ne savent faire — zero occurrence de « undo » dans toute leur
+  interface — et elle vivait repliee derriere un bouton de barre d'actions.
+
+**La regle « aucun etat muet », tenue plus loin**
+
+- L'ecran Reglages ne reste plus blanc quand l'API tombe, et le code HTTP est verifie avant de lire
+  le corps : une reponse 502 arrive en HTML et faisait lever `json()` dans le vide. - Trois pannes
+  deguisees en chargement sont eteintes. Un `catch` remettait la valeur a `null`, ce que l'affichage
+  lisait comme « pas encore arrive » : le panneau annoncait « Lecture… » indefiniment. - Le
+  contraste des boutons desactives passe de 3,23:1 a 5,21:1, mesure. - Les filtres restent visibles
+  a zero, grises, avec leur raison. Un compte a zero dit qu'on a mesure ; un bouton absent ne dit
+  rien.
+
+**Accessibilite et ecrans etroits**
+
+Acces clavier : la jaquette sort du bouton parent — imbrication invalide —, Entree et Espace
+  activent, Echap ferme le menu et rend le focus. Regles responsive dans la vue principale et
+  l'en-tete, qui n'en avaient aucune sur plus de deux mille lignes. Cibles tactiles portees a 32 px.
+
+**Deux defauts trouves par le controle, que personne n'avait signales**
+
+Le type « livre » manquait a la table des libelles du journal : une oeuvre livre affichait son code
+  brut au milieu de libelles francais. Et un echec reseau d'apercu s'affichait en « fichier
+  illisible » — accuser le fichier d'un defaut venu du reseau envoie chercher la panne au mauvais
+  endroit.
+
+Corrige en chemin par l'agent charge des reglages, et signale par lui : a la relecture des
+  preferences, une cle inconnue faisait repartir TOUTES les preferences aux valeurs par defaut.
+  Retirer `ai.batch_size` aurait donc efface en silence les reglages de quiconque avait deja un
+  `preferences.json`.
+
+CHANTIERS.md porte la liste complete, avec ce qui reste. Sa convention est ecrite en tete : une case
+  n'est cochee que lorsqu'un controle independant l'a confirmee.
+
+875 tests. Interface verifiee dans un navigateur.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.48.1 (2026-09-10)
 
 ### Bug Fixes
