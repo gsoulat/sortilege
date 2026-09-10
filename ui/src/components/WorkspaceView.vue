@@ -61,6 +61,21 @@ function origine(plan) {
 }
 
 /**
+ * Ce qui a identifié les fichiers d'une œuvre, résumé pour la ligne.
+ *
+ * Un seul fichier proposé par l'IA suffit à le signaler : c'est le maillon dont
+ * on veut se méfier, et le noyer dans une majorité de fiches TMDB reviendrait à
+ * ne pas le dire.
+ */
+function origines(w) {
+  const tous = [...w.pending.ready, ...w.pending.review, ...(w.pending.rejected ?? [])]
+  return {
+    ia: tous.some((p) => p.identified_by === 'ia'),
+    nom: tous.length > 0 && tous.every((p) => !p.identified_by || p.identified_by === 'nom'),
+  }
+}
+
+/**
  * Ce qui demande un arbitrage : les plans douteux ET les plans écartés.
  *
  * Les écartés n'étaient affichés NULLE PART. Ils comptaient dans « à traiter »,
@@ -1360,6 +1375,16 @@ onUnmounted(() => clearInterval(poller))
             <span v-if="w.pending.ready.length" class="badge ready">{{ w.pending.ready.length }} prêt{{ w.pending.ready.length > 1 ? 's' : '' }}</span>
             <span v-if="arbitrables(w).length" class="badge review">{{ arbitrables(w).length }} à arbitrer</span>
             <span v-if="w.pending.unplanned_count" class="badge wait">{{ w.pending.unplanned_count }} en attente</span>
+            <!-- Sur la LIGNE, pas seulement dans le détail : c'est là qu'on
+                 décide d'ouvrir. Une identification proposée par un modèle de
+                 langage mérite un coup d'œil que la même à 100 % venue de TMDB
+                 ne demande pas. -->
+            <span v-if="origines(w).ia" class="badge ia" title="Titre proposé par le résolveur IA, fiche confirmée par le fournisseur">
+              IA
+            </span>
+            <span v-else-if="origines(w).nom" class="badge devine" title="Deviné depuis le nom du fichier, sans fournisseur">
+              nom seul
+            </span>
           </span>
         </button>
 
@@ -1699,6 +1724,11 @@ onUnmounted(() => clearInterval(poller))
 </template>
 
 <style scoped>
+.badge.ia {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent);
+}
+.badge.devine { background: var(--surface-2); color: var(--text-faint); }
 /* Un filtre a zero reste lisible : le griser sans l'effacer dit « mesuré, et
    il n'y en a pas », la ou son absence ne dit rien du tout. */
 .filters button.muet { opacity: .55; cursor: default; }
