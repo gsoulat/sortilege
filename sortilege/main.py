@@ -21,8 +21,10 @@ from . import __version__
 from .api import (
     auth,
     automation,
+    backup,
     books,
     collection,
+    integration,
     library,
     media,
     review,
@@ -33,8 +35,10 @@ from .api import (
 )
 from .api.deps import get_store
 from .config import get_settings
+from .core import apikey
 from .core import transcode as reencodage
 from .core.auth import SESSION_COOKIE, verify_session
+from .core.preferences import PreferenceError
 from .core.probe import ffprobe_available
 
 # Le niveau se regle sans reconstruire l'image : SORTILEGE_LOG_LEVEL=DEBUG fait
@@ -69,6 +73,26 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     if not ffprobe_available():
         logger.warning("ffprobe absent : duree et tags des conteneurs non lisibles")
 
+    # Cle d'API garantie des le premier demarrage. La generer ici plutot que
+    # d'attendre une demande evite le seul etat penible : decouvrir, au moment
+    # de brancher un client de telechargement, qu'il faut d'abord ouvrir un
+    # ecran pour creer la cle. Une cle deja en place n'est jamais remplacee.
+    #
+    # Protege, parce qu'un fichier de reglages refuse ne justifie pas de refuser
+    # de demarrer : il ne ferme que la porte de la cle d'API, la session reste
+    # ouverte. Laisser l'exception remonter ferait redemarrer le conteneur en
+    # boucle, sans interface pour corriger. Ce filet ne couvre PAS un volume de
+    # donnees VIERGE en lecture seule : la reprise de l'etat de travail, plus
+    # bas, cree alors la base et fait encore tomber le demarrage. Un volume deja
+    # initialise puis passe en lecture seule demarre, et n'echoue qu'a la
+    # premiere ecriture.
+    try:
+        cle = get_store().ensure_api_key()
+    except (PreferenceError, OSError) as exc:
+        logger.error("cle d'API non garantie au demarrage, demarrage poursuivi : %s", exc)
+    else:
+        logger.info("cle d'API disponible (%s) — en-tete %s", apikey.masked(cle), apikey.HEADER)
+
     # Reprise de l'etat de travail. Un scan de mille fichiers coute plusieurs
     # minutes de disque et les plans qui en decoulent des centaines d'appels
     # reseau : les refaire a chaque mise a jour d'image rendrait l'outil
@@ -98,6 +122,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     yield
 
     await automation.stop()
+    # Un declenchement externe encore en attente n'a plus personne pour le
+    # recevoir : le laisser tourner ferait scanner un conteneur qui s'arrete.
+    integration.stop()
     # Le fil de reencodage laisse son ffmpeg finir : le resultat est ecrit a
     # part, donc au pire on laisse un fichier partiel que le menage ramassera au
     # demarrage suivant. Tuer l'encodage jetterait des heures de calcul.
@@ -109,7 +136,15 @@ app = FastAPI(
     # Une version en dur se perime des la premiere release. Elle vient donc
     # de __init__.py, seule source de verite, mise a jour avec le tag.
     version=__version__,
-    docs_url=None,  # pas de surface d'API publique inutile
+    # Le schema et sa page de lecture sont DEPLACES sous /api/, pas rouverts :
+    # c'est le seul prefixe que le middleware ci-dessous protege, et
+    # « /openapi.json » se servait jusqu'ici sans session — la surface entiere
+    # de l'API etait lisible par n'importe qui atteignait le port. Derriere
+    # l'authentification, cette page devient au contraire ce qui manquait a
+    # quiconque branche un script sur la cle d'API : la liste exacte des routes
+    # et de leurs corps.
+    openapi_url="/api/openapi.json",
+    docs_url="/api/docs",
     redoc_url=None,
     lifespan=lifespan,
 )
@@ -125,6 +160,8 @@ app.include_router(workspace.router)
 app.include_router(media.router)
 app.include_router(books.router)
 app.include_router(transcode.router)
+app.include_router(backup.router)
+app.include_router(integration.router)
 
 # Routes accessibles sans session. Liste blanche et non liste noire : oublier
 # d'ajouter une exception rend une page inaccessible, ce qui se voit
@@ -132,9 +169,28 @@ app.include_router(transcode.router)
 PUBLIC_PATHS = frozenset({"/api/health", "/api/auth/login", "/api/auth/logout", "/api/auth/me"})
 
 
+def _api_key_accepted(request: Request) -> bool:
+    """Deuxieme porte : l'en-tete ``X-Api-Key``.
+
+    Un client de telechargement, un script de nuit ou un bouton domotique n'ont
+    pas de navigateur, donc pas de cookie de session. La cle est verifiee ici,
+    au meme endroit que la session, pour la meme raison qui a fait choisir une
+    liste blanche de chemins publics : une route protegee a deux endroits
+    differents finit par n'etre protegee qu'a un seul.
+
+    Elle ouvre exactement ce qu'ouvre une session, sans restriction de route.
+    C'est le modele de Radarr, et il tient parce qu'elle se regenere en un clic
+    — contrairement au mot de passe, qui vit dans le .env.
+    """
+    fournie = request.headers.get(apikey.HEADER)
+    if not fournie:
+        return False
+    return apikey.verify(fournie, get_store().load().integration.api_key)
+
+
 @app.middleware("http")
 async def require_session(request: Request, call_next):
-    """Protege toute l'API derriere le mot de passe.
+    """Protege toute l'API derriere le mot de passe ou la cle d'API.
 
     L'interface elle-meme reste servie sans session : c'est elle qui affiche
     l'ecran de connexion. Seules les donnees et les actions sont fermees.
@@ -142,10 +198,16 @@ async def require_session(request: Request, call_next):
     path = request.url.path
     if path.startswith("/api/") and path not in PUBLIC_PATHS:
         conf = get_settings()
-        if not verify_session(request.cookies.get(SESSION_COOKIE), conf.secret_key):
+        cookie_ok = verify_session(request.cookies.get(SESSION_COOKIE), conf.secret_key)
+        if not cookie_ok and not _api_key_accepted(request):
             return JSONResponse(
                 status_code=401,
-                content={"detail": "Authentification requise."},
+                content={
+                    "detail": (
+                        "Authentification requise : connecte-toi, ou envoie la clé d'API "
+                        f"dans l'en-tête {apikey.HEADER} (Réglages → Système → Intégration)."
+                    )
+                },
             )
     return await call_next(request)
 

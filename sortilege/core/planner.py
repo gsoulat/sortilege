@@ -52,6 +52,19 @@ class Plan:
     lisible d'un coup d'oeil : on reconnait une erreur d'identification bien
     plus vite sur une image que sur un titre."""
 
+    backdrop_url: str = ""
+    """Image de fond de l'oeuvre. Sans usage dans l'interface : elle sert a
+    deposer « fanart.jpg » a cote du media une fois celui-ci range."""
+
+    values: dict[str, Any] = field(default_factory=dict)
+    """Les valeurs qui ont servi a rendre le gabarit.
+
+    Conservees plutot que jetees : elles portent la numerotation resolue, le
+    titre d'episode et les identifiants declares, c'est-a-dire tout ce qu'une
+    fiche ``.nfo`` doit inscrire. Les perdre obligerait a relire le nom qu'on
+    vient soi-meme d'ecrire pour y retrouver un numero de saison qu'on
+    connaissait — et a se tromper des que le gabarit change."""
+
     error: str | None = None
 
     companions: list[tuple[Path, Path]] = field(default_factory=list)
@@ -213,9 +226,11 @@ def build_plan(
     decision = decide(score, match.signals, policy)
     reasons = explain(match.signals, score, decision)
 
+    valeurs = build_values(scanned, match)
+
     try:
         validate(template)
-        relative = render(template, build_values(scanned, match))
+        relative = render(template, valeurs)
         destination = resolve_within(destination_root, relative)
     except (TemplateError, PathConfinementError) as exc:
         return Plan(
@@ -254,6 +269,8 @@ def build_plan(
         provider=match.candidate.provider,
         external_id=match.candidate.external_id,
         poster_url=match.candidate.poster_url,
+        backdrop_url=match.candidate.backdrop_url,
+        values=valeurs,
         companions=[(c.path, c.destination_for(destination)) for c in companions],
         leftovers=leftovers,
         alternatives=_alternatives(match, all_candidates),

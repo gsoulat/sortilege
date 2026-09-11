@@ -104,6 +104,7 @@ def _candidate_out(c: Candidate) -> dict:
         "popularity": c.popularity,
         "kind": c.kind,
         "poster_url": c.poster_url,
+        "backdrop_url": c.backdrop_url,
         "overview": c.overview,
     }
 
@@ -146,6 +147,11 @@ def plans_out(plans: list[Plan]) -> dict:
                 "provider": p.provider,
                 "external_id": p.external_id,
                 "poster_url": p.poster_url,
+                "backdrop_url": p.backdrop_url,
+                # Ce qui a nourri le gabarit, garde pour la fiche .nfo : la
+                # numerotation resolue et les identifiants declares ne se
+                # reconstruisent pas d'un nom de fichier.
+                "values": p.values,
                 "error": p.error,
                 "companions": [[str(a), str(b)] for a, b in p.companions],
                 "leftovers": [str(x) for x in p.leftovers],
@@ -245,6 +251,11 @@ def plans_in(raw: object) -> list[Plan]:
                 provider=p.get("provider", ""),
                 external_id=p.get("external_id", ""),
                 poster_url=p.get("poster_url", ""),
+                # Champs ajoutes apres coup : un instantane ecrit avant eux
+                # reste lisible et perd seulement de quoi ecrire une fiche,
+                # ce qui vaut mieux que de jeter des centaines d'appels TMDB.
+                backdrop_url=p.get("backdrop_url", ""),
+                values=dict(p.get("values") or {}),
                 error=p.get("error"),
                 companions=[(Path(a), Path(b)) for a, b in (p.get("companions") or [])],
                 leftovers=[Path(x) for x in (p.get("leftovers") or [])],

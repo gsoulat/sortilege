@@ -29,8 +29,19 @@ from pathlib import Path
 from threading import Lock
 
 from . import quality
-from .companions import directory_now_empty, trash_destination
+from .companions import (
+    ARTWORK_EXTENSIONS,
+    ORPHAN_EXTENSIONS,
+    SUBTITLE_EXTENSIONS,
+    directory_now_empty,
+    find_companions,
+    free_trash_destination,
+    send_to_trash,
+    trash_destination,
+)
+from .nfo import LocalMetadataSettings, OnExisting, Outcome, deposit, info_from_plan
 from .planner import Plan
+from .renaming import RENAME_MARKER
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +66,14 @@ class MoveRecord:
     """« video », « companion » ou « trash ». Valeur par defaut volontaire :
     sans elle, les entrees ecrites avant l'ajout de ce champ deviendraient
     illisibles et seraient silencieusement ignorees a la relecture — on
-    perdrait la possibilite d'annuler d'anciens deplacements."""
+    perdrait la possibilite d'annuler d'anciens deplacements.
+
+    « metadata » designe un fichier DEPOSE par Sortilege a cote d'un media :
+    fiche, affiche, manifeste, couverture. Il ne vient de nulle part — sa
+    ``source`` est vide — et l'annuler l'envoie en corbeille au lieu de le
+    ramener quelque part. Une nature a part, et non un « companion » a source
+    vide : relu par une annulation qui ne la connaitrait pas, un deplacement
+    vers le chemin vide echouerait au lieu de retirer le fichier."""
 
     title: str = ""
     """Oeuvre concernee, telle qu'identifiee au moment du rangement.
@@ -67,6 +85,14 @@ class MoveRecord:
 
     work_kind: str = ""
     """« movie », « episode » ou « anime ». Sert a l'affichage du regroupement."""
+
+    trash_root: str = ""
+    """Corbeille ou envoyer un fichier « metadata » a l'annulation.
+
+    Inscrite dans l'entree parce que l'annulation ne recoit pas de corbeille :
+    elle se contente de relire le journal. Vide pour les autres natures, et
+    pour toutes les entrees ecrites avant ce champ : un journal ancien se
+    relit donc tel quel."""
 
 
 @dataclass(slots=True)
@@ -171,8 +197,14 @@ def apply_plan(
     dry_run: bool = True,
     trash_root: Path | None = None,
     source_roots: list[Path] | None = None,
+    local_metadata: LocalMetadataSettings | None = None,
 ) -> ApplyResult:
-    """Execute un plan. En simulation, verifie tout sans rien deplacer."""
+    """Execute un plan. En simulation, verifie tout sans rien deplacer.
+
+    ``local_metadata`` declenche le depot d'une fiche ``.nfo`` et des affiches
+    une fois le fichier a sa place. Absent = rien n'est ecrit dans la
+    bibliotheque au-dela du media lui-meme, ce qui reste le defaut.
+    """
     if plan.destination is None:
         return ApplyResult(
             plan.id, False, str(plan.source), None, "aucune destination", reason="no_destination"
@@ -273,6 +305,7 @@ def apply_plan(
     # ce qui est le cas le plus courant. Le dossier de release restait alors
     # derriere, vide, a chaque fichier range.
     emptied = prune_empty_dirs(plan.source.parent, source_roots or []) if source_roots else 0
+    fiches = _depose_metadonnees(plan, local_metadata, journal=journal, trash_root=trash_root)
 
     detail = f"deplace ({method})"
     if moved_companions:
@@ -281,8 +314,152 @@ def apply_plan(
         detail += f", {trashed} reste(s) en corbeille"
     if emptied:
         detail += f", {emptied} dossier(s) vide(s) supprime(s)"
+    if fiches:
+        detail += f", {fiches}"
 
     return ApplyResult(plan.id, True, str(plan.source), str(plan.destination), detail, reason="ok")
+
+
+def _depose_metadonnees(
+    plan: Plan,
+    settings: LocalMetadataSettings | None,
+    *,
+    journal: Journal | None = None,
+    trash_root: Path | None = None,
+) -> str:
+    """Ecrit la fiche et depose les affiches. N'echoue JAMAIS.
+
+    Le filet est ici, et pas chez l'appelant, parce que la regle ne se discute
+    pas : a cet instant le fichier est deja a sa place et journalise. Laisser
+    une erreur d'ecriture de ``.nfo`` remonter transformerait un rangement
+    reussi en echec affiche — l'utilisateur chercherait alors un film qui a
+    pourtant bien ete range, ce qui est bien pire qu'une fiche manquante.
+
+    Les fichiers deposes SONT journalises, et ceux qu'ils ont remplaces aussi.
+    La coquille laissee par une annulation n'etait pas inoffensive : une fiche
+    fait autorite chez le serveur multimedia, et celle d'une identification
+    erronee survivait a son annulation — puis au rangement corrige, qui la
+    trouvait en place et la respectait. Elle n'etait pas non plus « deja
+    reperee » : un dossier ou reste une video n'est jamais une coquille.
+    Annuler envoie donc les fichiers deposes en corbeille, et rend leur place a
+    ceux qu'ils avaient remplaces.
+
+    Sans corbeille, rien n'est journalise : l'annulation ne saurait ou envoyer
+    ces fichiers, et une entree qu'on ne peut pas defaire promettrait un retour
+    arriere qui n'existe pas.
+
+    Un plan de renommage ne depose rien (voir ``_est_un_renommage``).
+    """
+    if settings is None or plan.destination is None:
+        return ""
+    if plan.kind == "book":
+        return _depose_manifeste(plan, settings, journal, trash_root)
+    if _est_un_renommage(plan):
+        return ""
+    try:
+        depot = deposit(
+            plan.destination, plan.kind, info_from_plan(plan), settings, trash_root=trash_root
+        )
+    except Exception:
+        logger.exception("metadonnees locales non deposees pour %s", plan.destination.name)
+        return ""
+    for erreur in depot.errors:
+        logger.warning("fiche non ecrite : %s", erreur)
+    _journalise_depot(journal, plan, trash_root, depot.set_aside, [*depot.written, *depot.images])
+    return depot.summary()
+
+
+def _est_un_renommage(plan: Plan) -> bool:
+    """Le plan vient-il de la remise en conformite des noms (``core/renaming``) ?
+
+    Un tel plan n'a RIEN identifie. Y deposer une fiche en ferait une pauvre,
+    sans identifiant, qui prendrait autorite sur celle que le fichier portait
+    deja et que le renommage emporte avec lui.
+
+    Reconnu a la marque que ``rename_plans`` pose dans ses valeurs, et a rien
+    d'autre : l'absence de fournisseur attraperait aussi les livres et les
+    plans construits a la main, qui doivent garder leur fiche (voir
+    ``RENAME_MARKER``).
+    """
+    return bool(plan.values.get(RENAME_MARKER))
+
+
+def _journalise_depot(
+    journal: Journal | None,
+    plan: Plan,
+    trash_root: Path | None,
+    mis_de_cote: list[tuple[Path, Path]],
+    deposes: list[Path],
+) -> None:
+    """Inscrit ce qu'un depot a pose et ce qu'il a remplace. N'echoue jamais.
+
+    L'ordre compte : les fichiers remplaces d'abord, les fichiers poses
+    ensuite. L'annulation remonte le journal a l'envers ; elle retire donc la
+    nouvelle fiche AVANT de rendre sa place a l'ancienne, qui la trouverait
+    sinon occupee.
+    """
+    if journal is None or trash_root is None:
+        return
+    try:
+        for origine, ecarte in mis_de_cote:
+            _record(journal, plan, origine, ecarte, "rename", "trash")
+        for chemin in deposes:
+            journal.append(
+                MoveRecord(
+                    timestamp=datetime.now(UTC).isoformat(),
+                    plan_id=plan.id,
+                    source="",
+                    destination=str(chemin),
+                    method="write",
+                    kind="metadata",
+                    title=plan.title,
+                    work_kind=plan.kind,
+                    trash_root=str(trash_root),
+                )
+            )
+    except OSError:
+        logger.exception("depot de metadonnees non journalise pour %s", plan.destination)
+
+
+def _depose_manifeste(
+    plan: Plan,
+    settings: LocalMetadataSettings,
+    journal: Journal | None,
+    trash_root: Path | None,
+) -> str:
+    """« metadata.opf » et la couverture a cote d'un livre. N'echoue jamais.
+
+    Les metadonnees sont relues DANS LE FICHIER plutot que reprises du plan :
+    un EPUB porte son auteur, son editeur et son ISBN, la ou le plan ne connait
+    que ce que le nom disait. Le repli par le nom sert les formats qu'on ne
+    sait pas ouvrir — MOBI, CBZ — et les EPUB casses.
+    """
+    if not settings.opf or plan.destination is None:
+        return ""
+    livre = plan.destination
+    try:
+        from .ebook import from_name, read
+        from .opf import deposit as deposer_livre
+
+        meta = read(livre)
+        if not meta.read or not (meta.title.strip() or meta.authors):
+            meta = from_name(livre)
+        depot = deposer_livre(
+            livre, meta, on_existing=OnExisting(settings.on_existing), trash_root=trash_root
+        )
+    except Exception:
+        logger.exception("manifeste non depose pour %s", livre.name)
+        return ""
+    _journalise_depot(journal, plan, trash_root, depot.set_aside, depot.written)
+
+    # « remplace » et « sauvegarde » comptent aussi : seul « ignore » ne
+    # laisse rien derriere lui.
+    faits = []
+    if depot.manifest is not Outcome.SKIPPED:
+        faits.append("manifeste")
+    if depot.cover is not None and depot.cover is not Outcome.SKIPPED:
+        faits.append("couverture")
+    return ", ".join(faits)
 
 
 def _why_not_writable(plan: Plan) -> str | None:
@@ -498,9 +675,9 @@ def keep_by_strategy(
             resultat.message = f"le fichier range est conserve : {verdict.reason}"
         return resultat
 
-    resultat = _replace_with_source(plan, journal, trash_root)
+    resultat, detail = _replace_with_source(plan, journal, trash_root)
     if resultat.ok:
-        resultat.message = f"remplace par la copie : {verdict.reason}"
+        resultat.message = f"remplace par la copie : {verdict.reason}{detail}"
     return resultat
 
 
@@ -563,24 +740,32 @@ def keep_by_size(
             )
         return resultat
 
-    resultat = _replace_with_source(plan, journal, trash_root)
+    resultat, detail = _replace_with_source(plan, journal, trash_root)
     if resultat.ok:
         resultat.message = (
             f"remplace par la copie ({_lisible(taille_copie)} au lieu de "
-            f"{_lisible(taille_rangee)}), l'ancien fichier est en corbeille"
+            f"{_lisible(taille_rangee)}), l'ancien fichier est en corbeille{detail}"
         )
     return resultat
 
 
-def _replace_with_source(plan: Plan, journal: Journal, trash_root: Path | None) -> ApplyResult:
+def _replace_with_source(
+    plan: Plan, journal: Journal, trash_root: Path | None
+) -> tuple[ApplyResult, str]:
     """Met la copie a la place du fichier range, l'ancien partant en corbeille.
 
     Extrait parce que deux criteres — la taille seule, ou une strategie de
     qualite — aboutissent au meme geste. Le dupliquer aurait fini par les faire
     diverger sur la partie la plus risquee du code.
+
+    Les sous-titres de l'ancien fichier partent avec lui, journalises : calés
+    sur un autre encodage, ils seraient decales sur la copie, et le lecteur les
+    proposerait comme s'ils lui appartenaient. Rend aussi le fragment de
+    compte rendu qui le dit, pour que les appelants, qui recomposent le
+    message, ne le taisent pas.
     """
     if plan.destination is None:
-        return ApplyResult(plan.id, False, str(plan.source), None, "aucune destination")
+        return ApplyResult(plan.id, False, str(plan.source), None, "aucune destination"), ""
 
     if trash_root is None:
         return ApplyResult(
@@ -590,16 +775,19 @@ def _replace_with_source(plan: Plan, journal: Journal, trash_root: Path | None) 
             str(plan.destination),
             "aucune corbeille configuree",
             reason="no_trash",
-        )
+        ), ""
 
-    # Le fichier range part D'ABORD en corbeille, ce qui
-    # libere la destination : deplacer la copie avant echouerait sur une
-    # destination occupee, le refus d'ecraser etant applique dans _move.
-    lot = datetime.now(UTC).strftime("%Y-%m-%d")
-    ecarte = trash_destination(trash_root, lot, plan.destination)
-    if ecarte.exists():
-        ecarte.unlink()
+    # Releves AVANT tout mouvement : une fois la copie posee sous le meme nom,
+    # rien ne distinguerait plus les sous-titres de l'ancien fichier.
+    anciens_sous_titres = [c.path for c in find_companions(plan.destination, artwork=False)]
 
+    # Le fichier range part D'ABORD en corbeille, ce qui libere la
+    # destination : deplacer la copie avant echouerait sur une destination
+    # occupee, le refus d'ecraser etant applique dans _move. L'emplacement en
+    # corbeille est toujours LIBRE : la version precedente supprimait
+    # l'homonyme du jour pour faire place, detruisant sans filet ce qu'une
+    # evacuation anterieure avait mis a l'abri.
+    ecarte = free_trash_destination(trash_root, plan.destination)
     try:
         methode = _move(plan.destination, ecarte)
     except OSError as exc:
@@ -610,7 +798,7 @@ def _replace_with_source(plan: Plan, journal: Journal, trash_root: Path | None) 
             str(plan.destination),
             f"impossible d'ecarter le fichier range : {exc}" + _permission_hint(plan.destination),
             reason=_os_reason(exc),
-        )
+        ), ""
     _record(journal, plan, plan.destination, ecarte, methode, "trash")
 
     try:
@@ -630,17 +818,31 @@ def _replace_with_source(plan: Plan, journal: Journal, trash_root: Path | None) 
             str(plan.destination),
             f"remplacement impossible : {exc}" + _permission_hint(plan.source),
             reason=_os_reason(exc),
-        )
+        ), ""
     _record(journal, plan, plan.source, plan.destination, methode, "video")
+
+    ecartes = 0
+    for sous_titre in anciens_sous_titres:
+        if not sous_titre.is_file():
+            continue
+        cible = free_trash_destination(trash_root, sous_titre)
+        try:
+            comment = _move(sous_titre, cible)
+        except OSError as exc:
+            logger.warning("sous-titre de l'ancien fichier non ecarte (%s) : %s", sous_titre, exc)
+            continue
+        _record(journal, plan, sous_titre, cible, comment, "trash")
+        ecartes += 1
+    detail = f", {ecartes} sous-titre(s) de l'ancien fichier en corbeille" if ecartes else ""
 
     return ApplyResult(
         plan.id,
         True,
         str(plan.source),
         str(plan.destination),
-        "remplace par la copie, l'ancien fichier est en corbeille",
+        f"remplace par la copie, l'ancien fichier est en corbeille{detail}",
         reason="ok",
-    )
+    ), detail
 
 
 def evacuate_ranged_source(
@@ -911,6 +1113,7 @@ def group_by_work(records: list[MoveRecord]) -> list[dict]:
                 "work_kind": record.work_kind,
                 "files": 0,
                 "companions": 0,
+                "metadata": 0,
                 "operations": 0,
                 "last_at": record.timestamp,
                 "sample": record.destination,
@@ -921,6 +1124,8 @@ def group_by_work(records: list[MoveRecord]) -> list[dict]:
             group["files"] += 1
         elif record.kind == "companion":
             group["companions"] += 1
+        elif record.kind == "metadata":
+            group["metadata"] += 1
         if record.timestamp > group["last_at"]:
             group["last_at"] = record.timestamp
             group["sample"] = record.destination
@@ -969,13 +1174,24 @@ def undo_last(journal: Journal, count: int = 1) -> list[ApplyResult]:
     L'ordre inverse n'est pas cosmetique : deux operations peuvent avoir touche
     des chemins imbriques, et defaire dans l'ordre chronologique recreerait des
     collisions que l'ordre inverse evite.
+
+    Les fichiers DEPOSES (« metadata ») ne comptent pas dans ``count`` : ils
+    accompagnent l'operation qui les a produits, et ceux rencontres en chemin
+    sont annules avec elle. Les compter ferait retirer une affiche a
+    « annuler la derniere operation », et laisser le film.
     """
     records = journal.read_all()
     if not records:
         return []
 
-    to_undo = records[-count:]
-    remaining = records[: len(records) - len(to_undo)]
+    debut = len(records)
+    comptees = 0
+    while debut > 0 and comptees < count:
+        debut -= 1
+        if records[debut].kind != "metadata":
+            comptees += 1
+    to_undo = records[debut:]
+    remaining = records[:debut]
     return _undo(journal, to_undo, remaining)
 
 
@@ -987,10 +1203,24 @@ def _undo(
     ``remaining`` est ce qui doit SUBSISTER : le calculer chez l'appelant
     permet d'annuler une selection au milieu du journal sans perdre l'ordre du
     reste.
+
+    Un fichier depose (« metadata ») ne revient nulle part : il part en
+    corbeille (voir ``_undo_depot``). Le lot etant defait du plus recent au
+    plus ancien, la fiche deposee est retiree AVANT que celle qu'elle avait
+    remplacee, journalisee juste avant elle, retrouve sa place.
     """
     results: list[ApplyResult] = []
+    defaites: set[int] = set()
+    partants = _medias_partants(to_undo)
 
     for record in reversed(to_undo):
+        if record.kind == "metadata":
+            resultat, retiree = _undo_depot(record, partants)
+            results.append(resultat)
+            if retiree:
+                defaites.add(id(record))
+            continue
+
         source = Path(record.destination)
         target = Path(record.source)
 
@@ -1035,13 +1265,122 @@ def _undo(
         results.append(
             ApplyResult(record.plan_id, True, record.destination, record.source, "annule")
         )
+        defaites.add(id(record))
 
     # Seules les operations effectivement annulees quittent le journal : une
     # annulation partielle doit rester rejouable.
-    undone = {(r.source, r.destination) for r in results if r.ok}
-    kept = [r for r in to_undo if (r.destination, r.source) not in undone]
+    kept = [r for r in to_undo if id(r) not in defaites]
     # Remis dans l'ordre chronologique : les operations annulees pouvaient se
     # trouver n'importe ou dans le journal, pas seulement a la fin.
     journal.rewrite(sorted(remaining + kept, key=lambda r: r.timestamp))
 
     return results
+
+
+_ACCESSOIRES = ORPHAN_EXTENSIONS | SUBTITLE_EXTENSIONS | ARTWORK_EXTENSIONS | {".bak", ".tmp"}
+"""Ce qui accompagne un media sans en etre un : sa presence seule ne justifie
+pas de garder une fiche."""
+
+_FICHES_COMMUNES = frozenset({"tvshow", "movie"})
+"""Radicaux des fiches qui decrivent un DOSSIER, et non un fichier."""
+
+
+def _est_un_media(chemin: Path) -> bool:
+    nom = chemin.name
+    if nom.startswith(".") or nom in {"@eaDir", ".@__thumb"}:
+        return False
+    return chemin.suffix.lower() not in _ACCESSOIRES and chemin.is_file()
+
+
+def _medias_partants(records: list[MoveRecord]) -> set[Path]:
+    """Medias que ce lot va vraisemblablement retirer de la bibliotheque.
+
+    Une prevision : le retour d'un media peut encore echouer. Seuls comptent
+    ceux dont le retour est possible — present a destination, origine libre —
+    pour ne pas juger inutile la fiche d'un media qui, finalement, restera.
+    """
+    return {
+        Path(r.destination)
+        for r in records
+        if r.kind == "video" and Path(r.destination).is_file() and not Path(r.source).exists()
+    }
+
+
+def _encore_utile(fiche: Path, partants: set[Path]) -> bool:
+    """Ce fichier depose decrit-il encore un media qui reste en place ?
+
+    Une fiche au nom d'un media (« Film.nfo ») ne sert que lui : elle reste
+    tant qu'il reste. Une fiche commune (« tvshow.nfo », « poster.jpg »,
+    « metadata.opf ») sert tout son dossier : annuler UN episode ne doit pas
+    retirer a la serie entiere la fiche qui porte son identite. Elle reste
+    donc tant qu'un media que ce lot ne retire pas subsiste sous son dossier.
+    """
+    dossier = fiche.parent
+    if fiche.suffix.lower() == ".nfo" and fiche.stem.lower() not in _FICHES_COMMUNES:
+        try:
+            freres = list(dossier.iterdir())
+        except OSError:
+            return True
+        return any(f.stem == fiche.stem and f not in partants and _est_un_media(f) for f in freres)
+    for courant, sous_dossiers, fichiers in os.walk(dossier):
+        sous_dossiers[:] = [d for d in sous_dossiers if not d.startswith(".") and d != "@eaDir"]
+        for nom in fichiers:
+            chemin = Path(courant) / nom
+            if chemin not in partants and _est_un_media(chemin):
+                return True
+    return False
+
+
+def _undo_depot(record: MoveRecord, partants: set[Path]) -> tuple[ApplyResult, bool]:
+    """Retire un fichier depose. Rend le compte rendu, et si l'entree quitte le journal."""
+    chemin = Path(record.destination)
+    if not chemin.is_file():
+        # Deja retire par quelqu'un : rien a defaire. Garder l'entree la ferait
+        # echouer a chaque annulation, pour toujours.
+        return ApplyResult(
+            record.plan_id,
+            True,
+            record.destination,
+            None,
+            "fichier déposé déjà absent, rien à retirer",
+            reason="ok",
+        ), True
+    if not record.trash_root:
+        return ApplyResult(
+            record.plan_id,
+            False,
+            record.destination,
+            None,
+            "aucune corbeille connue pour ce fichier déposé : laissé en place",
+            reason="no_trash",
+        ), False
+    if _encore_utile(chemin, partants):
+        # L'entree RESTE au journal : annuler plus tard le reste de l'oeuvre
+        # devra encore pouvoir retirer cette fiche.
+        return ApplyResult(
+            record.plan_id,
+            True,
+            record.destination,
+            None,
+            "fichier déposé conservé : il sert encore à d'autres fichiers de l'œuvre",
+            reason="kept",
+        ), False
+    try:
+        cible = send_to_trash(chemin, Path(record.trash_root))
+    except OSError as exc:
+        return ApplyResult(
+            record.plan_id,
+            False,
+            record.destination,
+            None,
+            f"mise en corbeille impossible : {exc}",
+            reason=_os_reason(exc),
+        ), False
+    return ApplyResult(
+        record.plan_id,
+        True,
+        record.destination,
+        str(cible),
+        "fichier déposé mis en corbeille",
+        reason="ok",
+    ), True

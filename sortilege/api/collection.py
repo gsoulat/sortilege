@@ -23,6 +23,7 @@ from ..core.journal import MoveRecord, _move
 from ..core.matching import title_similarity
 from ..core.scanner import scan
 from ..core.trash import MIN_AGE_DAYS, inventory, purge, total_bytes
+from ..core.vpn import egress_allowed
 from ..providers.tmdb import TMDBProvider
 from .deps import get_journal, get_store, scan_rules, tmdb_key, tmdb_language
 
@@ -156,11 +157,36 @@ async def _build() -> None:
     logger.info("index construit : %s oeuvres", len(works))
 
 
+async def _exiger_sortie() -> None:
+    """Refuse en 409 quand la politique interdit d'emettre maintenant.
+
+    409 et non 400, comme pour le calcul des plans : la demande est valable,
+    c'est l'etat du moment qui s'y oppose. La raison complete part vers le
+    navigateur, sur le reseau local : elle ne quitte pas la maison.
+    """
+    reglage = get_store().load().vpn
+    sortie = await egress_allowed(reglage.policy, reference_ip=reglage.reference_ip or None)
+    if not sortie.allowed:
+        logger.warning("construction de l'index refusee : %s", sortie.reason)
+        raise HTTPException(status_code=409, detail=sortie.reason)
+    if sortie.warn:
+        logger.warning("construction de l'index, sortie non confirmee : %s", sortie.reason)
+
+
 @router.post("/build")
 async def build() -> dict[str, object]:
-    """Reconstruit l'index de la bibliotheque."""
+    """Reconstruit l'index de la bibliotheque.
+
+    La garde de sortie precede tout : l'enrichissement interroge TheMovieDB
+    oeuvre par oeuvre, et c'est la premiere de ces requetes qui revele
+    l'adresse de la maison, pas la derniere. Sans cle, l'index reste local et
+    il n'y a rien a refuser.
+    """
     if _lock.locked():
         return _status()
+
+    if tmdb_key():
+        await _exiger_sortie()
 
     async with _lock:
         _job.running = True

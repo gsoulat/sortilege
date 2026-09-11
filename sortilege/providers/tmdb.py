@@ -25,8 +25,13 @@ API = "https://api.themoviedb.org/3"
 _POPULARITY_CAP = 2000.0
 
 # w185 : assez grand pour reconnaitre une affiche, assez petit pour en
-# charger vingt sans ralentir la page.
+# charger vingt sans ralentir la page. Le depot en bibliotheque redemande la
+# meme image dans une taille d'affichage — voir core/nfo.display_size.
 IMAGE_BASE = "https://image.tmdb.org/t/p/w185"
+
+# L'image de fond n'est jamais affichee dans l'interface : elle n'existe que
+# pour etre deposee en « fanart.jpg », donc directement dans la taille utile.
+BACKDROP_BASE = "https://image.tmdb.org/t/p/w1280"
 
 DEFAULT_LANGUAGE = "fr-FR"
 """Le defaut d'avant le reglage. Conserve tel quel : changer la langue d'une
@@ -331,6 +336,7 @@ class TMDBProvider(BaseHTTPProvider):
 
             votes = float(item.get("vote_count") or 0)
             poster = item.get("poster_path")
+            backdrop = item.get("backdrop_path")
             candidates.append(
                 Candidate(
                     provider=self.name,
@@ -341,6 +347,7 @@ class TMDBProvider(BaseHTTPProvider):
                     popularity=min(votes / _POPULARITY_CAP, 1.0),
                     kind=kind,
                     poster_url=f"{IMAGE_BASE}{poster}" if poster else "",
+                    backdrop_url=f"{BACKDROP_BASE}{backdrop}" if backdrop else "",
                     overview=(item.get("overview") or "")[:220],
                 )
             )

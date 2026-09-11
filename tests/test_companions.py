@@ -546,3 +546,64 @@ def test_un_nom_accentue_reste_valide() -> None:
     cible = trash_destination(Path("/t"), "j", chemin)
 
     cible.name.encode("utf-8").decode("utf-8")  # ne doit pas lever
+
+
+def test_la_corbeille_n_est_jamais_une_coquille(tmp_path: Path) -> None:
+    """La corbeille ne contient pas de video : le nettoyage des coquilles la
+    proposait, et le mode « supprimer » detruisait ce qu'elle gardait."""
+    from sortilege.core.companions import TRASH_DIRNAME, find_orphan_dirs
+
+    lot = tmp_path / TRASH_DIRNAME / "2026-09-11"
+    lot.mkdir(parents=True)
+    (lot / "Film.nfo").write_text("<movie/>", encoding="utf-8")
+    coquille = tmp_path / "Release.2020"
+    coquille.mkdir()
+    (coquille / "Release.2020.nfo").write_text("<movie/>", encoding="utf-8")
+
+    trouves = find_orphan_dirs([tmp_path])
+
+    assert "Release.2020" in {o.path.name for o in trouves}, "temoin : une vraie coquille"
+    assert not any(TRASH_DIRNAME in o.path.parts for o in trouves)
+
+
+def test_une_saison_en_lien_symbolique_protege_la_serie(tmp_path: Path) -> None:
+    """os.walk ne suit pas un lien symbolique : la saison n'est pas parcourue.
+
+    La prendre pour vide faisait proposer au nettoyage la fiche d'une serie
+    vivante."""
+    from sortilege.core.companions import find_orphan_dirs
+
+    ailleurs = tmp_path / "ailleurs" / "Saison"
+    ailleurs.mkdir(parents=True)
+    (ailleurs / "Serie.S01E01.mkv").write_bytes(b"x")
+    racine = tmp_path / "bibliotheque"
+    serie = racine / "Serie (2020)"
+    serie.mkdir(parents=True)
+    (serie / "tvshow.nfo").write_text("<tvshow/>", encoding="utf-8")
+    (serie / "Season 01").symlink_to(ailleurs, target_is_directory=True)
+
+    assert "Serie (2020)" not in {o.path.name for o in find_orphan_dirs([racine])}
+
+
+def test_une_saison_illisible_protege_la_serie(tmp_path: Path) -> None:
+    import os
+
+    import pytest
+
+    from sortilege.core.companions import find_orphan_dirs
+
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        pytest.skip("root lit tout : le cas illisible ne se reproduit pas")
+    racine = tmp_path / "bibliotheque"
+    serie = racine / "Serie (2020)"
+    saison = serie / "Season 01"
+    saison.mkdir(parents=True)
+    (saison / "Serie.S01E01.mkv").write_bytes(b"x")
+    (serie / "tvshow.nfo").write_text("<tvshow/>", encoding="utf-8")
+    saison.chmod(0)
+    try:
+        noms = {o.path.name for o in find_orphan_dirs([racine])}
+    finally:
+        saison.chmod(0o755)
+
+    assert "Serie (2020)" not in noms

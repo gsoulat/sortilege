@@ -5,7 +5,8 @@ Le seul moment ou l'on regarde l'interface, c'est quand on soupconne un
 probleme — donc trop tard. Une notification inverse ce rapport : l'outil dit ce
 qu'il a fait, on ne va le voir que si quelque chose cloche.
 
-Trois principes, tous appris a l'usage des outils du meme genre :
+Quatre principes. Les trois premiers viennent de l'usage des outils du meme
+genre ; le quatrieme, d'un audit de celui-ci :
 
 1. **Le silence est la valeur par defaut.** Un message toutes les quinze
    minutes disant « 0 fichier range » apprend a ignorer le canal, et le jour ou
@@ -19,17 +20,55 @@ Trois principes, tous appris a l'usage des outils du meme genre :
    devient un moyen de faire emettre au conteneur des requetes vers n'importe
    quelle adresse de ton reseau. Elle est donc contrainte aux domaines Discord,
    et elle n'est jamais renvoyee au navigateur.
+4. **Rien de ce qui part ne dit ou est la maison.** Un message Discord quitte
+   le reseau, parfois par la sortie meme qu'on vient de juger non protegee :
+   une adresse IP qu'il contiendrait serait publiee chez un tiers. Toute
+   adresse est donc masquee au moment de construire le message, quel que soit
+   l'appelant — un garde-fou pose chez chaque appelant finit toujours par en
+   oublier un.
 """
 
 from __future__ import annotations
 
+import ipaddress
 import logging
+import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+ADRESSE_MASQUEE = "[adresse masquée]"
+"""Ce qui remplace une adresse IP dans un message qui quitte la maison."""
+
+# Les motifs ne font que proposer des candidats ; c'est ``ipaddress`` qui
+# tranche. IPv4 est cherche largement : quatre nombres pointes sont presque
+# toujours une adresse, et en masquer une de trop ne coute rien. IPv6 exige des
+# bords de mot, faute de quoi « Data::Dumper » passerait pour une adresse.
+_IPV4 = re.compile(r"(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?!\.?\d)")
+_IPV6 = re.compile(r"(?<![\w:])[0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?![\w:])")
+
+
+def masquer_adresses(texte: str) -> str:
+    """Remplace chaque adresse IP d'un texte par ``ADRESSE_MASQUEE``.
+
+    Une heure « 12:30:45 » ou une version « 1.2.3.4.5 » ressemblent a une
+    adresse sans en etre une : les masquer rendrait le message illisible sans
+    rien proteger.
+    """
+
+    def _si_adresse(trouve: re.Match[str]) -> str:
+        candidat = trouve.group(0)
+        try:
+            adresse = ipaddress.ip_address(candidat)
+        except ValueError:
+            return candidat
+        return candidat if adresse.is_unspecified else ADRESSE_MASQUEE
+
+    return _IPV6.sub(_si_adresse, _IPV4.sub(_si_adresse, texte))
+
 
 # Un webhook Discord vit sur l'un de ces hotes, et sur aucun autre.
 ALLOWED_HOSTS = frozenset(
@@ -93,14 +132,26 @@ class Notification:
         return {"warn": COLOR_WARN, "error": COLOR_ERROR}.get(self.level, COLOR_OK)
 
     def payload(self) -> dict[str, object]:
+        """Le corps JSON envoye a Discord, adresses masquees.
+
+        C'est l'unique endroit ou titre, texte et champs sont assembles pour
+        partir : le masquage vit donc ici (principe 4), et tout appelant de
+        ``send`` en beneficie — le cycle, les echecs, le bouton d'essai, et
+        ceux qui viendront.
+        """
         embed: dict[str, object] = {
-            "title": self.title,
-            "description": self.body,
+            "title": masquer_adresses(self.title),
+            "description": masquer_adresses(self.body),
             "color": self.color(),
         }
         if self.fields:
             embed["fields"] = [
-                {"name": name, "value": value, "inline": True} for name, value in self.fields
+                {
+                    "name": masquer_adresses(name),
+                    "value": masquer_adresses(value),
+                    "inline": True,
+                }
+                for name, value in self.fields
             ]
         return {"username": "Sortilège", "embeds": [embed]}
 
@@ -159,9 +210,9 @@ def cycle_notification(report) -> Notification | None:
     if not report.applied:
         return None
 
-    fields: list[tuple[str, str]] = [("Ranges", str(report.applied))]
+    fields: list[tuple[str, str]] = [("Rangés", str(report.applied))]
     if report.queued:
-        fields.append(("A arbitrer", str(report.queued)))
+        fields.append(("À arbitrer", str(report.queued)))
     if report.remaining:
         fields.append(("Restants", str(report.remaining)))
 
@@ -169,16 +220,18 @@ def cycle_notification(report) -> Notification | None:
     # seul cas ou la couleur doit attirer l'oeil sans etre une erreur.
     level = "warn" if report.queued else "ok"
     return Notification(
-        title=f"{report.applied} fichier(s) range(s)",
-        body=report.message or "Rangement automatique termine.",
+        title=f"{report.applied} fichier(s) rangé(s)",
+        body=report.message or "Rangement automatique terminé.",
         level=level,
         fields=tuple(fields),
     )
 
 
 def failure_notification(error: str) -> Notification:
+    # Masquer AVANT de tronquer : une coupure au milieu d'une adresse en
+    # laisserait trois octets, que le masquage de l'envoi ne reconnaitrait plus.
     return Notification(
-        title="Le cycle automatique a echoue",
-        body=f"```{error[:1500]}```",
+        title="Le cycle automatique a échoué",
+        body=f"```{masquer_adresses(error)[:1500]}```",
         level="error",
     )

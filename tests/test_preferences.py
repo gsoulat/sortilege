@@ -5,15 +5,20 @@ sur le disque, elle ne doit pas pouvoir designer n'importe quelle destination.
 """
 
 import json
+import os
+import shutil
 from pathlib import Path
 
 import pytest
 
 from sortilege.core.preferences import (
     DEFAULT_DESTINATIONS,
+    AutomationSettings,
+    NotificationSettings,
     PreferenceError,
     Preferences,
     PreferenceStore,
+    SubtitleSettings,
 )
 
 
@@ -106,6 +111,156 @@ def test_les_nouveaux_blocs_ont_leurs_defauts_sur_un_ancien_fichier(
     assert prefs.scan.extra_skip_dirs == []
 
 
+def test_une_valeur_de_la_mauvaise_nature_retombe_sur_le_defaut(store: PreferenceStore) -> None:
+    """« "languages": "fr" » passait la relecture puis faisait echouer TOUS les
+    enregistrements ; « "notifications": "oops" » levait au demarrage. Chaque
+    valeur fautive est ecartee, le reste du fichier est garde."""
+    store._path.parent.mkdir(parents=True, exist_ok=True)
+    store._path.write_text(
+        json.dumps(
+            {
+                "destinations": {**DEFAULT_DESTINATIONS, "movie": "Cinema"},
+                "custom_sources": "/pas/une/liste",
+                "subtitles": {"languages": "fr", "enabled": "false", "overwrite": 1},
+                "notifications": "oops",
+                "automation": {"interval_minutes": True, "quiet_seconds": 30},
+                "ai": {"threshold": 1, "api_key": 12345},
+                "integration": {"api_key": 42},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    neuf = PreferenceStore(
+        path=store._path, library_root=store._library_root, source_roots=store._source_roots
+    )
+    prefs = neuf.load()
+
+    assert prefs.destinations["movie"] == "Cinema"
+    assert prefs.custom_sources == []
+    assert prefs.subtitles.languages == SubtitleSettings().languages
+    assert prefs.subtitles.enabled is False
+    assert prefs.subtitles.overwrite is False
+    assert prefs.notifications == NotificationSettings()
+    # bool est un int pour Python : il ne doit pas passer pour un intervalle.
+    assert prefs.automation.interval_minutes == AutomationSettings().interval_minutes
+    assert prefs.automation.quiet_seconds == 30
+    # Un entier la ou un decimal est attendu est accepte.
+    assert prefs.ai.threshold == 1.0
+    assert isinstance(prefs.ai.threshold, float)
+    assert prefs.ai.api_key == ""
+    assert prefs.integration.api_key == ""
+    # Et surtout : l'enregistrement suivant passe.
+    neuf.save(prefs)
+
+
+def test_un_fichier_illisible_n_est_remplace_qu_apres_avoir_ete_mis_de_cote(
+    store: PreferenceStore,
+) -> None:
+    """Une virgule en trop ne doit pas couter les sources, les gabarits et les
+    cles : rien n'est ecrit tant que personne n'enregistre, et l'original est
+    copie juste avant."""
+    illisible = '{"destinations": {"movie": "Cinema"},}'
+    store._path.parent.mkdir(parents=True, exist_ok=True)
+    store._path.write_text(illisible, encoding="utf-8")
+
+    neuf = PreferenceStore(
+        path=store._path, library_root=store._library_root, source_roots=store._source_roots
+    )
+    assert neuf.load().destinations == DEFAULT_DESTINATIONS
+    assert neuf.unreadable is True
+
+    # La cle du demarrage : en memoire, stable dans le processus, rien d'ecrit.
+    cle = neuf.ensure_api_key()
+    assert neuf.ensure_api_key() == cle
+    assert store._path.read_text(encoding="utf-8") == illisible
+    assert not list(store._path.parent.glob("preferences.json.illisible-*"))
+
+    neuf.save(neuf.load())
+
+    copies = list(store._path.parent.glob("preferences.json.illisible-*"))
+    assert [c.read_text(encoding="utf-8") for c in copies] == [illisible]
+    assert json.loads(store._path.read_text(encoding="utf-8"))["integration"]["api_key"] == cle
+    assert neuf.unreadable is False
+
+
+def test_sans_copie_de_secours_rien_n_est_ecrit(
+    store: PreferenceStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    illisible = "{ ceci n'est pas du json"
+    store._path.parent.mkdir(parents=True, exist_ok=True)
+    store._path.write_text(illisible, encoding="utf-8")
+    neuf = PreferenceStore(
+        path=store._path, library_root=store._library_root, source_roots=store._source_roots
+    )
+    neuf.load()
+
+    def _panne(*args: object, **kwargs: object) -> None:
+        raise OSError("volume plein")
+
+    monkeypatch.setattr(shutil, "copy2", _panne)
+    with pytest.raises(PreferenceError, match="copie de secours"):
+        neuf.rotate_api_key()
+    assert store._path.read_text(encoding="utf-8") == illisible
+
+
+def test_une_ecriture_interrompue_laisse_l_ancien_fichier_intact(
+    store: PreferenceStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fichier temporaire puis remplacement : une coupure ne laisse jamais un
+    JSON tronque, que la relecture suivante prendrait pour un fichier illisible."""
+    store.save(Preferences(destinations={**DEFAULT_DESTINATIONS, "movie": "Cinema"}))
+    avant = store._path.read_text(encoding="utf-8")
+
+    def _coupure(*args: object, **kwargs: object) -> None:
+        raise OSError("coupure")
+
+    monkeypatch.setattr(os, "replace", _coupure)
+    with pytest.raises(OSError, match="coupure"):
+        store.save(Preferences(destinations={**DEFAULT_DESTINATIONS, "movie": "Autre"}))
+    monkeypatch.undo()
+
+    assert store._path.read_text(encoding="utf-8") == avant
+    assert not store._path.with_name(f"{store._path.name}.tmp").exists()
+
+
+def test_la_cle_s_ecrit_meme_quand_le_reste_ne_valide_plus(store: PreferenceStore) -> None:
+    """Une source demontee depuis ne doit pas empecher d'ecrire la cle d'API :
+    au demarrage, cela faisait redemarrer le conteneur en boucle."""
+    store._path.parent.mkdir(parents=True, exist_ok=True)
+    store._path.write_text(json.dumps({"custom_sources": ["/ailleurs/demonte"]}), encoding="utf-8")
+    neuf = PreferenceStore(
+        path=store._path, library_root=store._library_root, source_roots=store._source_roots
+    )
+    with pytest.raises(PreferenceError):
+        neuf.validate(neuf.load())
+
+    cle = neuf.ensure_api_key()
+
+    relu = json.loads(store._path.read_text(encoding="utf-8"))
+    assert relu["integration"]["api_key"] == cle
+    assert relu["custom_sources"] == ["/ailleurs/demonte"]
+
+
+def test_le_jeton_vip_seul_ne_suffit_pas_a_activer_les_sous_titres(
+    store: PreferenceStore,
+) -> None:
+    """Le fournisseur n'emet rien sans cle : accepter le jeton seul enregistrait
+    une recherche active qui ne pouvait rien trouver."""
+    prefs = Preferences(
+        subtitles=SubtitleSettings(enabled=True, opensubtitles_token="jeton-vip-de-test")
+    )
+    with pytest.raises(PreferenceError, match="jeton VIP seul ne suffit pas"):
+        store.save(prefs)
+
+
+def test_les_refus_sont_accentues(store: PreferenceStore) -> None:
+    prefs = Preferences()
+    prefs.scan.min_size_mb = -1
+    with pytest.raises(PreferenceError, match="ne peut pas être négative"):
+        store.save(prefs)
+
+
 # --- Confinement ------------------------------------------------------------
 
 
@@ -131,7 +286,7 @@ def test_type_de_media_inconnu_refuse(store: PreferenceStore) -> None:
 
 def test_source_non_declaree_refusee(store: PreferenceStore) -> None:
     """On ne peut pas activer une source qui n'existe dans aucune liste."""
-    with pytest.raises(PreferenceError, match="ni une racine montee"):
+    with pytest.raises(PreferenceError, match="ni une racine montée"):
         store.save(Preferences(enabled_sources=["/ailleurs"]))
 
 

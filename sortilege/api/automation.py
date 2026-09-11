@@ -21,17 +21,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from fastapi import APIRouter
 
 from ..config import get_settings
 from ..core.companions import TRASH_DIRNAME
-from ..core.journal import apply_plan
+from ..core.journal import ApplyResult, apply_plan
 from ..core.notify import cycle_notification, failure_notification, send
 from ..core.pipeline import BATCH_SIZE, Pipeline
+from ..core.planner import Plan
 from ..core.scanner import scan
 from ..core.scoring import Decision, Policy
+from ..core.vpn import egress_allowed
 from ..core.watch import Watcher
 from ..providers.anilist import AniListProvider
 from ..providers.tmdb import TMDBProvider
@@ -41,6 +43,18 @@ from .deps import get_journal, get_memory, get_store, scan_rules, tmdb_key
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/automation", tags=["automatisation"])
+
+MESSAGE_SORTIE_REFUSEE = (
+    "Cycle arrêté : la sortie par le tunnel n'est pas confirmée (politique « exiger »)."
+)
+"""Ce que dit un cycle arrete par la politique de sortie. Phrase FIXE.
+
+La raison detaillee du refus cite l'adresse publique mesuree, et le message
+d'un cycle voyage : historique, ecran, notifications. Elle va donc au log
+local, et le rapport ne garde que ce que n'importe qui peut lire."""
+
+TYPES_SOUS_TITRES = ("movie", "episode", "anime")
+"""Les plans dont on cherche les sous-titres : les videos, pas les livres."""
 
 
 @dataclass
@@ -56,6 +70,21 @@ class CycleReport:
     qu'un cycle « termine » a tout traite."""
 
     message: str = ""
+
+    failed: bool = False
+    """Le cycle s'est arrete sur un refus, pas sur une exception.
+
+    Distinct de ``_state.error``, qui ne couvre que les pannes imprevues. Un
+    refus de sortie reseau est une decision, pas un bug : il ne produit ni
+    trace ni exception, et sans ce drapeau il passerait pour un cycle normal
+    qui n'avait rien a faire — precisement l'etat muet qu'on chasse."""
+
+    egress_refused: bool = False
+    """Le refus vient de la politique de sortie reseau.
+
+    Un tel refus ne produit AUCUNE notification : prevenir Discord que la
+    sortie n'est pas protegee, c'est emettre precisement par cette sortie. Il
+    reste lisible dans l'historique des cycles."""
 
 
 @dataclass
@@ -92,7 +121,7 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
 
     roots = store.resolved_sources()
     if not roots:
-        report.message = "aucune source selectionnee"
+        report.message = "aucune source sélectionnée"
         return report
 
     # Les memes regles pour la surveillance et pour le scan : sans cela, un
@@ -114,13 +143,29 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
     report.scanned = result.total
 
     if not result.files:
-        report.message = "aucun fichier a traiter"
+        report.message = "aucun fichier à traiter"
         return report
 
     cle = tmdb_key()
     if not cle:
-        report.message = "aucune cle TheMovieDB : identification impossible"
+        report.message = "aucune clé TheMovieDB : identification impossible"
         return report
+
+    # Meme garde-fou que le traitement manuel, et il compte DAVANTAGE ici :
+    # personne ne regarde. Un cycle qui interroge les fournisseurs en clair
+    # toutes les quinze minutes pendant qu'on croit le tunnel monte revele bien
+    # plus qu'un lot lance a la main.
+    sortie = await egress_allowed(prefs.vpn.policy, reference_ip=prefs.vpn.reference_ip or None)
+    if not sortie.allowed:
+        # La raison detaillee cite l'adresse publique mesuree : elle va au log
+        # local, jamais dans le rapport, qui s'affiche et peut voyager.
+        logger.warning("cycle automatique arrete, sortie refusee : %s", sortie.reason)
+        report.message = MESSAGE_SORTIE_REFUSEE
+        report.failed = True
+        report.egress_refused = True
+        return report
+    if sortie.warn:
+        logger.warning("cycle automatique, sortie non confirmee : %s", sortie.reason)
 
     # --- Plan ---
     pipeline = Pipeline(
@@ -152,7 +197,7 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
     report.remaining = max(0, len(eligible) - len(lot))
 
     if not lot:
-        report.message = "rien de nouveau a identifier"
+        report.message = "rien de nouveau à identifier"
         return report
 
     try:
@@ -172,10 +217,28 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
     # --- Application ---
     if not auto.apply_auto:
         report.message = (
-            f"{len(confident)} plan(s) prets, {report.queued} en attente d'arbitrage. "
-            "Application automatique desactivee."
+            f"{len(confident)} plan(s) prêt(s), {report.queued} en attente d'arbitrage. "
+            "Application automatique désactivée."
         )
         return report
+
+    # La planification a pu durer plus longtemps que le cache de la mesure :
+    # la decision prise avant elle ne vaut plus au moment d'aller chercher des
+    # affiches. On la reprend donc ici. Deplacer un fichier reste local et
+    # continue ; seul ce qui irait chercher quelque chose dehors s'arrete.
+    reseau_ok = True
+    if confident:
+        reglage_vpn = store.load().vpn
+        avant = await egress_allowed(
+            reglage_vpn.policy, reference_ip=reglage_vpn.reference_ip or None
+        )
+        if not avant.allowed:
+            reseau_ok = False
+            logger.warning(
+                "sortie refusee avant l'application, ni affiches ni sous-titres : %s",
+                avant.reason,
+            )
+    fiches = prefs.local_metadata if reseau_ok else replace(prefs.local_metadata, artwork=False)
 
     journal = get_journal()
     trash_root = conf.library_root / TRASH_DIRNAME
@@ -189,6 +252,7 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
             # jusqu'a une source, sans quoi ranger le dernier fichier la
             # ferait disparaitre.
             source_roots=roots,
+            local_metadata=fiches,
         )
         for p in confident
     ]
@@ -198,12 +262,51 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
     _watcher.mark_processed([p.source for p in plans if p.decision is not Decision.AUTO])
 
     failed = len(results) - report.applied
-    report.message = f"{report.applied} range(s), {report.queued} en attente"
+    report.message = f"{report.applied} rangé(s), {report.queued} en attente"
     if report.remaining:
         report.message += f", {report.remaining} pour le prochain tour"
     if failed:
-        report.message += f", {failed} en echec"
+        report.message += f", {failed} en échec"
+
+    if report.applied:
+        if reseau_ok:
+            report.message += await _sous_titres(confident, results)
+        else:
+            report.message += (
+                ", affiches et sous-titres non récupérés (sortie par le tunnel non confirmée)"
+            )
+        # Sans garde de sortie : le serveur multimedia est sur le reseau local,
+        # rien ne quitte la maison. Apres les sous-titres, pour qu'il les
+        # decouvre en meme temps que les fichiers.
+        await review._tell_media_server()
     return report
+
+
+async def _sous_titres(plans: list[Plan], results: list[ApplyResult]) -> str:
+    """Cherche les sous-titres des fichiers ranges ; rend la fin du message.
+
+    Meme contrat que le traitement manuel : APRES le deplacement, pour que le
+    sous-titre se depose a cote du fichier, et avec le titre du plan plutot que
+    le nom de fichier, qu'on vient justement de corriger. La recherche ne leve
+    jamais et porte sa propre garde de sortie.
+    """
+    ranges = {r.plan_id for r in results if r.ok}
+    demandes = [
+        (p.destination, p.title, p.year, p.values.get("season"), p.values.get("episode"))
+        for p in plans
+        if p.id in ranges and p.kind in TYPES_SOUS_TITRES and p.destination is not None
+    ]
+    if not demandes:
+        return ""
+    rapport = await review._recuperer_sous_titres(demandes)
+    if rapport.get("refused"):
+        logger.warning("sous-titres non recherches : %s", rapport["refused"])
+        return ", sous-titres non recherchés (sortie par le tunnel non confirmée)"
+    if rapport.get("unavailable"):
+        logger.warning("sous-titres indisponibles : %s", rapport["unavailable"])
+        return f", sous-titres indisponibles ({rapport['unavailable']})"
+    ecrits = int(rapport.get("written") or 0)
+    return f", {ecrits} sous-titre(s) déposé(s)" if ecrits else ""
 
 
 async def _notify(notification) -> None:
@@ -211,18 +314,66 @@ async def _notify(notification) -> None:
 
     Le garde-fou est ici plutot que chez l'appelant : une notification est un
     a-cote, et aucun point d'appel ne doit avoir a s'en proteger.
+
+    La politique de sortie vaut aussi pour Discord : un message part par la
+    meme route que le reste, et sous « exiger » il n'a pas plus que les autres
+    le droit de sortir en clair. Verifiee en dernier, pour ne rien mesurer
+    quand le canal est coupe. Une politique illisible leve, et l'exception
+    est avalee plus bas : le doute ferme le canal au lieu de l'ouvrir.
     """
     if notification is None:
         return
-    prefs = get_store().load().notifications
+    reglages = get_store().load()
+    prefs = reglages.notifications
     if not prefs.enabled or not prefs.webhook_url:
         return
     if notification.level == "error" and not prefs.on_failure:
         return
     try:
+        sortie = await egress_allowed(
+            reglages.vpn.policy, reference_ip=reglages.vpn.reference_ip or None
+        )
+        if not sortie.allowed:
+            logger.warning("notification non envoyee, sortie refusee : %s", sortie.reason)
+            return
         await send(prefs.webhook_url, notification)
     except Exception:
         logger.exception("envoi de la notification impossible")
+
+
+async def _tour() -> CycleReport | None:
+    """Un cycle programme, et ce qu'on en dit. A appeler sous ``_lock``.
+
+    Separe de la boucle pour etre verifiable : la boucle attend l'horloge, ce
+    tour contient toute la decision de notifier ou non.
+    """
+    _state.running = True
+    try:
+        report = await run_cycle()
+        _state.last = report
+        _state.error = None
+        _state.history = [report, *_state.history][:20]
+        logger.info("cycle automatique : %s", report.message)
+        if report.egress_refused:
+            # Aucun message : prevenir Discord que la sortie n'est pas
+            # protegee, c'est emettre par cette sortie. Le refus reste lisible
+            # dans l'historique des cycles.
+            logger.info("refus de sortie : aucune notification envoyee")
+        elif report.failed:
+            # Le canal d'echec, et non celui du cycle : un cycle refuse
+            # n'a rien range, donc n'aurait rien dit du tout.
+            await _notify(failure_notification(report.message))
+        else:
+            await _notify(cycle_notification(report))
+        return report
+    except Exception as exc:
+        _state.error = f"{type(exc).__name__}: {exc}"
+        logger.exception("le cycle automatique a echoue")
+        await _notify(failure_notification(_state.error))
+        return None
+    finally:
+        _state.running = False
+        _state.last_run = time.time()
 
 
 async def _loop() -> None:
@@ -247,21 +398,7 @@ async def _loop() -> None:
             continue
 
         async with _lock:
-            _state.running = True
-            try:
-                report = await run_cycle()
-                _state.last = report
-                _state.error = None
-                _state.history = [report, *_state.history][:20]
-                logger.info("cycle automatique : %s", report.message)
-                await _notify(cycle_notification(report))
-            except Exception as exc:
-                _state.error = f"{type(exc).__name__}: {exc}"
-                logger.exception("le cycle automatique a echoue")
-                await _notify(failure_notification(_state.error))
-            finally:
-                _state.running = False
-                _state.last_run = time.time()
+            await _tour()
 
 
 def start() -> None:
@@ -289,6 +426,7 @@ def _report_out(report: CycleReport | None) -> dict[str, object] | None:
         "remaining": report.remaining,
         "queued": report.queued,
         "message": report.message,
+        "failed": report.failed,
     }
 
 

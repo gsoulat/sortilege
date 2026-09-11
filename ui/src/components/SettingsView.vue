@@ -11,6 +11,11 @@ import TemplateBuilder from './TemplateBuilder.vue'
 import TranscodeSettings from './TranscodeSettings.vue'
 import MaintenanceSettings from './MaintenanceSettings.vue'
 import DecisionsSettings from './DecisionsSettings.vue'
+import LocalMetadataSettings from './LocalMetadataSettings.vue'
+import SubtitleSettings from './SubtitleSettings.vue'
+import VpnSettings from './VpnSettings.vue'
+import IntegrationSettings from './IntegrationSettings.vue'
+import BackupSettings from './BackupSettings.vue'
 
 // Deux listes, et pas une seule : un livre se range et se nomme comme le reste,
 // mais il n'a ni résolution, ni débit, ni stratégie de qualité. L'ajouter à la
@@ -72,6 +77,21 @@ function onMetadataChange(patch) {
 function onScanChange(patch) {
   Object.assign(prefs.value.scan, patch)
   save({ scan: patch })
+}
+
+function onLocalMetadataChange(patch) {
+  Object.assign(prefs.value.local_metadata, patch)
+  save({ local_metadata: patch })
+}
+
+function onSubtitlesChange(patch) {
+  Object.assign(prefs.value.subtitles, patch)
+  save({ subtitles: patch })
+}
+
+function onVpnChange(patch) {
+  Object.assign(prefs.value.vpn, patch)
+  save({ vpn: patch })
 }
 
 function onTranscodeChange(patch) {
@@ -163,6 +183,36 @@ async function load() {
   }
 }
 
+/** Le motif d'un refus, tel que le serveur l'écrit. Une erreur de validation
+ *  arrive en liste (`detail: [{ msg }]`) : l'afficher brute donnerait du JSON. */
+function motifRefus(body, res) {
+  const d = body?.detail
+  if (typeof d === 'string' && d) return d
+  if (Array.isArray(d) && d.length) return d.map((e) => e?.msg ?? String(e)).join(' ; ')
+  return res.ok ? 'Réponse illisible du serveur.' : `Enregistrement refusé (réponse ${res.status}).`
+}
+
+/**
+ * Relit les préférences après un échec. Les gestionnaires appliquent le
+ * changement à l'écran AVANT l'envoi (`Object.assign`) : sans relecture, un
+ * réglage refusé resterait affiché comme s'il avait été retenu. Les
+ * destinations en cours de saisie sont gardées : elles ne sont pas
+ * enregistrées, le bouton le dit, et les perdre obligerait à tout retaper pour
+ * corriger une faute.
+ */
+async function rechargerPreferences() {
+  try {
+    const frais = await lire('/api/settings/preferences')
+    // Relu APRES l'attente : copiées avant, les destinations perdraient ce qui a
+    // été tapé pendant la relecture.
+    if (dirty.value) frais.destinations = { ...prefs.value.destinations }
+    prefs.value = frais
+    return true
+  } catch {
+    return false
+  }
+}
+
 async function save(extra = {}) {
   saving.value = true
   saveError.value = null
@@ -182,14 +232,39 @@ async function save(extra = {}) {
       // de l'état complet l'écraserait par une chaîne vide.
       ...extra,
     }
-    const res = await fetch('/api/settings/preferences', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    const body = await res.json()
-    if (!res.ok) {
-      saveError.value = body.detail ?? 'Enregistrement refusé.'
+    let res
+    try {
+      res = await fetch('/api/settings/preferences', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+    } catch {
+      // Rien n'est parti, mais l'écran montre déjà le changement.
+      const relu = await rechargerPreferences()
+      saveError.value = relu
+        ? "Serveur injoignable : rien n'a été enregistré. L'écran montre de nouveau les réglages en place."
+        : "Serveur injoignable : rien n'a été enregistré, et les réglages affichés ne sont peut-être " +
+          'pas ceux en place. Recharge la page quand le serveur répond.'
+      return
+    }
+    // Une 502 arrive en HTML : `res.json()` lèverait sans être attrapée, et le
+    // refus n'arriverait jamais à l'écran.
+    const brut = await res.text()
+    let body = null
+    try {
+      body = JSON.parse(brut)
+    } catch {
+      body = null
+    }
+    if (!res.ok || !body) {
+      const motif = motifRefus(body, res)
+      const relu = await rechargerPreferences()
+      saveError.value =
+        motif +
+        (relu
+          ? " L'écran montre de nouveau les réglages tels qu'ils sont enregistrés."
+          : " Les réglages affichés n'ont pas pu être relus : recharge la page.")
       return
     }
     prefs.value = body
@@ -247,10 +322,21 @@ const KINDS = ['movie', 'episode', 'anime']
       <button
         v-for="o in ONGLETS"
         :key="o.id"
+        type="button"
         :class="{ actif: onglet === o.id }"
+        :aria-current="onglet === o.id ? 'page' : undefined"
         @click="onglet = o.id"
       >{{ o.label }}</button>
     </nav>
+
+    <!-- Sous la barre d'onglets, et non dans l'onglet Bibliothèque : la plupart
+         des réglages s'enregistrent au changement, depuis n'importe quel
+         onglet. Un refus rendu ailleurs que là où on a cliqué est un refus que
+         personne ne voit. -->
+    <div v-if="saveError" class="bandeau-erreur" role="alert">
+      <p>{{ saveError }}</p>
+      <button type="button" @click="saveError = null">Fermer</button>
+    </div>
 
     <!-- ===== Bibliothèque : d'où viennent les fichiers, où ils vont ===== -->
     <template v-if="onglet === 'bibliotheque'">
@@ -266,6 +352,12 @@ const KINDS = ['movie', 'episode', 'anime']
     </section>
 
     <ScanSettings v-if="prefs.scan" :scan="prefs.scan" @change="onScanChange" />
+
+    <LocalMetadataSettings
+      v-if="prefs.local_metadata"
+      :local-metadata="prefs.local_metadata"
+      @change="onLocalMetadataChange"
+    />
 
     <section>
       <h3>Destination par type</h3>
@@ -343,11 +435,14 @@ const KINDS = ['movie', 'episode', 'anime']
       </div>
 
       <div class="actions">
-        <button class="primary" :disabled="!dirty || saving" @click="save">
+        <button type="button" class="primary" :disabled="!dirty || saving" @click="save()">
           {{ saving ? 'Enregistrement…' : 'Enregistrer' }}
         </button>
         <span v-if="saved" class="ok-msg">Enregistré</span>
-        <span v-if="saveError" class="err-msg">{{ saveError }}</span>
+        <span v-else-if="saveError" class="err-msg">Le motif est affiché en haut, sous les onglets.</span>
+        <span v-else-if="!dirty && !saving" class="attente-msg">
+          Aucune destination modifiée : rien à enregistrer.
+        </span>
       </div>
     </section>
 
@@ -430,6 +525,12 @@ const KINDS = ['movie', 'episode', 'anime']
       @change="onTranscodeChange"
     />
 
+    <SubtitleSettings
+      v-if="prefs.subtitles"
+      :subtitles="prefs.subtitles"
+      @change="onSubtitlesChange"
+    />
+
     <NotificationSettings :notifications="prefs.notifications" @change="onNotificationsChange" />
 
     <MaintenanceSettings
@@ -452,13 +553,31 @@ const KINDS = ['movie', 'episode', 'anime']
     <DecisionsSettings />
     </template>
 
-    <!-- ===== Système : le déploiement, en lecture seule ===== -->
+    <!-- ===== Système : sortie réseau, accès, sauvegarde, puis le déploiement ===== -->
     <template v-if="onglet === 'systeme'">
     <MaintenanceSettings
       section="corbeille"
       :media-server="prefs.media_server"
       @change="onMediaServerChange"
     />
+
+    <VpnSettings v-if="prefs.vpn" :vpn="prefs.vpn" @change="onVpnChange" />
+
+    <!-- Le 401 du serveur renvoie ici par son nom : « Réglages → Système →
+         Intégration ». Le titre de la section doit rester celui-là. -->
+    <!-- Après une régénération, les préférences chargées portent le masque de
+         la clé révoquée : revenir sur cet onglet le réafficherait. On relit par
+         `rechargerPreferences` et non par `load`, qui remplacerait aussi les
+         destinations en cours de saisie — le bouton resterait « à enregistrer »
+         sur des valeurs revenues en arrière. -->
+    <IntegrationSettings
+      :integration="prefs.integration ?? null"
+      @regenerated="rechargerPreferences"
+    />
+
+    <!-- Une restauration remplace les préférences sur le disque : l'écran
+         relit tout, sinon il continuerait d'afficher celles d'avant. -->
+    <BackupSettings @restored="load" />
 
     <p class="lead">
       Ce qui suit décrit le <strong>déploiement</strong> et vient de l'environnement.
@@ -514,7 +633,7 @@ const KINDS = ['movie', 'episode', 'anime']
 
 <style scoped>
 .sous-section {
-  margin: 20px 0 8px; font-size: 11px; font-weight: 600;
+  margin: 20px 0 8px; font-size: var(--t-xs); font-weight: 600;
   text-transform: uppercase; letter-spacing: .06em; color: var(--text-dim);
 }
 input.budget {
@@ -550,8 +669,8 @@ input.budget {
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 6px; color: var(--text);
 }
-.strategie .ordre { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
-.hint { margin: 8px 0 0; font-size: 11.5px; color: var(--text-faint); line-height: 1.6; max-width: 720px; }
+.strategie .ordre { font-family: var(--mono); font-size: var(--t-xs); color: var(--text-faint); }
+.hint { margin: 8px 0 0; font-size: var(--t-xs); color: var(--text-faint); line-height: 1.6; max-width: 720px; }
 .hint strong { color: var(--text-dim); }
 
 .onglets button.actif { border-color: var(--accent); color: var(--text); background: var(--surface); }
@@ -563,12 +682,12 @@ section { background: var(--surface); border: 1px solid var(--border); border-ra
 @media (max-width: 780px) { .cols { grid-template-columns: 1fr; } }
 
 h3 {
-  margin: 0 0 10px; font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim);
+  margin: 0 0 10px; font-size: var(--t-xs); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .07em; color: var(--text-title);
 }
 
 code {
-  font-family: var(--mono); font-size: 11.5px;
+  font-family: var(--mono); font-size: var(--t-xs);
   background: var(--surface-2); padding: 1.5px 6px; border-radius: 4px; color: var(--text-dim);
 }
 
@@ -586,14 +705,14 @@ code {
 .dest-block .resolved { margin-left: 101px; }
 .dest-row label { font-size: 13px; color: var(--text-dim); }
 .dest-row input { font-family: var(--mono); font-size: 12.5px; padding: 6px 10px; }
-.resolved { font-size: 10.5px; color: var(--text-faint); }
+.resolved { font-size: var(--t-xs); color: var(--text-faint); }
 @media (max-width: 700px) {
   .dest-row { grid-template-columns: 1fr; gap: 4px; }
 }
 
 .dest-block { display: flex; flex-direction: column; gap: 5px; }
 .dest-block + .dest-block { margin-top: 4px; }
-.browse { font-size: 11.5px; padding: 4px 10px; white-space: nowrap; }
+.browse { font-size: var(--t-xs); padding: 4px 10px; white-space: nowrap; }
 
 .oversize-toggle { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
 .oversize { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; }
@@ -620,6 +739,18 @@ button.primary:disabled {
 }
 .ok-msg { font-size: 12px; color: var(--ok); }
 .err-msg { font-size: 12px; color: var(--err); }
+.attente-msg { font-size: 12px; color: var(--text-faint); }
+
+/* Le refus d'enregistrement, visible depuis tous les onglets. */
+.bandeau-erreur {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 9px 12px; border-radius: 8px;
+  font-size: var(--t-sm); line-height: 1.6; color: var(--err);
+  background: color-mix(in srgb, var(--err) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--err) 28%, transparent);
+}
+.bandeau-erreur p { margin: 0; flex: 1; }
+.bandeau-erreur button { flex: none; font-size: var(--t-xs); padding: 3px 10px; }
 
 /* --- Diagnostics --- */
 .checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
@@ -635,15 +766,15 @@ dd { margin: 0; display: flex; gap: 5px; flex-wrap: wrap; }
 
 .on { color: var(--ok); }
 .off { color: var(--text-faint); }
-.warn { color: var(--warn); font-size: 11.5px; }
+.warn { color: var(--warn); font-size: var(--t-xs); }
 
 .providers { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 11px; }
 .providers li { display: flex; align-items: center; gap: 10px; }
 .providers .name { font-size: 13px; display: flex; align-items: center; gap: 7px; }
-.providers .role { font-size: 11.5px; color: var(--text-faint); }
+.providers .role { font-size: var(--t-xs); color: var(--text-faint); }
 .providers .hint { margin-left: auto; }
 .req {
-  font-size: 9.5px; padding: 1px 5px; border-radius: 3px; letter-spacing: .04em;
+  font-size: var(--t-xs); padding: 1px 5px; border-radius: 3px; letter-spacing: .04em;
   color: var(--warn); border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent);
 }
 </style>

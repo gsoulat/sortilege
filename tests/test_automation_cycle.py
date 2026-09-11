@@ -128,7 +128,7 @@ async def test_par_defaut_aucun_fichier_n_est_deplace(env) -> None:
 
     assert report.applied == 0
     assert path.is_file(), "un fichier a bouge alors que l'application est desactivee"
-    assert "desactivee" in report.message
+    assert "désactivée" in report.message
 
 
 async def test_avec_apply_auto_seuls_les_plans_surs_bougent(env) -> None:

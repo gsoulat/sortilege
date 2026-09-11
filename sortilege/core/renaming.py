@@ -43,6 +43,17 @@ from .template import TemplateError, render, validate
 
 logger = logging.getLogger(__name__)
 
+RENAME_MARKER = "_mise_en_conformite"
+"""Cle posee dans ``Plan.values`` : ce plan vient de la remise en conformite.
+
+Une marque explicite plutot qu'une deduction. Un plan de renommage n'a ni
+fournisseur ni valeurs de gabarit — mais un livre non plus, ni un plan
+construit a la main, et tous deux doivent garder leur fiche. Le score et les
+motifs ne tiennent pas davantage : la confirmation dans la file de revue les
+reecrit. ``values`` est le seul champ que la confirmation ne touche pas et que
+l'instantane restitue apres un redemarrage. Aucun lecteur de ``values`` ne
+cherche cette cle : elle ne change rien au rendu ni aux fiches."""
+
 
 def rename_plans(
     files: list[ScannedFile],
@@ -96,7 +107,10 @@ def rename_plans(
                 title=scanned.parsed.title,
                 year=scanned.parsed.year,
                 manual=True,
-                # Les sous-titres suivent ; aucun reste a evacuer, ces fichiers
+                # Rien n'a ete identifie : aucune fiche ne doit etre deposee
+                # a l'application (voir RENAME_MARKER).
+                values={RENAME_MARKER: True},
+                # Sous-titres et fiche suivent ; aucun reste a evacuer, ces fichiers
                 # sont deja en bibliotheque et rien de la release ne les entoure.
                 companions=_companions_for(scanned.path, destination),
             )
@@ -106,18 +120,24 @@ def rename_plans(
 
 
 def _companions_for(source: Path, destination: Path) -> list[tuple[Path, Path]]:
-    """Sous-titres et pistes annexes, renommes avec la video.
+    """Sous-titres, pistes annexes et fiche, renommes avec la video.
 
     Les laisser derriere transformerait un renommage en perte : le fichier
     partirait sous son nouveau nom, et son sous-titre resterait accroche a
     l'ancien, invisible pour le lecteur.
+
+    La fiche au nom de la video (« Film.nfo ») suit aussi. Restee derriere,
+    elle ne decrirait plus aucun fichier, et l'identifiant qu'elle portait
+    serait perdu pour la video : ce mode n'interroge personne, il n'aurait
+    aucun moyen de le retrouver.
     """
-    pairs = []
-    for companion in find_companions(source, artwork=False):
-        target = destination.with_suffix("").with_name(
-            destination.stem + companion.name[len(source.stem) :]
-        )
-        pairs.append((companion, target))
+    pairs = [
+        (companion.path, companion.destination_for(destination))
+        for companion in find_companions(source, artwork=False)
+    ]
+    fiche = source.with_suffix(".nfo")
+    if fiche.is_file():
+        pairs.append((fiche, destination.with_suffix(".nfo")))
     return pairs
 
 

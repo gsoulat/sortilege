@@ -52,6 +52,12 @@ class FileProbe:
     height: int | None = None
     video_codec: str | None = None
     audio_languages: list[str] | None = None
+    subtitle_languages: list[str] | None = None
+    """Langues des pistes de sous-titres INCLUSES, hors pistes forcees.
+
+    Une piste forcee ne traduit que les dialogues en langue etrangere : la
+    compter ferait croire qu'un sous-titre complet est deja la, et le
+    spectateur n'en aurait jamais."""
 
     # Tags du conteneur
     container_title: str | None = None
@@ -171,6 +177,7 @@ def _fill_format(result: FileProbe, fmt: dict) -> None:
 
 def _fill_streams(result: FileProbe, streams: list[dict]) -> None:
     languages: list[str] = []
+    sous_titres: list[str] = []
     for stream in streams:
         kind = stream.get("codec_type")
         if kind == "video" and result.video_codec is None:
@@ -181,7 +188,14 @@ def _fill_streams(result: FileProbe, streams: list[dict]) -> None:
             lang = (stream.get("tags") or {}).get("language")
             if lang and lang not in languages:
                 languages.append(lang)
+        elif kind == "subtitle":
+            if (stream.get("disposition") or {}).get("forced"):
+                continue
+            lang = (stream.get("tags") or {}).get("language")
+            if lang and lang not in sous_titres:
+                sous_titres.append(lang)
     result.audio_languages = languages or None
+    result.subtitle_languages = sous_titres or None
 
 
 def read_nfo(media_path: Path) -> FileProbe:
@@ -191,8 +205,6 @@ def read_nfo(media_path: Path) -> FileProbe:
     « movie.nfo » / « tvshow.nfo » dans le dossier. Radarr et Sonarr ecrivent
     le premier.
     """
-    result = FileProbe()
-
     candidates = [
         media_path.with_suffix(".nfo"),
         media_path.parent / "movie.nfo",
@@ -200,12 +212,28 @@ def read_nfo(media_path: Path) -> FileProbe:
     ]
     nfo = next((p for p in candidates if p.is_file()), None)
     if nfo is None:
-        return result
+        return FileProbe()
+    return read_nfo_file(nfo)
 
+
+def read_nfo_file(nfo: Path) -> FileProbe:
+    """Lit UNE fiche designee par son chemin. Fiche absente ou illisible : sonde vide."""
     try:
         text = nfo.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return result
+        return FileProbe()
+    return parse_nfo(text)
+
+
+def parse_nfo(text: str) -> FileProbe:
+    """Ce qu'une fiche declare, depuis son contenu.
+
+    Separe de la lecture du disque pour que ``core/nfo`` puisse interroger la
+    fiche qu'il s'apprete a ecrire avec les memes regles que celle qui est deja
+    la : deux lectures differentes finiraient par ne pas voir les memes
+    identifiants.
+    """
+    result = FileProbe()
 
     # Un .nfo peut etre du XML Kodi ou un simple dump texte de release. On tente
     # le XML, et on retombe sur une recherche d'identifiant dans le texte brut.
@@ -244,6 +272,7 @@ def merge(media: FileProbe, nfo: FileProbe) -> FileProbe:
         height=media.height,
         video_codec=media.video_codec,
         audio_languages=media.audio_languages,
+        subtitle_languages=media.subtitle_languages,
         container_title=media.container_title,
         container_show=media.container_show,
         container_season=nfo.container_season or media.container_season,

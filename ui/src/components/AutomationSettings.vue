@@ -123,12 +123,20 @@ onUnmounted(() => clearInterval(poller))
       <p v-if="status.error" class="err">{{ status.error }}</p>
 
       <ul v-if="status.history?.length" class="history">
-        <li v-for="(h, i) in status.history.slice(0, 5)" :key="i">
+        <!-- Un cycle en échec se lisait comme les autres : même couleur, même
+             ligne, seul le message changeait. Il se voit désormais. -->
+        <li
+          v-for="(h, i) in status.history.slice(0, 5)"
+          :key="i"
+          :class="{ echec: h.failed }"
+        >
           <span class="time">{{ when(h.at) }}</span>
+          <span v-if="h.failed" class="statut-echec">Échec</span>
           <span class="msg">{{ h.message }}</span>
           <span v-if="h.detected" class="counts">{{ h.detected }} détecté(s)</span>
         </li>
       </ul>
+      <p v-else class="history-vide">Aucun passage depuis le démarrage du serveur.</p>
     </div>
   </section>
 </template>
@@ -139,11 +147,11 @@ section {
   border-radius: 10px; padding: 16px 18px;
 }
 h3 {
-  margin: 0 0 10px; font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim);
+  margin: 0 0 10px; font-size: var(--t-xs); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .07em; color: var(--text-title);
 }
 .note { margin: 0 0 14px; font-size: 12px; color: var(--text-faint); line-height: 1.6; max-width: 660px; }
-.hint { margin: 4px 0 0 26px; font-size: 11.5px; color: var(--text-faint); line-height: 1.5; max-width: 560px; }
+.hint { margin: 4px 0 0 26px; font-size: var(--t-xs); color: var(--text-faint); line-height: 1.5; max-width: 560px; }
 
 .switch { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
 .switch input { width: auto; }
@@ -161,14 +169,17 @@ h3 {
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); flex: none; }
 .dot.live { background: var(--ok); }
 .off { color: var(--text-faint); }
-.run { margin-left: auto; font-size: 11.5px; padding: 3px 10px; }
+.run { margin-left: auto; font-size: var(--t-xs); padding: 3px 10px; }
 
 .err { margin: 8px 0 0; font-size: 12px; color: var(--err); }
 
 .history { list-style: none; margin: 11px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-.history li { display: flex; gap: 10px; font-size: 11.5px; color: var(--text-faint); }
+.history li { display: flex; gap: 10px; font-size: var(--t-xs); color: var(--text-faint); }
 .history .time { font-family: var(--mono); flex: none; }
 .history .counts { margin-left: auto; }
+.history li.echec { color: var(--err); }
+.history .statut-echec { flex: none; font-weight: 600; }
+.history-vide { margin: 11px 0 0; font-size: var(--t-xs); color: var(--text-faint); }
 
 @media (max-width: 700px) {
   .row { grid-template-columns: 1fr; gap: 4px; }

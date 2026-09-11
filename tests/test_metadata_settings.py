@@ -23,6 +23,7 @@ from fastapi.testclient import TestClient
 from sortilege.api import deps
 from sortilege.api import settings as api_settings
 from sortilege.api.deps import get_store, tmdb_key, tmdb_language
+from sortilege.core import vpn
 from sortilege.core.preferences import PreferenceError
 from sortilege.main import app
 from sortilege.providers.base import Candidate, RateLimiter
@@ -278,3 +279,137 @@ def test_une_cle_refusee_est_rapportee_avec_son_motif(client: TestClient, monkey
 
     assert r.status_code == 502
     assert "401" in r.json()["detail"]
+
+
+# --- Sortie reseau des boutons d'essai ---------------------------------------
+
+
+@pytest.fixture
+def sortie_refusee(store, monkeypatch):
+    """Politique « exiger » et une mesure de sortie qui echoue.
+
+    La mesure est fabriquee : aucun de ces tests ne touche le reseau. Chaque
+    bouton recoit de quoi passer ses propres controles locaux, pour que le refus
+    observe soit bien celui de la sortie et pas une cle manquante.
+    """
+
+    async def _panne(*args, **kwargs):
+        return vpn.Measure(error="service d'echo injoignable")
+
+    monkeypatch.setattr(vpn, "measure_egress", _panne)
+    prefs = store.load()
+    prefs.vpn.policy = vpn.Policy.REQUIRE
+    prefs.metadata.tmdb_api_key = CLE_PREFS
+    prefs.subtitles.opensubtitles_api_key = "cle-opensubtitles-de-test"
+    prefs.notifications.webhook_url = "https://discord.com/api/webhooks/1/jeton-de-test"
+    prefs.ai.enabled = True
+    prefs.ai.api_key = "cle-ia-de-test"
+    prefs.media_server.base_url = "http://192.168.1.10:8096"
+    prefs.media_server.api_key = "cle-jellyfin-de-test"
+    store.save(prefs)
+    yield
+    vpn.reset_cache()
+
+
+def _interdit(nom: str, appels: list[str]):
+    def _appel(*args, **kwargs):
+        appels.append(nom)
+        raise AssertionError(f"{nom} appele malgre le refus de sortie")
+
+    return _appel
+
+
+def test_les_boutons_d_essai_sont_refuses_en_409_sous_exiger(
+    client: TestClient, sortie_refusee, monkeypatch
+) -> None:
+    """Un essai est un appel sortant comme un autre : sous « exiger », le laisser
+    passer ferait du bouton la fuite exacte que la politique doit empecher."""
+    appels: list[str] = []
+    monkeypatch.setattr(api_settings, "TMDBProvider", _interdit("tmdb", appels))
+    monkeypatch.setattr(api_settings, "send", _interdit("discord", appels))
+    monkeypatch.setattr(api_settings, "resolver_status", lambda *a, **k: (True, ""))
+    monkeypatch.setattr("sortilege.core.ai.build_resolver", _interdit("ia", appels))
+    monkeypatch.setattr(
+        "sortilege.providers.opensubtitles.OpenSubtitlesProvider",
+        _interdit("opensubtitles", appels),
+    )
+
+    for route in ("metadata/test", "subtitles/test", "ai/test", "notifications/test"):
+        r = client.post(f"/api/settings/{route}")
+        assert r.status_code == 409, f"{route} : {r.status_code} {r.text}"
+        assert "tunnel n'est pas confirmée" in r.json()["detail"], route
+    assert appels == []
+
+
+def test_le_serveur_multimedia_et_la_mesure_restent_permis_sous_exiger(
+    client: TestClient, sortie_refusee, monkeypatch
+) -> None:
+    """Deux exceptions, et seulement deux : le reseau local, et la mesure elle-meme."""
+
+    async def _rafraichi(*args, **kwargs):
+        return True
+
+    monkeypatch.setattr(api_settings, "refresh_library", _rafraichi)
+    r = client.post("/api/settings/media-server/test")
+    assert r.status_code == 200
+    assert r.json() == {"refreshed": True}
+
+    r = client.post("/api/settings/vpn/test")
+    assert r.status_code == 200
+    assert r.json()["verdict"] == "unavailable"
+
+
+def test_la_mesure_ne_propose_plus_d_adopter_l_adresse_comme_temoin(
+    client: TestClient, store, monkeypatch
+) -> None:
+    """Un verdict « inconnu » ne dit pas que la sortie est en clair : un VPN actif
+    chez un fournisseur non reconnu donne le meme. Proposer d'adopter l'adresse
+    mesuree enregistrait alors celle DU TUNNEL comme adresse de la maison, et une
+    sortie en clair etait ensuite dite protegee."""
+    prefs = store.load()
+    prefs.vpn.reference_ip = ""
+    store.save(prefs)
+
+    async def _inconnu(*args, **kwargs):
+        return vpn.Measure(
+            public_ip="203.0.113.7",
+            organization="Hebergeur Sans Nom SAS",
+            interfaces=("wg0",),
+            interfaces_readable=True,
+        )
+
+    monkeypatch.setattr(vpn, "measure_egress", _inconnu)
+    corps = client.post("/api/settings/vpn/test").json()
+    assert corps["verdict"] == "unknown"
+    assert "offer_as_reference" not in corps
+
+
+def test_l_essai_des_sous_titres_exige_la_cle_et_pas_seulement_le_jeton(
+    client: TestClient, store, monkeypatch
+) -> None:
+    prefs = store.load()
+    prefs.subtitles.opensubtitles_api_key = ""
+    prefs.subtitles.opensubtitles_token = "jeton-vip-de-test"
+    store.save(prefs)
+    appels: list[str] = []
+    monkeypatch.setattr(
+        "sortilege.providers.opensubtitles.OpenSubtitlesProvider",
+        _interdit("opensubtitles", appels),
+    )
+
+    r = client.post("/api/settings/subtitles/test")
+
+    assert r.status_code == 400
+    assert "jeton VIP seul ne suffit pas" in r.json()["detail"]
+    assert appels == []
+
+
+def test_changer_la_politique_vpn_oublie_la_derniere_mesure(
+    client: TestClient, monkeypatch
+) -> None:
+    """La mesure en cache a ete jugee sous l'ancien reglage : elle ne doit pas
+    survivre une minute de plus au changement."""
+    monkeypatch.setattr(vpn, "_cache", vpn.Measure(public_ip="203.0.113.7"))
+    r = client.put("/api/settings/preferences", json={"vpn": {"policy": "warn"}})
+    assert r.status_code == 200
+    assert vpn._cache is None

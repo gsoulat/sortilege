@@ -36,6 +36,9 @@ const props = defineProps({
 const data = ref(null)
 const error = ref(null)
 const message = ref(null)
+// Vrai quand le message rapporte un echec, un refus ou une indisponibilite :
+// sans cela un refus de sortie VPN s'affichait dans la couleur du succes.
+const messageAlerte = ref(false)
 const busy = ref(null)
 
 // Le retour d'une action sur doublons, par œuvre. Le bandeau du haut ne suffit
@@ -424,6 +427,7 @@ async function plan({ reset = false } = {}) {
       if (counts.value.unplanned >= restantAvant) {
         // Le lot n'a rien retiré de la file : insister ne ferait que répéter
         // le même appel. Mieux vaut s'arrêter et le dire.
+        messageAlerte.value = true
         message.value =
           `Identification interrompue : ${counts.value.unplanned} fichier(s) n'ont pas pu ` +
           `être planifiés. Le bandeau ci-dessus dit ce qui bloque.`
@@ -481,6 +485,9 @@ async function nettoyerVides() {
     }
     if (out.failed?.length) {
       message.value += ` ${out.failed.length} dossier(s) n'ont pas pu être supprimés.`
+      // Presque toujours un probleme de droits : cela doit se voir, sans pour
+      // autant faire passer le rangement lui-meme pour un echec.
+      messageAlerte.value = true
     }
   } catch {
     // Le rangement, lui, a réussi : un ménage raté ne doit pas le faire passer
@@ -496,6 +503,7 @@ async function apply(ids = null) {
     const out = await call('/api/review/apply', { plan_ids: ids, dry_run: blanc })
     if (out) {
       failures.value = out.results.filter((r) => !r.ok)
+      messageAlerte.value = Boolean(out.failed)
       message.value = blanc
         ? `Essai : ${out.applied} déplacement(s) possible(s), ${out.failed} bloqué(s).`
         : `${out.applied} fichier(s) rangé(s)` + (out.failed ? `, ${out.failed} en échec.` : '.')
@@ -505,6 +513,23 @@ async function apply(ids = null) {
       if (first) {
         const part = first.items.length === out.failed ? 'tous' : `dont ${first.items.length}`
         message.value += ` — ${part} : ${first.label.toLowerCase()}.`
+      }
+      // Ce que le rangement a fait À CÔTÉ des déplacements. Le serveur le
+      // rendait et l'écran le jetait : des sous-titres refusés faute de sortie
+      // VPN confirmée, ou des affiches non téléchargées, ne se voyaient nulle
+      // part. Les phrases du serveur sont reprises telles quelles.
+      if (!blanc) {
+        const st = out.subtitles ?? {}
+        if (st.written > 0) message.value += ` ${st.written} sous-titre(s) déposé(s).`
+        // Le motif du fournisseur voyage aussi après un succès partiel : un quota
+        // épuisé en cours de route explique pourquoi les derniers fichiers n'ont
+        // rien reçu. Ne le dire que faute de dépôt le taisait justement là.
+        if (st.refused) message.value += ` Sous-titres : ${st.refused}`
+        if (st.unavailable) message.value += ` Sous-titres : ${st.unavailable}`
+        if (out.artwork_refused) message.value += ` Affiches : ${out.artwork_refused}`
+        messageAlerte.value = Boolean(
+          out.failed || st.refused || st.unavailable || out.artwork_refused,
+        )
       }
       await load()
       // Ranger laisse derrière lui le dossier de la release, vide. Le proposer
@@ -648,6 +673,7 @@ async function evacuate(group, { mode = 'trash' } = {}) {
         evacuating.value = false
         evacProgress.value = null
         const verbe = mode === 'delete' ? 'supprimée(s)' : 'mise(s) en corbeille'
+        messageAlerte.value = Boolean(status.failed)
         message.value =
           `${status.evacuated} copie(s) ${verbe}` +
           (status.failed ? `, ${status.failed} refusée(s).` : '.')
@@ -672,6 +698,7 @@ async function choose(planId, candidate) {
     })
     if (out) {
       picking.value = null
+      messageAlerte.value = false
       message.value = `Identifié comme « ${candidate.title} »` +
         (out.corrected > 1 ? ` — ${out.corrected} épisodes corrigés.` : '.')
       await load()
@@ -717,6 +744,7 @@ async function pruneDuplicates() {
   try {
     const out = await call('/api/collection/duplicates/prune', { confirm: true })
     if (out) {
+      messageAlerte.value = Boolean(out.failed)
       message.value =
         `${out.deleted} exemplaire(s) en trop supprimé(s), ${gb(out.freed_bytes)} Go libérés` +
         (out.failed ? `, ${out.failed} en échec.` : '.')
@@ -768,6 +796,7 @@ async function confirm(plan, { ids = null } = {}) {
     // sait précisément ce qu'elle affiche.
     const out = await call(`/api/review/${plan.id}/confirm`, { plan_ids: ids })
     if (out) {
+      messageAlerte.value = false
       message.value =
         out.confirmed > 1
           ? `${out.confirmed} fichiers confirmés — prêts à ranger.`
@@ -849,6 +878,7 @@ async function remiseAZero() {
   try {
     const out = await call('/api/library/reset', { confirm: true })
     if (out) {
+      messageAlerte.value = false
       message.value =
         `Liste effacée : ${out.cleared_plans} plan(s) et ${out.cleared_thumbnails} aperçu(s). ` +
         'Lance « Analyser les sources » pour repartir.'
@@ -1051,7 +1081,7 @@ onUnmounted(() => {
     </section>
 
     <p v-if="error" class="err-msg">{{ error }}</p>
-    <p v-if="message" class="ok-msg">{{ message }}</p>
+    <p v-if="message" class="ok-msg" :class="{ alerte: messageAlerte }">{{ message }}</p>
 
     <!-- Pourquoi ça a échoué. En haut, pas enfoui : chercher la cause sous
          trois cents lignes revient à ne pas la donner. -->
@@ -1922,6 +1952,7 @@ button.small.danger:hover:not(:disabled) {
 
 .err-msg { margin: 0; font-size: 12.5px; color: var(--err); }
 .ok-msg { margin: 0; font-size: 12.5px; color: var(--ok); }
+.ok-msg.alerte { color: var(--warn); }
 
 .failures {
   background: var(--surface); border: 1px solid color-mix(in srgb, var(--err) 25%, var(--border));

@@ -1,205 +1,193 @@
 # Chantiers
 
-Liste de travail issue des audits du 10 septembre 2026 (ergonomie, concurrence,
-réglages) et des demandes formulées en cours de route.
+État au 11 septembre 2026. Dernière version publiée : **v0.50.0** ; le lot
+décrit ici deviendra la **v0.51.0**.
 
-Convention : `[ ]` à faire, `[~]` en cours, `[x]` fait et **vérifié dans le code**,
-pas seulement annoncé. Un chantier n'est coché que lorsqu'un contrôle indépendant
-l'a confirmé — l'audit no 2 a montré qu'un système écrit mais non branché se coche
-tout seul dans la tête de celui qui l'a écrit.
+Convention : `[ ]` à faire, `[~]` en cours, `[x]` fait **et vérifié dans le code**
+— pas seulement annoncé. Un audit a montré qu'un chantier se coche tout seul
+dans la tête de celui qui l'a écrit : une échelle typographique définie et jamais
+appliquée, un composant de confirmation que personne n'importait. Depuis, une
+case ne bouge qu'après un contrôle indépendant. Ce lot-ci a été relu par sept
+audits, deux contrôleurs et un recontrôle des derniers correctifs.
 
 ---
 
-## 1. Finir ce qui a été commencé
+## Fait, et vérifié
 
-La refonte avait posé les fondations sans câbler la moitié des pièces.
+### Le cœur
 
-- [x] **`ConfirmAction.vue` câblé sur les huit sites de confirmation** — quatre
-      dans `MaintenanceSettings`, quatre dans `WorkspaceView`. Les six mécanismes
-      maison ont disparu : `grep` n'en trouve plus une seule occurrence.
-- [x] **« Vider la corbeille » ne détruit plus au premier clic.** C'était
-      l'action la plus destructrice du produit, et la seule sans confirmation.
-- [ ] **Appliquer l'échelle typographique.** Deux fichiers migrés sur quinze.
-      Le reste garde ses tailles en dur, dont beaucoup sous le plancher de 12 px
-      — c'est là qu'est le vrai problème de lisibilité.
-- [~] **Redresser la hiérarchie des titres.** Fait dans `MaintenanceSettings`
-      (`--text-title`, plus clair que le corps) ; les autres écrans gardent des
-      titres plus ternes que le texte qu'ils coiffent.
+- [x] Analyse, identification, score de confiance à trois verdicts
+- [x] Journal d'annulation, avec **page dédiée** : chaque changement se défait
+      seul, ou par œuvre entière dès qu'elle compte deux entrées sur la page
+- [x] Les fiches et affiches déposées sont journalisées : annuler un rangement
+      les envoie en corbeille avec le reste
+- [x] « Valider définitivement » : referme le chantier et vide le journal
+- [x] Corbeille par défaut ; les suppressions définitives (doublons, évacuation,
+      coquilles en mode « supprimer », vidage) passent par une double
+      confirmation. Le nettoyage des coquilles ne touche plus la corbeille
+- [x] Doublons, stratégie de qualité par type, budget de poids par fichier
+- [x] Réencodage nocturne différé, **sur sa propre page**, avec vérification de
+      durée avant remplacement
+- [x] Livres EPUB et PDF, lecteur intégré (HTML nettoyé, cadre bac à sable)
+- [x] Lecteur vidéo avec remux MKV à la volée
+- [x] Résolveur IA en second recours, sept fournisseurs, avec bouton d'essai réel
+- [x] Notifications Discord : un cycle automatique ne parle que s'il a rangé,
+      les échecs ont leur canal, et **aucune adresse IP ne sort** — masquage au
+      point unique d'envoi, et rien ne part quand la sortie n'est pas confirmée
+- [x] Rafraîchissement Jellyfin, après un rangement manuel comme après un cycle
+      automatique
 
-## 2. La règle « aucun état muet », tenue jusqu'aux bords
+### Métadonnées locales et sous-titres
 
-- [x] **L'écran Réglages ne reste plus blanc si l'API tombe.** Trois états
-      explicites, et le code HTTP vérifié avant de lire le corps — une réponse
-      502 arrive en HTML et faisait lever `json()` dans le vide.
-- [x] **Trois pannes déguisées en chargement, éteintes.** Le journal et
-      l'onglet Réencodage dans la vue principale, plus la corbeille que le
-      contrôle a trouvée en plus. Un `catch` remettait la valeur à `null`, ce que
-      l'affichage lisait comme « pas encore arrivé ».
-- [~] **Les boutons désactivés qui ne disent pas pourquoi.** Une phrase
-      collective sous la barre d'actions, cinq raisons dans l'écran d'entretien,
-      une par filtre de type. Le contrôle en comptait 56 au total : il en reste,
-      surtout hors de la vue principale.
-- [x] **Contraste des boutons désactivés** : 3,23:1 → 5,21:1, mesuré, pas estimé.
-- [x] **Les filtres ne disparaissent plus à zéro.** Types d'œuvre et natures
-      d'opération restent visibles, grisés, avec leur raison — un compte à zéro
-      dit qu'on a mesuré, un bouton absent ne dit rien.
+- [x] Fiches `.nfo` et affiches déposées au rangement ; `metadata.opf` et
+      couverture pour les livres ; un dossier par livre dans le préréglage
+      Jellyfin. Tout est désactivé par défaut
+- [x] Rien n'est détruit : une fiche ou une affiche remplacée part en corbeille,
+      une fiche identifiée n'est jamais remplacée par une fiche sans identifiant,
+      et la fiche d'une autre œuvre est corrigée
+- [x] Sous-titres OpenSubtitles, par empreinte puis par titre ; langues
+      ordonnées ; « la piste audio suffit » ; au rangement manuel, au cycle
+      automatique, et sur toute la bibliothèque par lots qui reprennent là où ils
+      se sont arrêtés, y compris sur un quota épuisé en cours de route
 
-## 3. Accessibilité et écrans étroits
+### Sortie réseau
 
-- [x] **Accès clavier.** La jaquette sort du bouton parent (imbrication
-      invalide), Entrée et Espace activent les éléments cliquables, Échap ferme
-      le menu et rend le focus, `aria-expanded` et `aria-current` posés.
-- [x] **Règles responsive** dans la vue principale et l'en-tête, qui n'en
-      avaient aucune sur plus de deux mille lignes.
-- [x] **Cibles tactiles** portées à 32 px par le rembourrage.
-- [~] **Textes d'aide trop longs.** Le détail des diagnostics passe dans un
-      `<details>` replié et la note de version est supprimée. Les autres
-      paragraphes de plus de deux lignes restent.
+- [x] Contrôle de sortie VPN : libre, signaler, exiger. Sous « exiger », rien ne
+      sort sans sortie confirmée — identification, recherche et choix d'un
+      candidat, collections, affiches, sous-titres, Discord, boutons d'essai.
+      Exceptions assumées : le serveur multimédia (réseau local) et la
+      vérification elle-même. Le réglage ne monte aucun tunnel : il constate
 
-## 4. Séparer les deux métiers
+### Intégration et sauvegarde
 
-- [x] **« Ranger » et « Ma médiathèque » sont deux entrées de premier niveau.**
-      Deux gestes qui n'ont rien à voir : l'un a une fin, l'autre jamais.
-- [x] **Filtres « Livres » et « Animes »** ajoutés à la rangée de types.
+- [x] Clé d'API (`X-Api-Key`), écran **Réglages → Système → Intégration** : elle
+      vaut le mot de passe, se régénère en deux temps, n'est jamais mise en cache
+- [x] `download-complete` : un client de téléchargement déclenche un cycle
+- [x] Sauvegarde et restauration, écran **Réglages → Système → Sauvegarde** :
+      aucun secret dans l'archive, adresse de référence du VPN comprise ; filet
+      « avant-restauration » obligatoire ; restauration tout ou rien ; un secret
+      n'est dit manquant que si l'archive le portait
+- [x] Démarrage robuste : un fichier de réglages illisible n'est jamais écrasé
+      (copie `.illisible-*`), un fichier refusé ne bloque plus le démarrage
 
-## 5. La page de journal
+### L'interface
 
-- [x] **Page « Journal », au premier niveau.** Liste groupée par jour,
-      annulation par entrée et par œuvre, chemins abrégés sous leur racine
-      commune, filtres par nature avec compteurs, recherche par titre.
-- [x] Endpoint paginé — branché, et vu fonctionner sur un journal de 788 entrées.
-- [x] Format sur disque inchangé : le JSONL existant reste lisible.
+- [x] Quatre destinations : **Ranger · Ma médiathèque · Réencodage · Journal**
+- [x] La barre d'actions n'appartient qu'à « Ranger »
+- [x] L'identification s'enchaîne par lots de cent, avec un bouton d'arrêt
+- [x] Le scan enchaîne sur l'identification
+- [x] Ranger nettoie les dossiers de source qu'il vient de vider
+- [x] Bandeau de diagnostic : clé absente, racine non montée, aucun scan, sortie
+      non confirmée
+- [x] Provenance de chaque identification affichée sur la ligne
+- [x] `ConfirmAction` sur tous les sites de confirmation, aucun mécanisme maison
+- [x] Un refus d'enregistrement se voit dans tous les onglets des réglages
 
-C'est l'une des rares choses que Sortilège fait et qu'aucun concurrent ne fait :
-Radarr et Sonarr n'ont **aucune** fonction d'annulation — zéro occurrence de
-« undo » ou « revert » dans leur fichier de traduction complet. Une page qui la
-met en avant est un argument, pas seulement un confort.
+### Les réglages
 
-## 6. Réglages
+- [x] Clé TMDB dans l'interface, avec essai réel — plus besoin d'éditer le `.env`
+- [x] Langue des métadonnées, taille minimale d'un fichier, listes d'exclusion
+- [x] Gabarits enregistrables, jetons des livres inclus
 
-- [x] **La clé TMDB se règle dans l'interface.** Écriture seule, bouton d'essai
-      qui rapporte le motif exact du refus — le serveur sait dire « clé v3
-      attendue, jeton v4 reçu ». `TMDB_API_KEY` reste lue en repli, aucune
-      installation existante n'est cassée.
-- [x] **Liste d'exclusion** : dossiers et motifs, en plus des valeurs livrées.
-- [x] **Taille minimale d'un fichier vidéo**, réglable — elle écartait des
-      fichiers sans trace.
-- [x] **Langue des métadonnées**, réglable. `fr-FR` était codé en dur.
-- [x] `ai.batch_size` retiré : réglage fantôme qu'aucun écran n'exposait.
-- [x] Une seule source de vérité pour les deux seuils de décision.
-- [ ] **Plage horaire de la surveillance automatique.** Le réencodage a la
-      sienne, le scan n'a qu'un intervalle. Un scan coûte pourtant autant en E/S.
-- [ ] **Comportement en cas de conflit** : ne rien écraser (actuel), suffixer, ou
-      garder le meilleur selon la stratégie de qualité — qui sait déjà trancher.
+---
 
-## 7. Téléchargement
+## En cours
 
-Demandé le 10 septembre. À construire dans cet ordre, chaque étape étant utile
-seule.
+- [~] Trois états partout où l'écran peut être vide. Restent :
+      `AutomationSettings.vue` (statut en panne sans message),
+      `TemplateBuilder.vue` (`/api/tokens` sans filet), `SourcePicker.vue`
+      (`try/finally` sans `catch`)
+- [~] Contraste des boutons désactivés : 4,75:1 sur le fond du bouton. Restent
+      les filtres à zéro (2,30:1) et les cartes candidates (2,19:1), encore
+      désactivés par opacité
+- [~] Accès clavier en place ; les cibles de 32 px n'existent que sous 700 px de
+      large, sur cinq écrans
+- [~] Filtres visibles à zéro : Doublons, Surpoids et Hors stratégie gardent leur
+      raison dans un `title`, invisible au doigt et au clavier
 
-- [ ] **Intégration d'un client de téléchargement.** qBittorrent et Transmission
-      d'abord (API HTTP documentée, présents sur tous les NAS), puis SABnzbd. Le
-      client télécharge, Sortilège range à la fin — c'est le partage des rôles que
-      Radarr a établi et qui a fait ses preuves.
-- [ ] **Téléchargement direct** (HTTP) avec reprise sur coupure.
-- [ ] **Comptes de débrideurs** : 1fichier, Debrid-Link, AllDebrid, Real-Debrid.
-      Stockage des clés en écriture seule, comme les autres. Un lien d'hébergeur
-      est débridé puis téléchargé.
-- [ ] **Liaison VPN.** Vérifier avant de télécharger que le trafic sort bien par
-      l'interface attendue, et **refuser de démarrer sinon** — un interrupteur qui
-      ne vérifie rien donne une fausse sécurité, ce qui est pire que pas
-      d'interrupteur.
-- [ ] **File d'attente et reprise** : un téléchargement interrompu reprend, et la
-      file survit à un redémarrage.
+---
+
+## À faire
+
+### Téléchargement
+
+Sortilège émet déjà du trafic — les requêtes de métadonnées — et le contrôle de
+sortie le couvre. Il s'appliquera tel quel aux téléchargements le jour où ils
+existeront.
+
+- [ ] **Client de téléchargement** : qBittorrent et Transmission d'abord (API
+      HTTP documentée, présents sur tous les NAS), puis SABnzbd. Le client
+      télécharge, Sortilège range à la fin — le partage des rôles que Radarr a
+      établi et qui a fait ses preuves.
+- [ ] **Téléchargement direct** (HTTP), avec reprise sur coupure.
+- [ ] **Comptes de débrideurs** : 1fichier, Debrid-Link, AllDebrid,
+      Real-Debrid. Clés en écriture seule, comme les autres.
+- [ ] **File d'attente** qui survit à un redémarrage.
 
 Hors périmètre, décidé et assumé : **pas de moissonnage de liens sur des sites
-d'indexation de copies non autorisées.** L'application accepte des liens et des
-comptes que l'utilisateur lui donne ; elle ne va pas les chercher.
+d'indexation de copies non autorisées, ni de recherche sur des indexeurs.**
+L'application accepte les liens et les comptes qu'on lui donne ; elle ne va pas
+les chercher. C'est la limite entre un rangeur et un outil d'acquisition
+illicite.
 
-## 8. Interopérabilité — le plus gros manque face à la concurrence
+### Interopérabilité
 
-- [ ] **Écrire les `.nfo`.** Sur Jellyfin, les métadonnées locales sont *toujours*
-      lues et **ont priorité** sur TMDB — impossible à désactiver. Plex les lit
-      nativement depuis la 1.43.1. Un `.nfo` écrit par Sortilège ferait donc
-      autorité : chaque arbitrage rendu à la main cesserait d'être écrasé au
-      rafraîchissement suivant.
-- [ ] **Télécharger les affiches** à côté des médias. Radarr et Sonarr les
-      téléchargent aussi, mais dans leur dossier applicatif — pas dans la
-      bibliothèque, et leurs générateurs de métadonnées sont désactivés par défaut.
-- [ ] **Un dossier par livre**, et un `metadata.opf` à côté. Jellyfin demande
-      exactement ça pour les livres et ne lit pas de `.nfo` pour eux. C'est aussi
-      le format de Calibre, donc l'interopérabilité est déjà écrite ailleurs.
-- [ ] **Sous-titres** : brancher `filehash.py` — l'empreinte OpenSubtitles est déjà
-      écrite et testée dans le projet, sans un seul appelant — puis récupérer et
-      convertir en SubRip UTF-8.
-- [ ] **Une clé d'API** et une surface d'intégration. Rien ne peut déclencher
-      Sortilège de l'extérieur aujourd'hui : ni un script, ni un client de
-      téléchargement à la fin d'un transfert.
-- [ ] **Sauvegarde et restauration.** Gabarits, décisions mémorisées, journal : un
-      conteneur recréé sans son volume repart de zéro, y compris sur des centaines
-      d'arbitrages déjà rendus.
+- [ ] **`rename-library` ne couvre pas les livres.**
+- [ ] **Les sous-titres déposés ne sont pas journalisés** : une annulation les
+      laisse à côté du dossier d'origine.
 
-## 9. Les cinq idées
+### Ce qu'on ne copiera pas
 
-Toutes reposent sur des données déjà collectées puis jetées.
+Le téléchargement automatique depuis des indexeurs, les listes de suivi, les
+profils de qualité à l'acquisition. C'est le cœur de Radarr, c'est excellent, et
+l'imiter ferait de Sortilège une mauvaise version de Radarr — qui reste installé
+à côté. Sa place est en aval : ce que Radarr n'a pas su nommer, ce qui existait
+avant lui, ce qui pèse trop lourd.
+
+### Les cinq idées
+
+Toutes reposent sur des données déjà collectées puis jetées. Aucune ne demande
+une dépendance nouvelle.
 
 - [ ] **Détecteur de fichiers cassés.** Comparer la durée mesurée à la durée
-      officielle de l'œuvre. Manque le champ `runtime` de TMDB ; le reste existe.
-      Aucun concurrent ne regarde à l'intérieur du fichier.
+      officielle de l'œuvre. Manque le champ `runtime` de TMDB ; le reste
+      existe. Aucun concurrent ne regarde à l'intérieur du fichier.
 - [ ] **Bilan de bibliothèque.** Un rapport en une page : possédé, en double,
       cassé, manquant, mal nommé, récupérable. Les cinq calculs existent déjà,
-      dispersés dans trois écrans.
+      dispersés sur trois écrans.
 - [ ] **Poser une question à sa médiathèque.** Le modèle traduit la question en
       *filtre*, jamais en réponse — un modèle qui n'écrit pas la réponse ne peut
       pas l'inventer.
-- [ ] **Apprendre des arbitrages.** Repérer une régularité et la *proposer* comme
-      règle. Proposer, jamais appliquer.
+- [ ] **Apprendre des arbitrages.** Repérer une régularité et la *proposer*
+      comme règle. Proposer, jamais appliquer.
 - [ ] **Aperçu en arbre avant de valider.** Une série qui partirait dans deux
-      dossiers se voit d'un coup d'œil sur un arbre ; en liste de chemins, elle est
-      invisible.
+      dossiers se voit d'un coup d'œil sur un arbre ; en liste de chemins, elle
+      est invisible.
 
-## 10. Dette technique
+### Reliquats (chiffres mesurés le 11 septembre)
 
-- [ ] `core/filehash.py` : écrit, testé, zéro import. Le brancher (sous-titres) ou
-      l'assumer explicitement.
-- [ ] `rename-library` ne couvre pas les livres.
-- [ ] `api/review.py` fait plus de 1 100 lignes et sert de point d'entrée à
-      `automation.py` via une fonction privée.
-- [ ] Le dossier d'attente du réencodage n'est purgé que par une route que
-      l'interface n'appelle jamais.
-
----
-
-## Trouvé par le contrôle, pas encore corrigé
-
-Un agent indépendant a vérifié le travail des trois autres. Il a confirmé huit
-points, en a trouvé sept incomplets, et sept défauts que personne n'avait
-signalés. Ceux-ci restent :
-
-- [ ] Environ 48 boutons désactivés encore muets, surtout hors de la vue
-      principale.
-- [ ] Les paragraphes d'aide de plus de deux lignes, hors ceux déjà repliés.
-- [ ] `--t-xs` et `--t-sm` ne servent que dans deux fichiers : la migration
-      typographique reste à faire ailleurs.
-
-Corrigés dans la foulée : le type « livre » absent de la table des libellés du
-journal, et un échec réseau d'aperçu qui s'affichait en « fichier illisible » —
-accuser le fichier d'un défaut venu du réseau envoie chercher la panne au
-mauvais endroit.
-
-## Ce qui est fait
-
-Vérifié dans le code, pas seulement annoncé.
-
-- [x] Rangement, identification, score de confiance à trois verdicts
-- [x] Journal d'annulation avec annulation sélective par œuvre
-- [x] Corbeille — aucune suppression sans filet, sauf le cas listé en §1
-- [x] Doublons, stratégie de qualité par type, budget de poids
-- [x] Réencodage nocturne différé, vérification de durée avant remplacement
-- [x] Livres EPUB et PDF, lecteur intégré avec HTML nettoyé et bac à sable
-- [x] Lecteur vidéo avec remux MKV à la volée
-- [x] Notifications Discord — uniquement quand un fichier a été rangé
-- [x] Résolveur IA en second recours, sept fournisseurs, avec son état affiché
-- [x] Bandeau de diagnostic : clé absente, racine non montée, aucun scan
-- [x] Provenance de chaque identification affichée sur la ligne
-- [x] Gabarits enregistrables, avec les jetons des livres
+- [ ] Contrôles désactivés : 85 au total, 32 sans explication visible selon le
+      script de l'audit **avant tri manuel**, dont 13 dans `WorkspaceView`. Le tri
+      précédent en écartait une dizaine qui s'expliquent d'eux-mêmes (bornes de
+      pagination, flèches d'ordre, libellés « en cours »).
+- [ ] Migration typographique : 9 fichiers `.vue` migrés sur 27, 3 partiels
+      (`AutomationSettings`, `SettingsView`, `WorkspaceView`), 15 intacts ;
+      108 tailles sous 12 px, toutes dans `WorkspaceView` et les fichiers intacts.
+- [ ] Les paragraphes d'aide de plus de deux lignes.
+- [ ] Plage horaire de la surveillance automatique — le réencodage a la sienne.
+- [ ] Comportement en cas de conflit : ne rien écraser (actuel), suffixer, ou
+      garder le meilleur selon la stratégie de qualité, qui sait déjà trancher.
+- [ ] `api/review.py` fait 1 850 lignes, et `automation.py` y appelle quatre
+      fonctions privées.
+- [ ] Les conduites « garder l'ancien » et « remplacer » font désormais la même
+      chose (tout passe par la corbeille) : n'en garder qu'une.
+- [ ] La table des alias de langues est recopiée dans l'interface au lieu d'être
+      servie par le serveur.
+- [ ] Le lien de téléchargement de l'archive quitte l'application si la
+      construction échoue, et affiche du JSON brut.
+- [ ] Un volume de données **vierge** en lecture seule fait encore tomber le démarrage ;
+      un volume déjà initialisé démarre, et n'échoue qu'à la première écriture.
+- [ ] Tant que le fichier de réglages est illisible, la clé d'API vit en mémoire
+      et change à chaque redémarrage.
+- [ ] La construction des collections ne revérifie pas la sortie réseau pendant
+      un long enrichissement.

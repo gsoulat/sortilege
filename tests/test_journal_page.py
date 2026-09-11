@@ -229,7 +229,7 @@ def test_les_natures_sont_comptees_sur_tout_le_journal(
 
     natures = {n["code"]: n["count"] for n in page(client, operation="video")["operations"]}
 
-    assert natures == {"video": 1, "companion": 1, "trash": 0}
+    assert natures == {"video": 1, "companion": 1, "trash": 0, "metadata": 0}
 
 
 def test_une_nature_inconnue_est_refusee(client: TestClient) -> None:

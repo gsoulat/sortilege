@@ -133,13 +133,24 @@ PRESETS: dict[str, dict[str, str]] = {
         # {episode} est souvent absent tant que la correspondance saison/episode
         # n'a pas ete resolue chez le provider.
         "anime": "{title}/{title} - {absolute_episode:03}{? episode_title: - $}",
-        # Auteur, puis serie, puis titre. La serie produit un segment vide quand
-        # le livre n'en fait pas partie, et un segment vide disparait — le meme
-        # gabarit range donc un roman isole et une saga en sept tomes.
+        # Auteur, puis serie, puis UN DOSSIER PAR LIVRE. La serie produit un
+        # segment vide quand le livre n'en fait pas partie, et un segment vide
+        # disparait — le meme gabarit range donc un roman isole et une saga en
+        # sept tomes.
+        #
+        # Le dossier propre au livre n'est pas un niveau de rangement de plus :
+        # c'est ce que Jellyfin EXIGE. Il ne lit les metadonnees d'un livre que
+        # dans un « metadata.opf » depose a cote de lui, et deux livres dans le
+        # meme dossier n'auraient qu'un manifeste pour deux. Le dossier porte le
+        # meme nom que le fichier, comme pour un film, parce que Jellyfin nomme
+        # l'ouvrage d'apres le dossier autant que d'apres le fichier.
         #
         # Le tome est PREFIXE au titre plutot que suffixe : c'est ce qui fait
         # que l'ordre alphabetique d'un dossier suit l'ordre de lecture.
-        "book": "{author}/{series}/{? volume:02:$ - }{title}{? year: ($)}",
+        "book": (
+            "{author}/{series}/{? volume:02:$ - }{title}{? year: ($)}/"
+            "{? volume:02:$ - }{title}{? year: ($)}"
+        ),
     },
     "plex": {
         # Plex accepte un identifiant entre accolades dans le nom, mais les
@@ -152,6 +163,9 @@ PRESETS: dict[str, dict[str, str]] = {
             "{title} - s{season:02}e{episode:02}{? episode_end:02:-e$}"
         ),
         "anime": "{title}/{title} - {absolute_episode:03}",
+        # Plex ne lit pas les livres — la destination est ici pour qui range
+        # sa bibliotheque au format Plex et lit ses livres ailleurs. Pas de
+        # dossier par livre : rien ne l'attend.
         "book": "{author}/{series}/{? volume:02:$ - }{title}",
     },
 }

@@ -15,7 +15,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import Lock
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from ..config import get_settings
@@ -33,6 +33,7 @@ from ..core.journal import (
     work_key,
 )
 from ..core.mediaserver import refresh_library
+from ..core.nfo import LocalMetadataSettings, deposit, info_from_scan
 from ..core.pipeline import BATCH_SIZE, Pipeline
 from ..core.planner import Plan
 from ..core.probe import probe_media
@@ -43,8 +44,11 @@ from ..core.scoring import Decision, Policy
 from ..core.snapshot import PLANS_KEY, SnapshotError, plans_in, plans_out
 from ..core.store import Decision as RememberedDecision
 from ..core.store import title_key
+from ..core.subtitles import Outcome as SubtitleOutcome
+from ..core.vpn import Decision as EgressDecision
+from ..core.vpn import egress_allowed
 from ..providers.anilist import AniListProvider
-from ..providers.base import last_auth_error
+from ..providers.base import forget_auth_errors, last_auth_error
 from ..providers.tmdb import TMDBProvider
 from .deps import get_journal, get_memory, get_store, tmdb_key, tmdb_language
 from .library import last_scan
@@ -60,6 +64,13 @@ _lock = Lock()
 # FAIBLE vers les taches en cours. Sans cette variable, le ramasse-miettes
 # peut supprimer le calcul en plein vol, sans erreur ni trace.
 _plan_task: asyncio.Task | None = None
+
+# Lots de bibliotheque en cours. Un booleen suffit : la verification et la
+# pose se suivent sans ``await`` entre elles, aucune autre requete ne peut donc
+# s'intercaler sur la boucle d'evenements. Remis a faux dans un ``finally`` :
+# un lot qui plante ne doit pas bloquer tous les suivants.
+_sous_titres_en_cours = False
+_fiches_en_cours = False
 
 
 class ApplyRequest(BaseModel):
@@ -444,6 +455,20 @@ async def build_plans(limit: int = 100, reset: bool = False) -> dict[str, object
     store = get_store()
     prefs = store.load()
 
+    # AVANT le premier appel sortant, pas apres : identifier, c'est interroger
+    # TheMovieDB, AniList et parfois un fournisseur d'IA, et chacun de ces
+    # appels revele l'adresse publique de la maison ainsi que ce qu'on y range.
+    # Verifier une fois par lot et non par fichier — la mesure est mise en
+    # cache une minute cote noyau, mais un lot est l'unite qui a un debut.
+    sortie = await egress_allowed(prefs.vpn.policy, reference_ip=prefs.vpn.reference_ip or None)
+    if not sortie.allowed:
+        # 409 et non 400 : la demande est valable, c'est l'etat du moment qui
+        # s'y oppose. Elle redeviendra recevable sans que rien n'ait change
+        # dans ce que l'utilisateur a saisi.
+        raise HTTPException(status_code=409, detail=sortie.reason)
+    if sortie.warn:
+        logger.warning("sortie non confirmee : %s", sortie.reason)
+
     pipeline = Pipeline(
         tmdb=TMDBProvider(cle, prefs.metadata.language),
         anilist=AniListProvider(),
@@ -459,6 +484,11 @@ async def build_plans(limit: int = 100, reset: bool = False) -> dict[str, object
         memory=get_memory(),
         known_titles=_library_titles(),
     )
+
+    global _avertissement_sortie
+    # Conserve pour l'ecran : un mode « signaler » qui n'ecrirait que dans les
+    # logs du conteneur ne signalerait a personne.
+    _avertissement_sortie = sortie.reason if sortie.warn else ""
 
     if _job.running:
         # Ni erreur ni second calcul : on renvoie l'etat en cours. Cliquer deux
@@ -570,6 +600,10 @@ def _remaining() -> int:
     )
 
 
+_avertissement_sortie = ""
+"""Derniere sortie non confirmee, en mode « signaler ». Vide sinon."""
+
+
 def blockers() -> list[dict[str, str]]:
     """Ce qui empeche l'outil de produire quoi que ce soit, et ou le corriger.
 
@@ -624,6 +658,15 @@ def blockers() -> list[dict[str, str]]:
             }
         )
 
+    if _avertissement_sortie:
+        found.append(
+            {
+                "code": "vpn_unconfirmed",
+                "message": _avertissement_sortie,
+                "where": "Réglages → Système → Sortie réseau",
+            }
+        )
+
     if last_scan() is None:
         found.append(
             {
@@ -652,6 +695,33 @@ async def _tell_media_server() -> None:
         logger.exception("rafraichissement du serveur multimedia impossible")
 
 
+async def _sortie() -> EgressDecision:
+    """Decision de sortie reseau, selon les reglages DU MOMENT.
+
+    Les reglages sont relus a chaque appel : une politique durcie en cours de
+    lot doit s'appliquer au fichier suivant, pas au lot d'apres. La mesure,
+    elle, est mise en cache une minute cote noyau, ce qui rend l'appel peu
+    couteux meme repete fichier par fichier.
+    """
+    reglage = get_store().load().vpn
+    return await egress_allowed(reglage.policy, reference_ip=reglage.reference_ip or None)
+
+
+async def _exiger_sortie() -> None:
+    """Refuse en 409 quand la politique interdit d'emettre maintenant.
+
+    A appeler AVANT de construire un fournisseur : c'est le premier appel qui
+    revele l'adresse de la maison, pas le dernier. 409 et non 400, comme pour
+    le calcul des plans : la demande est valable, c'est l'etat du moment qui
+    s'y oppose.
+    """
+    sortie = await _sortie()
+    if not sortie.allowed:
+        raise HTTPException(status_code=409, detail=sortie.reason)
+    if sortie.warn:
+        logger.warning("sortie non confirmee : %s", sortie.reason)
+
+
 @router.post("/apply")
 async def apply(body: ApplyRequest) -> dict[str, object]:
     """Applique des plans. En mode simulation, verifie sans rien deplacer."""
@@ -671,9 +741,27 @@ async def apply(body: ApplyRequest) -> dict[str, object]:
     # meme volume que les fichiers evacues, sinon chaque reste serait recopie
     # au lieu d'etre deplace.
     trash_root = conf.library_root / TRASH_DIRNAME
-    racines = get_store().resolved_sources()
+    store = get_store()
+    racines = store.resolved_sources()
+    # Le depot de fiches passe par le meme thread que le deplacement : il
+    # ecrit a cote du fichier qui vient d'arriver, et rien d'autre n'a besoin
+    # de savoir qu'il a eu lieu.
+    fiches = store.load().local_metadata
 
     simulate = body.dry_run
+
+    # Les affiches sont le seul trafic sortant du rangement lui-meme : les
+    # fiches s'ecrivent sans reseau, les affiches se telechargent chez le
+    # fournisseur. Une sortie refusee les retire du lot SANS bloquer le
+    # deplacement, qui reste purement local — et la reponse dit pourquoi elles
+    # manquent, faute de quoi on croirait a un oubli du fournisseur.
+    affiches_refusees: str | None = None
+    if not simulate and fiches.artwork:
+        sortie = await _sortie()
+        if not sortie.allowed:
+            affiches_refusees = sortie.reason
+            fiches = replace(fiches, artwork=False)
+            logger.warning("affiches non telechargees : sortie reseau refusee")
 
     # Dans un THREAD, imperativement. apply_plan deplace des fichiers, parfois
     # des gigaoctets d'un volume a l'autre ; le laisser sur la boucle
@@ -692,6 +780,7 @@ async def apply(body: ApplyRequest) -> dict[str, object]:
                 # jusqu'a une source, sans quoi ranger le dernier fichier la
                 # ferait disparaitre.
                 source_roots=racines,
+                local_metadata=fiches,
             )
             for p in selected
         ]
@@ -699,19 +788,44 @@ async def apply(body: ApplyRequest) -> dict[str, object]:
 
     # Un plan applique quitte la file : le laisser inviterait a le rejouer, et
     # sa source n'existe plus.
+    sous_titres: dict[str, object] = {}
     if not simulate:
+        # APRES le deplacement, pas avant : un sous-titre se depose a cote du
+        # fichier, et l'ecrire a l'ancien emplacement le laisserait derriere.
+        par_plan = {p.id: p for p in selected}
+        ranges = [par_plan[r.plan_id] for r in results if r.ok and r.plan_id in par_plan]
+        sous_titres = await _recuperer_sous_titres(
+            [
+                (
+                    p.destination,
+                    p.title,
+                    p.year,
+                    p.values.get("season"),
+                    p.values.get("episode"),
+                )
+                for p in ranges
+                if p.destination is not None and p.kind in VIDEO_KINDS_ST
+            ]
+        )
+
         with _lock:
             for r in results:
                 if r.ok:
                     _plans.pop(r.plan_id, None)
         _persist_plans()
         if any(r.ok for r in results):
+            # Sans garde de sortie : le serveur multimedia est sur le reseau
+            # local, rien ne quitte la maison.
             await _tell_media_server()
 
-    return {
+    reponse: dict[str, object] = {
         "dry_run": simulate,
         "applied": sum(1 for r in results if r.ok),
         "failed": sum(1 for r in results if not r.ok),
+        # Vide quand la recherche est desactivee : l'ecran n'affiche alors
+        # rien, ce qui est juste — on ne rend pas compte d'un travail qu'on
+        # n'a pas demande.
+        "subtitles": sous_titres,
         "results": [
             {
                 "plan_id": r.plan_id,
@@ -725,6 +839,10 @@ async def apply(body: ApplyRequest) -> dict[str, object]:
             for r in results
         ],
     }
+    if affiches_refusees is not None:
+        # Absente sinon : l'interface teste la presence de la cle.
+        reponse["artwork_refused"] = affiches_refusees
+    return reponse
 
 
 class EvacuateRequest(BaseModel):
@@ -939,6 +1057,322 @@ def _kind_of(scanned) -> str:
     return {MediaKind.MOVIE: "movie", MediaKind.ANIME: "anime"}.get(scanned.parsed.kind, "episode")
 
 
+VIDEO_KINDS_ST = ("movie", "episode", "anime")
+"""Les types auxquels un sous-titre s'applique. Un livre n'en a pas."""
+
+
+async def _recuperer_sous_titres(
+    demandes: list[tuple[Path, str, int | None, int | None, int | None]],
+) -> dict[str, object]:
+    """Complete les langues manquantes des videos citees. Ne leve JAMAIS.
+
+    Le filet est ici et pas chez l'appelant : a cet instant les fichiers sont
+    deja ranges et journalises. Laisser une panne d'OpenSubtitles remonter
+    transformerait un rangement reussi en echec affiche, et l'utilisateur
+    irait chercher des films qui sont pourtant a leur place.
+
+    Chaque entree est ``(chemin, titre, annee, saison, episode)`` : le titre
+    vient du plan et non du nom de fichier, parce que c'est justement le nom
+    qu'on vient de corriger.
+    """
+    prefs = get_store().load()
+    reglages = prefs.subtitles
+    if not reglages.enabled or not demandes:
+        return {}
+
+    from ..core.subtitles import fetch_missing
+    from ..providers.opensubtitles import OpenSubtitlesProvider
+
+    fournisseur = OpenSubtitlesProvider(
+        reglages.opensubtitles_api_key, token=reglages.opensubtitles_token
+    )
+    # Le registre des refus est global au processus : un 401 d'un lot precedent
+    # y restait, et le test d'indisponibilite en tete de boucle arretait CE lot
+    # avant toute requete — meme la cle corrigee. On repart d'un etat vierge
+    # pour ce fournisseur seulement ; un nouveau refus s'y inscrira pendant le lot.
+    forget_auth_errors("opensubtitles")
+    traites = deposes = 0
+    try:
+        if not fournisseur.available:
+            return {"unavailable": fournisseur.unavailable_reason}
+        for chemin, titre, annee, saison, episode in demandes:
+            # Le fournisseur a pu tomber sur le fichier precedent : cle refusee
+            # ou quota epuise. Continuer compterait chaque video restante comme
+            # examinee sans rien lui deposer, et la pagination sauterait ces
+            # videos. On s'arrete ; le fichier fautif sera repris au lot suivant.
+            if fournisseur.unavailable_reason:
+                return {
+                    "unavailable": fournisseur.unavailable_reason,
+                    "examined": max(0, traites - 1),
+                    "written": deposes,
+                }
+            # Garde-fou revu AVANT CHAQUE fichier, pas une fois par lot :
+            # OpenSubtitles apprend en une requete ce qu'on possede, et un
+            # tunnel tombe au dixieme fichier laisserait sinon partir les
+            # suivants en clair. Les reglages sont relus a chaque tour et la
+            # mesure reste en cache une minute cote noyau : la question coute
+            # peu. Au premier refus on s'arrete, en disant ou.
+            sortie = await _sortie()
+            if not sortie.allowed:
+                logger.warning("sous-titres interrompus : sortie reseau refusee")
+                return {"refused": sortie.reason, "examined": traites, "written": deposes}
+            traites += 1
+            try:
+                # ffprobe lit le conteneur : hors de la boucle d'evenements,
+                # comme toute lecture de disque qui peut durer.
+                analyse = await asyncio.to_thread(probe_media, chemin)
+                ecrits = await fetch_missing(
+                    chemin,
+                    reglages.languages,
+                    fournisseur,
+                    title=titre,
+                    year=annee,
+                    season=saison,
+                    episode=episode,
+                    probe=analyse,
+                    overwrite=reglages.overwrite,
+                    audio_is_enough=reglages.audio_is_enough,
+                )
+            except Exception:
+                logger.exception("sous-titres non recuperes pour %s", chemin.name)
+                continue
+            deposes += sum(1 for e in ecrits if e.outcome is SubtitleOutcome.WRITTEN)
+    finally:
+        await fournisseur.aclose()
+
+    if fournisseur.unavailable_reason and traites:
+        # Meme cas, survenu sur le DERNIER fichier du lot : sans cela il serait
+        # compte comme examine et le lot suivant ne le reprendrait pas.
+        return {
+            "unavailable": fournisseur.unavailable_reason,
+            "examined": traites - 1,
+            "written": deposes,
+        }
+
+    # Aucun motif ici : toute panne du fournisseur sort par « unavailable »,
+    # avec le compte exact de ce qui a ete servi.
+    return {"examined": traites, "written": deposes}
+
+
+@router.post("/subtitles-library")
+async def subtitles_library(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(200, ge=1, le=500),
+) -> dict[str, object]:
+    """Complete les sous-titres manquants de la bibliotheque, par lot.
+
+    Par LOT et non d'un tenant, pour la meme raison que l'identification : une
+    bibliotheque de mille films represente mille interrogations d'un service
+    tiers qui limite son debit, soit plusieurs minutes pendant lesquelles rien
+    ne repond. La borne est apparente dans la reponse — un lot silencieux
+    laisserait croire que le travail est fini alors qu'il reste neuf cents
+    fichiers.
+
+    Le lot suivant se demande par ``offset``, que la reponse fournit dans
+    ``next_offset`` (nul quand il ne reste rien). Sans decalage, chaque appel
+    reprenait les memes premiers fichiers : la bibliotheque n'avancait jamais.
+    """
+    global _sous_titres_en_cours
+
+    conf = get_settings()
+    reglages = get_store().load().subtitles
+    if not reglages.enabled:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "La recherche de sous-titres est désactivée. Active-la dans Réglages "
+                "avant de lancer la bibliothèque entière."
+            ),
+        )
+
+    # Deux lots simultanes interrogeraient le service pour les memes fichiers
+    # et epuiseraient le quota deux fois plus vite, pour rien.
+    if _sous_titres_en_cours:
+        raise HTTPException(status_code=409, detail="Un lot de sous-titres est déjà en cours.")
+    _sous_titres_en_cours = True
+    try:
+        return await _lot_de_sous_titres(conf.library_root, offset, limit)
+    finally:
+        _sous_titres_en_cours = False
+
+
+async def _lot_de_sous_titres(racine: Path, offset: int, limit: int) -> dict[str, object]:
+    """Le travail de subtitles-library, une fois le lot autorise et reserve."""
+    from ..core.parser import MediaKind
+
+    result = await asyncio.to_thread(scan, [racine], deep=False, library_root=racine)
+    # Ordre STABLE, sinon le decalage n'a pas de sens : d'un appel a l'autre le
+    # parcours du disque peut rendre les fichiers dans un autre ordre, et "a
+    # partir du 200e" designerait d'autres fichiers - certains traites deux
+    # fois, d'autres jamais.
+    videos = sorted(
+        (f for f in result.files if f.parsed.kind is not MediaKind.BOOK), key=lambda f: f.path
+    )
+    lot = videos[offset : offset + limit]
+
+    rapport = await _recuperer_sous_titres(
+        [(f.path, f.parsed.title, f.parsed.year, f.parsed.season, f.parsed.episode) for f in lot]
+    )
+
+    total = len(videos)
+    traites = len(lot)
+    if "refused" in rapport or "unavailable" in rapport:
+        # Lot interrompu : reprendre apres sa fin sauterait en silence les
+        # fichiers qu'il n'a jamais examines. On reprend la ou il s'est arrete.
+        examines = rapport.get("examined", 0)
+        traites = examines if isinstance(examines, int) else 0
+    fin = min(total, offset + traites)
+    return {
+        **rapport,
+        "total": total,
+        "offset": offset,
+        "next_offset": fin if fin < total else None,
+        "remaining": total - fin,
+    }
+
+
+@router.post("/nfo-library")
+async def nfo_library() -> dict[str, object]:
+    """(Re)ecrit les fiches ``.nfo`` de toute la bibliotheque.
+
+    Le pendant differe de « rename-library » : celui-la propose des plans que
+    l'humain valide, celui-ci ecrit tout de suite. La difference est assumee
+    parce que les risques n'ont rien de commun — un renommage de masse deplace
+    des fichiers, alors qu'une fiche se pose a cote sans y toucher, et se
+    supprime d'un « rm *.nfo ».
+
+    Les memes precautions que pour le renommage de masse s'appliquent au reste :
+    **aucune identification n'est refaite.** On repart de ce que chaque fichier
+    dit deja de lui-meme, et la fiche produite est donc pauvre — un titre, une
+    annee, une numerotation, les identifiants qu'un ``.nfo`` anterieur portait.
+    C'est precisement ce qu'il faut : elle epingle l'identite et laisse le
+    serveur completer. Reinterroger un fournisseur ferait courir le risque
+    qu'une mauvaise reponse ecrase, AVEC AUTORITE, une bibliotheque correcte.
+
+    Aucune affiche n'est telechargee ici : rien dans un fichier deja range ne
+    porte d'URL, et il faudrait justement reinterroger un fournisseur.
+    """
+    global _fiches_en_cours
+
+    conf = get_settings()
+    reglages = get_store().load().local_metadata
+
+    if not (reglages.nfo or reglages.opf):
+        # Le reglage EST le consentement a ecrire dans la bibliotheque. Une
+        # route qui l'ignorerait en ferait une case decorative.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "L'écriture des métadonnées locales est désactivée. Active les fiches "
+                ".nfo, les manifestes de livres, ou les deux dans Réglages avant de "
+                "lancer une régénération sur toute la bibliothèque."
+            ),
+        )
+    # Un second clic pendant l'ecriture relancerait les memes ecritures sur les
+    # memes fichiers, en concurrence : chaque fiche serait ecrite deux fois, et
+    # la corbeille recevrait deux copies de la version remplacee.
+    if _fiches_en_cours:
+        raise HTTPException(
+            status_code=409,
+            detail="Une écriture des métadonnées locales est déjà en cours.",
+        )
+    _fiches_en_cours = True
+    try:
+        return await _regenerer_fiches(conf.library_root, reglages)
+    finally:
+        _fiches_en_cours = False
+
+
+async def _regenerer_fiches(racine: Path, reglages: LocalMetadataSettings) -> dict[str, object]:
+    """Le travail de nfo-library, une fois le lot autorise et reserve."""
+    from ..core.parser import MediaKind
+
+    result = await asyncio.to_thread(scan, [racine], deep=False, library_root=racine)
+    # Les deux familles sont traitees SEPAREMENT, et c'est le fond du sujet :
+    # Jellyfin ne lit aucun .nfo pour un livre, il attend un « metadata.opf »
+    # dans le dossier du livre. Ecrire une fiche XML a cote d'un EPUB
+    # produirait un fichier que personne ne lit jamais.
+    fichiers = [f for f in result.files if f.parsed.kind is not MediaKind.BOOK]
+    livres = [f for f in result.files if f.parsed.kind is MediaKind.BOOK]
+
+    if not reglages.nfo:
+        fichiers = []
+    if not reglages.opf:
+        livres = []
+
+    # Sans affiche a telecharger, ce lot n'est plus que des ecritures locales —
+    # mais il y en a une par fichier, et une bibliotheque en compte des
+    # milliers. Le thread evite de figer l'application pendant ce temps.
+    # La corbeille de la bibliotheque, comme pour le rangement : une fiche
+    # remplacee y part au lieu d'etre ecrasee, et se recupere si "remplacer" a
+    # ete choisi trop vite.
+    corbeille = racine / TRASH_DIRNAME
+
+    def travail() -> tuple[int, int, int, list[str]]:
+        from ..core.ebook import from_name
+        from ..core.ebook import read as read_book
+        from ..core.nfo import OnExisting, Outcome
+        from ..core.opf import deposit as deposer_livre
+
+        ecrites = ignorees = sans_fiche = 0
+        erreurs: list[str] = []
+        for scanned in fichiers:
+            depot = deposit(
+                scanned.path,
+                _kind_of(scanned),
+                info_from_scan(scanned),
+                replace(reglages, artwork=False),
+                trash_root=corbeille,
+            )
+            ecrites += len(depot.written)
+            ignorees += len(depot.skipped)
+            # Episodes sans numerotation lue : pas de fiche d'episode, par
+            # choix. Les compter evite qu'on les croie oublies.
+            sans_fiche += len(depot.unnumbered)
+            erreurs.extend(depot.errors)
+
+        conduite = OnExisting(reglages.on_existing)
+        for livre in livres:
+            try:
+                meta = read_book(livre.path)
+                if not meta.read or not (meta.title.strip() or meta.authors):
+                    meta = from_name(livre.path)
+                depot_livre = deposer_livre(
+                    livre.path, meta, on_existing=conduite, trash_root=corbeille
+                )
+            except Exception as exc:
+                erreurs.append(f"{livre.path.name} : {exc}")
+                continue
+            for issue in (depot_livre.manifest, depot_livre.cover):
+                # « remplace » et « sauvegarde » sont des ecritures : les
+                # compter comme ignorees ferait dire au compte rendu que rien
+                # n'a bouge alors que la bibliotheque vient de changer.
+                if issue is None:
+                    continue
+                if issue is Outcome.SKIPPED:
+                    ignorees += 1
+                else:
+                    ecrites += 1
+        return ecrites, ignorees, sans_fiche, erreurs
+
+    ecrites, ignorees, sans_fiche, erreurs = await asyncio.to_thread(travail)
+
+    return {
+        "examined": len(fichiers) + len(livres),
+        "books": len(livres),
+        "written": ecrites,
+        "skipped": ignorees,
+        # Ni ecrits ni ignores : des episodes dont la numerotation n'a pas ete
+        # lue. Sans ce compte, les nombres ne tomberaient pas juste et rien ne
+        # dirait pourquoi.
+        "without_sheet": sans_fiche,
+        "failed": len(erreurs),
+        # Bornees : trois cents dossiers en lecture seule produiraient trois
+        # cents fois la meme ligne, et la reponse cesserait d'etre lisible.
+        "errors": erreurs[:20],
+    }
+
+
 class ConfirmRequest(BaseModel):
     whole_series: bool = False
     """Confirme aussi les autres episodes de la meme oeuvre.
@@ -1039,12 +1473,12 @@ async def search_candidates(plan_id: str, q: str, kind: str = "") -> dict[str, o
     """
     requete = q.strip()
     if len(requete) < 2:
-        raise HTTPException(status_code=400, detail="Cherche au moins deux caracteres.")
+        raise HTTPException(status_code=400, detail="Cherche au moins deux caractères.")
 
     with _lock:
         plan = _plans.get(plan_id)
     if plan is None:
-        raise HTTPException(status_code=404, detail="Plan inconnu ou deja applique.")
+        raise HTTPException(status_code=404, detail="Plan inconnu ou déjà appliqué.")
 
     cle = tmdb_key()
     if not cle:
@@ -1053,8 +1487,8 @@ async def search_candidates(plan_id: str, q: str, kind: str = "") -> dict[str, o
         # cherche l'erreur du cote de sa requete.
         raise HTTPException(
             status_code=503,
-            detail="Aucune cle TheMovieDB : la recherche ne peut rien interroger. "
-            "Renseigne-la dans Reglages → Metadonnees.",
+            detail="Aucune clé TheMovieDB : la recherche ne peut rien interroger. "
+            "Renseigne-la dans Réglages → Métadonnées.",
         )
 
     # Le type CHERCHE peut differer de celui du plan, et c'est souvent la
@@ -1063,6 +1497,12 @@ async def search_candidates(plan_id: str, q: str, kind: str = "") -> dict[str, o
     # avait donc une impasse — l'utilisateur voyait que c'etait faux, cherchait
     # a corriger, et ne trouvait rien.
     cherche = kind if kind in ("movie", "episode", "anime") else plan.kind
+
+    # AVANT de construire les fournisseurs : la premiere requete de recherche
+    # revele deja l'adresse de la maison et le titre cherche. Apres les
+    # verifications locales en revanche : un plan inconnu ou une cle absente
+    # se disent sans rien emettre, et plus justement.
+    await _exiger_sortie()
 
     tmdb = TMDBProvider(cle, tmdb_language())
     anilist = AniListProvider()
@@ -1135,7 +1575,7 @@ async def choose(plan_id: str, body: ChooseRequest) -> dict[str, object]:
     with _lock:
         plan = _plans.get(plan_id)
     if plan is None:
-        raise HTTPException(status_code=404, detail="Plan inconnu ou deja applique.")
+        raise HTTPException(status_code=404, detail="Plan inconnu ou déjà appliqué.")
 
     chosen = next(
         (
@@ -1146,7 +1586,7 @@ async def choose(plan_id: str, body: ChooseRequest) -> dict[str, object]:
         None,
     )
     if chosen is None:
-        raise HTTPException(status_code=400, detail="Ce candidat n'est pas propose pour ce plan.")
+        raise HTTPException(status_code=400, detail="Ce candidat n'est pas proposé pour ce plan.")
 
     scan = last_scan()
     by_path = {f.path: f for f in (scan.files if scan else [])}
@@ -1168,6 +1608,10 @@ async def choose(plan_id: str, body: ChooseRequest) -> dict[str, object]:
             ]
         else:
             targets = [plan]
+
+    # Avant le pipeline, qui construit les fournisseurs et reinterroge
+    # TheMovieDB pour chaque episode : c'est la que la maison se revele.
+    await _exiger_sortie()
 
     store = get_store()
     prefs = store.load()
@@ -1254,6 +1698,9 @@ OPERATIONS = {
     "video": "Rangement",
     "companion": "Compagnon",
     "trash": "Corbeille",
+    # Fiche .nfo, affiche, manifeste ou couverture deposes a cote d'un media.
+    # Sans libelle, l'entree s'affichait sous son code brut.
+    "metadata": "Fiche ou affiche",
 }
 """Nature d'une operation journalisee, du code stable vers son libelle.
 

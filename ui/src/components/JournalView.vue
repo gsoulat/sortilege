@@ -265,6 +265,16 @@ const jours = computed(() => {
 
 function detailEntree(e) {
   const fichier = nomFichier(e.destination)
+  // Une fiche ou une affiche deposee n'a pas d'origine : elle n'a jamais ete
+  // ailleurs. L'annuler ne la « ramene » nulle part, elle part en corbeille.
+  if (e.operation === 'metadata') {
+    return (
+      `« ${fichier} » a été déposé à côté du média ; l'annuler l'envoie dans la corbeille de ` +
+      "Sortilège, d'où il se récupère. L'annulation porte sur le plan entier : la vidéo, ses " +
+      'compagnons et ses fiches repartent ensemble — sauf une fiche commune (tvshow.nfo, ' +
+      "poster.jpg…) qui sert encore d'autres fichiers de l'œuvre : elle reste en place."
+    )
+  }
   const retour = dossierDe(e.source)
   const depart =
     e.operation === 'trash'
@@ -281,7 +291,9 @@ function detailOeuvre(e) {
   return (
     `Toutes les opérations enregistrées pour « ${e.title} » sont défaites, ` +
     'y compris celles qui ne sont pas affichées sur cette page. ' +
-    "Chaque fichier retourne à son emplacement d'origine ; rien n'est supprimé."
+    "Chaque fichier retourne à son emplacement d'origine, sauf les fiches et affiches " +
+    "déposées à côté du média : elles n'en ont pas, et partent dans la corbeille de Sortilège, " +
+    "d'où elles se récupèrent. Rien n'est supprimé."
   )
 }
 
@@ -523,7 +535,11 @@ onMounted(charger)
                 </div>
 
                 <div class="chemins">
-                  <div class="chemin">
+                  <div v-if="e.operation === 'metadata'" class="chemin">
+                    <span class="sens">dépôt</span>
+                    <span class="kind">écrit à côté du média, sans origine</span>
+                  </div>
+                  <div v-else class="chemin">
                     <span class="sens">de</span>
                     <code>{{ relatif(e.source, racineDeparts) }}</code>
                   </div>
@@ -537,7 +553,7 @@ onMounted(charger)
               <div class="actions">
                 <ConfirmAction
                   label="Annuler"
-                  confirm-label="Confirmer le retour"
+                  :confirm-label="e.operation === 'metadata' ? `Confirmer l'annulation` : 'Confirmer le retour'"
                   :detail="detailEntree(e)"
                   :busy="enCours === e.cleRendu"
                   :disabled="Boolean(raisonIndispo) && enCours !== e.cleRendu"
@@ -631,7 +647,7 @@ onMounted(charger)
   display: inline-flex; align-items: center; gap: 7px;
 }
 .natures button.actif { border-color: var(--accent); color: var(--text); background: var(--surface); }
-.compte { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.compte { font-family: var(--mono); font-size: var(--t-xs); color: var(--text-faint); }
 .natures button.actif .compte { color: var(--accent); }
 
 .champ { display: flex; align-items: center; gap: 7px; font-size: var(--t-xs); color: var(--text-dim); }
@@ -671,12 +687,12 @@ button.petit { font-size: var(--t-xs); padding: 5px 11px; color: var(--text-dim)
 
 .jour { display: flex; flex-direction: column; gap: 8px; }
 .jour h3 {
-  margin: 0; font-size: 11px; font-weight: 600; text-transform: uppercase;
-  letter-spacing: .07em; color: var(--text-dim);
+  margin: 0; font-size: var(--t-xs); font-weight: 600; text-transform: uppercase;
+  letter-spacing: .07em; color: var(--text-title);
   display: flex; align-items: baseline; gap: 10px;
   padding-bottom: 6px; border-bottom: 1px solid var(--border);
 }
-.combien { font-family: var(--mono); font-size: 11px; color: var(--text-faint); text-transform: none; letter-spacing: 0; }
+.combien { font-family: var(--mono); font-size: var(--t-xs); color: var(--text-faint); text-transform: none; letter-spacing: 0; }
 
 .entrees { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .entree {
@@ -694,7 +710,7 @@ button.petit { font-size: var(--t-xs); padding: 5px 11px; color: var(--text-dim)
    milieu de quarante « Rangement » doit sauter aux yeux, c'est la seule ligne
    dont l'annulation change autre chose qu'un classement. */
 .nature {
-  font-size: 11px; padding: 2px 8px; border-radius: 20px;
+  font-size: var(--t-xs); padding: 2px 8px; border-radius: 20px;
   border: 1px solid var(--border); color: var(--text-dim);
 }
 .nature.video { color: var(--accent); border-color: var(--accent-dim); }
@@ -702,12 +718,12 @@ button.petit { font-size: var(--t-xs); padding: 5px 11px; color: var(--text-dim)
   color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent);
   background: color-mix(in srgb, var(--warn) 9%, transparent);
 }
-.kind { font-size: 11px; color: var(--text-faint); }
+.kind { font-size: var(--t-xs); color: var(--text-faint); }
 
 .chemins { display: flex; flex-direction: column; gap: 3px; }
 .chemin { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .sens {
-  font-size: 11px; color: var(--text-faint); flex: 0 0 30px; text-align: right;
+  font-size: var(--t-xs); color: var(--text-faint); flex: 0 0 30px; text-align: right;
 }
 .sens.vers { color: var(--text-dim); }
 .chemin code {
@@ -718,14 +734,14 @@ button.petit { font-size: var(--t-xs); padding: 5px 11px; color: var(--text-dim)
 }
 
 .actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex-shrink: 0; }
-.portee { font-size: 11px; color: var(--text-faint); text-align: right; }
+.portee { font-size: var(--t-xs); color: var(--text-faint); text-align: right; }
 
 /* --- Pagination ----------------------------------------------------------- */
 
 .pagination { display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap; padding-top: 4px; }
 .pagination button { font-size: var(--t-xs); padding: 6px 13px; min-height: 32px; }
 .position { font-size: var(--t-xs); color: var(--text-dim); }
-.bord { margin: 0; text-align: center; font-size: 11px; color: var(--text-faint); }
+.bord { margin: 0; text-align: center; font-size: var(--t-xs); color: var(--text-faint); }
 
 /* --- Écrans étroits ------------------------------------------------------- *
  * 700 px : la largeur à laquelle une ligne d'entrée déborde, pas celle d'une

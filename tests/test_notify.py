@@ -21,10 +21,12 @@ import httpx
 import pytest
 
 from sortilege.core.notify import (
+    ADRESSE_MASQUEE,
     Notification,
     WebhookError,
     cycle_notification,
     failure_notification,
+    masquer_adresses,
     send,
     validate_webhook,
 )
@@ -116,7 +118,7 @@ def test_un_rangement_est_annonce() -> None:
     notif = cycle_notification(Report(detected=4, applied=4, message="4 range(s)"))
     assert notif is not None
     assert notif.level == "ok"
-    assert ("Ranges", "4") in notif.fields
+    assert ("Rangés", "4") in notif.fields
 
 
 def test_une_file_en_attente_attire_l_oeil() -> None:
@@ -124,7 +126,7 @@ def test_une_file_en_attente_attire_l_oeil() -> None:
     seulement dans un message que quelque chose d'autre justifiait deja."""
     notif = cycle_notification(Report(detected=9, applied=2, queued=7))
     assert notif.level == "warn"
-    assert ("A arbitrer", "7") in notif.fields
+    assert ("À arbitrer", "7") in notif.fields
 
 
 def test_un_echec_est_de_niveau_erreur() -> None:
@@ -262,3 +264,44 @@ def test_une_url_gardee_desactivee_n_est_pas_validee(tmp_path) -> None:
     )
     store.save(prefs)
     assert store.load().notifications.enabled is False
+
+
+# --- Rien de ce qui part ne dit ou est la maison ------------------------------
+
+
+@pytest.mark.parametrize(
+    "adresse", ["88.120.4.17", "192.168.10.10", "2001:db8::1", "fe80::1ff:fe23:4567:890a"]
+)
+def test_une_adresse_ip_est_masquee(adresse: str) -> None:
+    texte = masquer_adresses(f"Adresse publique mesurée ({adresse}).")
+    assert adresse not in texte
+    assert ADRESSE_MASQUEE in texte
+
+
+@pytest.mark.parametrize("texte", ["Cycle lancé à 12:30:45", "version 1.2.3.4.5", "Data::Dumper"])
+def test_ce_qui_ressemble_a_une_adresse_reste_intact(texte: str) -> None:
+    """Masquer une heure ou une version rendrait le message illisible sans rien
+    proteger."""
+    assert masquer_adresses(texte) == texte
+
+
+def test_le_message_discord_masque_titre_corps_et_champs() -> None:
+    """Le masquage a lieu a l'assemblage : aucun appelant n'a a y penser."""
+    embed = Notification(
+        title="Sortie 88.120.4.17",
+        body="Adresse 88.120.4.17, puis 2001:db8::1",
+        fields=(("88.120.4.17", "2001:db8::1"),),
+    ).payload()["embeds"][0]
+
+    rendu = repr(embed)
+    assert "88.120.4.17" not in rendu
+    assert "2001:db8::1" not in rendu
+    assert embed["title"] == f"Sortie {ADRESSE_MASQUEE}"
+
+
+def test_un_echec_tronque_ne_laisse_aucun_morceau_d_adresse() -> None:
+    """Tronquer avant de masquer couperait l'adresse en trois octets que plus
+    rien ne reconnaitrait."""
+    notif = failure_notification("x" * 1490 + " 88.120.4.17")
+    assert "88.120" not in notif.body
+    assert "88.120" not in repr(notif.payload())

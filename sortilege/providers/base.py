@@ -54,13 +54,19 @@ def last_auth_error(provider_name: str) -> str:
     return _AUTH_ERRORS.get(provider_name, "")
 
 
-def forget_auth_errors() -> None:
-    """Efface la memoire des refus.
+def forget_auth_errors(provider_name: str | None = None) -> None:
+    """Efface la memoire des refus — d'un seul fournisseur, ou de tous.
 
     Le registre est global au processus : sans remise a zero, un test qui
-    simule un 401 contaminerait ceux qui suivent.
+    simule un 401 contaminerait ceux qui suivent. Effacer un seul fournisseur
+    sert quand on s'apprete a le reinterroger : un refus d'hier ne doit pas
+    empecher d'essayer une cle corrigee, mais le refus de TheMovieDB, lui,
+    doit rester affiche.
     """
-    _AUTH_ERRORS.clear()
+    if provider_name is None:
+        _AUTH_ERRORS.clear()
+    else:
+        _AUTH_ERRORS.pop(provider_name, None)
 
 
 @dataclass(slots=True)
@@ -86,6 +92,11 @@ class Candidate:
     Entre deux oeuvres homonymes — « Dark Matter » 2015 et 2024 — une affiche
     tranche en une seconde la ou une date demande de reflechir. C'est le seul
     endroit ou une image a une valeur fonctionnelle et pas decorative."""
+
+    backdrop_url: str = ""
+    """Image de fond, large et sans texte. Aucun role dans l'arbitrage — elle
+    sert a deposer « fanart.jpg » dans la bibliotheque, ou c'est elle que
+    Jellyfin et Plex affichent derriere une fiche."""
 
     overview: str = ""
     """Resume court. Departage ce que l'affiche ne suffit pas a distinguer."""

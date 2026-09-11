@@ -22,7 +22,12 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..config import get_settings
-from ..core.companions import find_empty_dirs, find_orphan_dirs, trash_destination, trash_root_for
+from ..core.companions import (
+    find_empty_dirs,
+    find_orphan_dirs,
+    free_trash_destination,
+    trash_root_for,
+)
 from ..core.journal import _move, prune_empty_dirs
 from ..core.scanner import ScanResult, scan
 from ..core.snapshot import SCAN_KEY, SnapshotError, scan_in, scan_out
@@ -179,7 +184,6 @@ def prune_orphan_dirs(body: OrphanPruneRequest) -> dict[str, object]:
     conf = get_settings()
     store = get_store()
     racines = store.resolved_sources()
-    lot = time.strftime("%Y-%m-%d")
 
     dossiers, fichiers, echecs = 0, 0, []
     for orphelin in find_orphan_dirs(racines):
@@ -190,9 +194,9 @@ def prune_orphan_dirs(body: OrphanPruneRequest) -> dict[str, object]:
                     fichier.unlink()
                 else:
                     corbeille = trash_root_for(fichier, conf.library_root, racines)
-                    cible = trash_destination(corbeille, lot, fichier)
-                    if cible.exists():
-                        cible.unlink()
+                    # Un nom LIBRE : un homonyme deja mis a l'abri aujourd'hui
+                    # etait supprime pour faire place au nouveau venu.
+                    cible = free_trash_destination(corbeille, fichier)
                     _move(fichier, cible)
                 fichiers += 1
             except OSError as exc:

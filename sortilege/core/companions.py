@@ -15,11 +15,14 @@ Deux notions distinctes, deliberement separees :
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import logging
 import os
 import re
+import shutil
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
@@ -256,6 +259,48 @@ def trash_destination(trash_root: Path, batch: str, original: Path) -> Path:
     return trash_root / batch / flat
 
 
+def free_trash_destination(trash_root: Path, original: Path) -> Path:
+    """Un emplacement LIBRE dans le lot du jour de la corbeille. Ne cree rien.
+
+    Le nom calcule par ``trash_destination`` est deterministe : deux passages
+    le meme jour sur le meme chemin produiraient le meme nom, et le second
+    ecraserait — ou ferait supprimer pour faire place — ce que le premier avait
+    mis a l'abri, c'est-a-dire souvent l'original qu'on voulait garder. Un nom
+    deja pris recoit donc un numero d'ordre.
+
+    Le deplacement reste a l'appelant, avec sa propre primitive et son propre
+    refus d'ecraser.
+    """
+    lot = datetime.now(UTC).strftime("%Y-%m-%d")
+    base = trash_destination(trash_root, lot, original)
+    cible = base
+    rang = 1
+    while cible.exists() or cible.is_symlink():
+        rang += 1
+        cible = base.with_name(f"{rang}_{base.name}")
+    return cible
+
+
+def send_to_trash(path: Path, trash_root: Path) -> Path:
+    """Met un fichier en corbeille, dans le lot du jour, et rend ou il est parti.
+
+    Ne remplace JAMAIS un fichier deja en corbeille (voir
+    ``free_trash_destination``). Leve ``OSError`` si le deplacement echoue :
+    l'appelant sait s'il doit renoncer a ecrire par-dessus.
+    """
+    cible = free_trash_destination(trash_root, path)
+    cible.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.rename(path, cible)
+    except OSError as exc:
+        if exc.errno != errno.EXDEV:
+            raise
+        # Corbeille sur un autre volume que la bibliotheque : copie puis
+        # suppression de l'original, une fois la copie achevee.
+        shutil.move(str(path), str(cible))
+    return cible
+
+
 def directory_now_empty(directory: Path) -> bool:
     """Le dossier ne contient-il plus rien d'exploitable ?
 
@@ -329,6 +374,9 @@ def find_empty_dirs(roots: list[Path]) -> list[Path]:
 ORPHAN_EXTENSIONS = {
     *ARTWORK_EXTENSIONS,
     ".nfo",
+    # Manifeste de livre depose par Sortilege ou Calibre : sans le livre, il
+    # ne decrit plus rien, exactement comme un .nfo sans sa video.
+    ".opf",
     ".xml",
     ".txt",
     ".srt",
@@ -367,28 +415,56 @@ def find_orphan_dirs(roots: list[Path]) -> list[OrphanDir]:
     d'autre que des accessoires connus. Un dossier contenant une archive, un
     document ou un fichier d'un type inattendu n'est pas propose — mieux vaut
     laisser un residu que supprimer ce qu'on n'a pas su reconnaitre.
+
+    « Aucune video » s'entend dans le dossier ET dans tout ce qu'il contient.
+    Une serie vivante range ses episodes dans « Season 01/ » et garde a sa
+    racine « tvshow.nfo » et ses affiches : ne regarder que les fichiers du
+    dossier courant la faisait passer pour une coquille, proposee au
+    nettoyage avec la fiche qui porte son identite. Le parcours est donc
+    REMONTANT, les sous-dossiers vus avant leur parent.
     """
     interdits = {r.resolve() for r in roots}
     orphelins: list[OrphanDir] = []
+    # Dossiers contenant une video, eux-memes ou dans leur descendance.
+    habites: set[Path] = set()
+    # Dossiers effectivement parcourus. Parcours remontant : un sous-dossier est
+    # toujours livre avant son parent, donc un sous-dossier absent de cet
+    # ensemble n'a PAS pu etre parcouru (illisible, ou lien symbolique).
+    parcourus: set[Path] = set()
 
     for root in roots:
         if not root.is_dir():
             continue
-        for courant, _, fichiers in os.walk(root):
+        for courant, sous_dossiers, fichiers in os.walk(root, topdown=False):
+            parcourus.add(Path(courant))
+            # La corbeille ne contient aucune video : sans cette exception elle
+            # passait pour une coquille, et le mode « supprimer » du nettoyage
+            # detruisait definitivement ce qu'elle gardait a l'abri.
+            if TRASH_DIRNAME in Path(courant).parts:
+                continue
             chemin = Path(courant)
+            reels = [f for f in fichiers if not _sans_interet(f)]
+            extensions = {Path(f).suffix.lower() for f in reels}
+
+            # Marque AVANT tout autre test. Un sous-dossier non parcouru —
+            # illisible, ou lien symbolique que os.walk ne suit pas — compte comme
+            # habite : on ne sait pas ce qu'il contient, et le prendre pour vide
+            # ferait proposer au nettoyage la fiche d'une serie vivante.
+            if extensions & VIDEO_EXTENSIONS or any(
+                (chemin / d) in habites or (chemin / d) not in parcourus for d in sous_dossiers
+            ):
+                habites.add(chemin)
+                continue  # il reste une video, ici ou plus bas : on n'y touche pas
+
             try:
                 if chemin.resolve() in interdits:
                     continue
             except OSError:
                 continue
 
-            reels = [f for f in fichiers if not _sans_interet(f)]
             if not reels:
                 continue  # vide au sens strict : c'est l'autre balayage
 
-            extensions = {Path(f).suffix.lower() for f in reels}
-            if extensions & VIDEO_EXTENSIONS:
-                continue  # il reste une video : on n'y touche pas
             if not extensions <= ORPHAN_EXTENSIONS:
                 continue  # quelque chose d'inattendu : on s'abstient
 
