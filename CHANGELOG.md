@@ -1,6 +1,67 @@
 # CHANGELOG
 
 
+## v0.51.0 (2026-09-11)
+
+### Features
+
+- Fiches locales, sous-titres, sortie reseau, sauvegarde et cle d'API
+  ([`faf0a24`](https://github.com/gsoulat/sortilege/commit/faf0a24fb90b983f838e43c6988123bb16057eea))
+
+Neuf modules, leur cablage, puis sept audits independants et deux passes de controle. Le second
+  temps a pese plus lourd que le premier : sur quarante defauts releves, plusieurs etaient
+  introduits par le cablage lui-meme.
+
+**Des fiches qui font autorite**
+
+Sur Jellyfin, les metadonnees locales ont PRIORITE sur celles du reseau et ne se desactivent pas ;
+  Plex les lit nativement depuis la 1.43.1. Un `.nfo` ecrit par Sortilege fixe donc l'identite d'une
+  oeuvre : un arbitrage rendu a la main cesse d'etre ecrase au rafraichissement suivant. Affiches et
+  fonds a cote. Les livres ont le `metadata.opf` de Calibre et leur couverture, dans un dossier par
+  livre — Jellyfin ne lit aucun `.nfo` pour eux.
+
+Rien n'est detruit : une fiche ou une affiche remplacee part en corbeille, une fiche identifiee
+  n'est jamais remplacee par une fiche sans identifiant, et une annulation renvoie en corbeille ce
+  qui avait ete depose. Tout est desactive par defaut.
+
+**Les sous-titres manquants**
+
+OpenSubtitles, par empreinte de fichier puis par titre. Langues ordonnees, « la piste audio suffit
+  », au rangement manuel, au cycle automatique, et sur toute la bibliotheque par lots qui reprennent
+  la ou ils se sont arretes — y compris quand le quota s'epuise en cours de route.
+
+**La sortie reseau**
+
+Sortilege emettait deja : TheMovieDB, AniList, OpenSubtitles, Discord, le fournisseur d'IA. Trois
+  politiques — libre, signaler, exiger. Sous « exiger », rien ne sort sans sortie par le tunnel
+  confirmee : identification, recherche et choix d'un candidat, collections, affiches, sous-titres,
+  Discord, boutons d'essai. Le serveur multimedia reste joignable : il est sur le reseau local.
+
+Le defaut le plus grave de l'audit etait la : en « exiger », tunnel tombe, le motif du refus — qui
+  contenait l'adresse publique mesuree — partait sur Discord par la sortie non protegee, a chaque
+  cycle. Un refus ne notifie plus rien, et toute adresse IP est masquee au point unique ou une
+  notification sort.
+
+**Integration et sauvegarde**
+
+Une cle d'API (`X-Api-Key`) qui vaut le mot de passe, avec son ecran pour la lire et la regenerer.
+  Sauvegarde et restauration avec leur ecran : aucun secret dans l'archive, adresse de reference du
+  VPN comprise ; filet « avant-restauration » obligatoire ; restauration tout ou rien.
+  `/openapi.json` passe sous `/api/`, derriere l'authentification.
+
+**Ce que l'audit a corrige ailleurs**
+
+- Un fichier de reglages illisible etait ecrase par les valeurs par defaut au demarrage ; un fichier
+  valide mais refuse bloquait le conteneur en boucle. - Le nettoyage des coquilles proposait la
+  corbeille elle-meme, et le mode « supprimer » la detruisait ; un homonyme deja en corbeille etait
+  efface. - `rename-library` repondait 500 des qu'un sous-titre existait. - Une serie vivante
+  pouvait etre prise pour un dossier sans video.
+
+CHANTIERS.md dit ce qui reste, avec des chiffres mesures.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.50.0 (2026-09-10)
 
 ### Features
