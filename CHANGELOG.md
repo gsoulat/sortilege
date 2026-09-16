@@ -1,6 +1,38 @@
 # CHANGELOG
 
 
+## v0.52.2 (2026-09-16)
+
+### Bug Fixes
+
+- Ranger ne montre que ce qui reste a ranger, et un refus ne laisse plus de copie
+  ([`cea15f2`](https://github.com/gsoulat/sortilege/commit/cea15f234deb537173f05a0df6a2c897945d4c8c))
+
+Signale par l'utilisateur : « Relire la bibliotheque » faisait apparaitre la mediatheque dans
+  Ranger, et « Ranger » ne vidait pas la liste.
+
+**Deux onglets, une seule liste melangee.** `GET /api/workspace` rendait les oeuvres de la
+  mediatheque et celles de la source ensemble, et coupait la page AVANT que l'ecran ne trie. Ranger
+  affichait donc les chiffres de la mediatheque (« 28 fichiers, 49,8 Go ») et comptait les oeuvres
+  de la page entiere (« Films 68 + Series 132 » = la taille de la page). La separation se fait
+  desormais dans l'API (`?espace=source|library`), avant la pagination. Chaque oeuvre porte ses
+  chiffres de source ; Ranger n'affiche qu'eux, et tous ses compteurs correspondent a la liste
+  affichee.
+
+**Un refus laissait une copie complete dans la bibliotheque.** Quand le dossier source est en
+  lecture seule, le deplacement copiait le film puis echouait a supprimer l'original : la copie
+  restait, et le clic suivant repondait « la destination existe deja ». Le deplacement retire
+  desormais la copie qu'il vient de creer. Le motif d'un refus est garde sur le plan et survit au
+  redemarrage ; un filtre « Rangement refuse » les regroupe.
+
+**« Identification interrompue » etait un faux arret.** La boucle jugeait le lot juste apres l'avoir
+  lance en arriere-plan, et renvoyait vers un bandeau qui pouvait ne pas exister. Elle attend la fin
+  du lot, et le message dit la vraie cause. L'ecran, le calcul et l'automatisation partagent une
+  seule regle d'eligibilite a l'identification.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.52.1 (2026-09-16)
 
 ### Bug Fixes
