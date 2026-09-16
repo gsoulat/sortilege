@@ -93,6 +93,10 @@ audits, deux contrôleurs et un recontrôle des derniers correctifs.
 - [x] Provenance de chaque identification affichée sur la ligne
 - [x] `ConfirmAction` sur tous les sites de confirmation, aucun mécanisme maison
 - [x] Un refus d'enregistrement se voit dans tous les onglets des réglages
+- [x] Ranger et Ma médiathèque sont séparés par l'API, avant la pagination :
+      Ranger n'affiche et ne compte que ce qui reste à ranger
+- [x] Un rangement refusé ne laisse plus de copie dans la bibliothèque, et son
+      motif survit au redémarrage
 
 ### Les réglages
 
@@ -216,3 +220,8 @@ une dépendance nouvelle.
 - [ ] La provenance d'une identification (`identified_by`) n'est pas écrite dans
       l'instantané : elle se perd au redémarrage.
 - [ ] Les réglages `trust_ai` et `trust_external_ids` ne sont exposés nulle part.
+- [ ] L'index de la médiathèque ne se met pas à jour après un rangement : l'écran
+      demande de « Relire la bibliothèque ».
+- [ ] « Identifier (N) » compte des fichiers, « Pas encore identifiés (N) » des
+      œuvres : les deux nombres diffèrent.
+- [ ] Les copies orphelines laissées AVANT ce correctif ne sont pas détectées.

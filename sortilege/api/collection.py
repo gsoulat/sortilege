@@ -42,6 +42,13 @@ class IndexJob:
     error: str | None = None
     works: list[Work] = field(default_factory=list)
 
+    ranged_since: int = 0
+    """Fichiers ranges depuis le debut de la derniere lecture reussie.
+
+    L'index est une photo du disque : un rangement ne l'enrichit pas. Sans ce
+    compte, une oeuvre qui venait de quitter Ranger n'apparaissait pas dans Ma
+    mediatheque, et rien ne disait qu'il fallait la relire."""
+
 
 _job = IndexJob()
 _lock = asyncio.Lock()
@@ -77,6 +84,19 @@ def forget_index() -> None:
     """Oublie l'index de bibliotheque. « Relire la bibliotheque » le refait."""
     _job.works = []
     _job.built_at = 0.0
+    # Plus d'index, plus rien a lui reprocher : l'ecran dit deja de le relire.
+    _job.ranged_since = 0
+
+
+def note_ranged(count: int) -> None:
+    """Signale des fichiers ranges depuis la derniere lecture de la bibliotheque."""
+    if count > 0:
+        _job.ranged_since += count
+
+
+def ranged_since_index() -> int:
+    """Fichiers ranges que l'index ne montre pas encore. 0 = a jour."""
+    return _job.ranged_since
 
 
 def current_works() -> list[Work]:
@@ -136,6 +156,9 @@ async def _enrich(works: list[Work], tmdb: TMDBProvider | None) -> None:
 
 async def _build() -> None:
     conf = get_settings()
+    # Retenu AVANT de lire le disque : un fichier range pendant la lecture
+    # peut lui avoir echappe, il doit rester signale.
+    deja_comptes = _job.ranged_since
 
     roots = [conf.library_root]
     result = scan(roots, deep=False, library_root=conf.library_root, rules=scan_rules())
@@ -154,6 +177,7 @@ async def _build() -> None:
 
     _job.works = works
     _job.built_at = time.time()
+    _job.ranged_since = max(0, _job.ranged_since - deja_comptes)
     logger.info("index construit : %s oeuvres", len(works))
 
 

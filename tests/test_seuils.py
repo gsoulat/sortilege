@@ -350,6 +350,10 @@ def test_build_plans_utilise_les_seuils_du_reglage(
 ) -> None:
     _regle(auto_apply_percent=80, reject_percent=25)
     film = tmp_path / "dl" / "Dune.2021.mkv"
+    # Present sur le disque : un fichier du scan disparu depuis n'est plus a
+    # identifier, c'est la regle commune avec le compteur de l'ecran.
+    film.parent.mkdir(parents=True)
+    film.write_bytes(b"")
     # Au-dessus du plancher de taille : un fichier trop petit n'est jamais planifie.
     scanne = ScannedFile(path=film, size_bytes=GO, parsed=parse(film, ["dl"]), probe=FileProbe())
     monkeypatch.setattr(review, "last_scan", lambda: ScanResult(files=[scanne]))

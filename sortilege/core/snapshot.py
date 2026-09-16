@@ -163,6 +163,9 @@ def plans_out(plans: list[Plan]) -> dict:
                 "external_id_match": p.external_id_match,
                 "ai_confidence": p.ai_confidence,
                 "runtime_plausible": p.runtime_plausible,
+                # Sans lui, un plan en echec redevenait un « pret » muet apres
+                # un redemarrage.
+                "apply_failure": p.apply_failure,
             }
             for p in plans
         ],
@@ -280,6 +283,14 @@ def _verdict_in(p: dict) -> dict:
     return {"verdict_source": source, **signals}
 
 
+def _failure_in(raw: object) -> dict[str, str] | None:
+    """Motif d'echec relu. Une forme inattendue est oubliee, pas fatale : elle
+    ne doit pas faire jeter toute la file et ses centaines d'appels TMDB."""
+    if not isinstance(raw, dict):
+        return None
+    return {"reason": str(raw.get("reason") or ""), "message": str(raw.get("message") or "")}
+
+
 def plans_in(raw: object) -> list[Plan]:
     data = _require_version(raw)
     try:
@@ -307,6 +318,7 @@ def plans_in(raw: object) -> list[Plan]:
                 leftovers=[Path(x) for x in (p.get("leftovers") or [])],
                 alternatives=[Candidate(**c) for c in (p.get("alternatives") or [])],
                 manual=p.get("manual", False),
+                apply_failure=_failure_in(p.get("apply_failure")),
                 **_verdict_in(p),
             )
             for p in data["plans"]

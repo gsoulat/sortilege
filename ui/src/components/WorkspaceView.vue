@@ -108,6 +108,17 @@ const jobs = computed(() => data.value?.jobs ?? {})
 const counts = computed(() => data.value?.counts ?? {})
 
 /**
+ * Les compteurs de l'onglet affiché, en LIGNES de la liste.
+ *
+ * `counts` compte des fichiers pour la barre d'action (« Ranger 6 prêts ») et
+ * porte sur tout. Les filtres, eux, comptaient tantôt des fichiers, tantôt
+ * toutes les œuvres chargées : « Tout (11) » à côté de « Films (68) · Séries
+ * (132) » dans Ranger. Le serveur les calcule sur l'espace demandé, avant de
+ * paginer.
+ */
+const tab = computed(() => data.value?.tab ?? {})
+
+/**
  * Ce qui empêche l'application de fonctionner. Calculé côté serveur — clé
  * absente, racine non montée, aucun scan — et jusqu'ici transporté nulle part :
  * une clé TMDB refusée se lisait comme « aucun candidat » sur trois cents
@@ -151,8 +162,10 @@ const FILTERS = {
   all: () => true,
   // Onglet source
   ready: (w) => w.pending.ready.length > 0,
-  review: (w) => w.pending.review.length > 0,
+  // Douteux ET écartés, comme le badge « à arbitrer » et le compteur du serveur.
+  review: (w) => arbitrables(w).length > 0,
   unplanned: (w) => w.pending.unplanned_count > 0,
+  failed: (w) => (w.source?.failed ?? 0) > 0,
   // Onglet médiathèque
   gaps: (w) => (w.owned?.missing_count ?? 0) > 0,
   dupes: (w) => (w.owned?.duplicates?.length ?? 0) > 0,
@@ -211,8 +224,10 @@ const KIND_FILTRES = [
 const sousVue = ref('avoir')
 
 const parOnglet = computed(() => {
+  // Le serveur n'envoie que l'espace demandé. Le filtre reste une garde : une
+  // réponse d'un autre espace ne doit rien mélanger.
   const tout = data.value?.works ?? []
-  if (onglet.value === 'source') return tout.filter((w) => w.pending.total > 0)
+  if (onglet.value === 'source') return tout.filter((w) => (w.source?.file_count ?? 0) > 0)
   const possedees = tout.filter((w) => w.owned)
   return sousVue.value === 'place' ? possedees.filter(FILTERS.place) : possedees
 })
@@ -258,6 +273,10 @@ watch(onglet, () => {
   tri.value = onglet.value === 'source' ? 'defaut' : 'titre'
   recherche.value = ''
   charge.value = PALIER
+  // Les lignes affichées appartiennent à l'autre espace : les garder le temps
+  // de la réponse montrerait la médiathèque dans Ranger, ou l'inverse. L'écran
+  // dit « Chargement » jusqu'à ce que le bon espace arrive.
+  data.value = null
   // Sans cet appel, l'onglet réencodage resterait vide jusqu'au prochain
   // rafraîchissement automatique : deux secondes d'écran blanc pour rien.
   load()
@@ -265,9 +284,34 @@ watch(onglet, () => {
 
 const kindCounts = computed(() => {
   const out = Object.fromEntries(KIND_FILTRES.map((k) => [k.id, 0]))
-  for (const w of data.value?.works ?? []) if (w.kind in out) out[w.kind] += 1
+  // Les lignes de CETTE liste. Compter toutes les œuvres chargées faisait
+  // afficher la médiathèque entière dans les filtres de Ranger. La sous-vue
+  // « place » filtre après coup, sur ce qui est chargé : elle compte donc ce
+  // qu'elle montre.
+  const parServeur = tab.value.kinds
+  if (parServeur && !(onglet.value === 'library' && sousVue.value === 'place')) {
+    for (const id of Object.keys(out)) out[id] = parServeur[id] ?? 0
+  } else {
+    for (const w of parOnglet.value) if (w.kind in out) out[w.kind] += 1
+  }
   return out
 })
+
+/**
+ * Ce que la médiathèque possède déjà d'une œuvre qui attend dans la source.
+ *
+ * Une phrase et non les totaux : Ranger affichait « 28 fichiers · 49,8 Go »
+ * pour quatre épisodes à ranger. Savoir que les vingt-quatre premiers sont là
+ * aide à trancher ; leur poids, non.
+ */
+function dejaLa(w) {
+  const la = w.source?.in_library
+  if (!la) return ''
+  if ((w.kind === 'episode' || w.kind === 'anime') && la.episodes) {
+    return `${la.episodes} épisode${la.episodes > 1 ? 's' : ''} déjà dans la médiathèque`
+  }
+  return `déjà dans la médiathèque (${la.files} fichier${la.files > 1 ? 's' : ''})`
+}
 
 /**
  * Les types qu'aucune œuvre chargée ne porte.
@@ -344,12 +388,21 @@ const sansToucher = ref(false)
 
 async function load() {
   chargement.value = true
+  // L'espace voyage avec la demande : c'est le serveur qui sépare Ranger de la
+  // médiathèque, AVANT de paginer. Trié ici, sur une page de deux cents œuvres
+  // mélangées, l'onglet Ranger se remplissait de la médiathèque dès qu'elle
+  // était indexée.
+  const espace = onglet.value
   try {
-    const res = await fetch(`/api/workspace?limit=${charge.value}`)
+    const res = await fetch(`/api/workspace?limit=${charge.value}&espace=${espace}`)
     // Une réponse 502 arrive en HTML : `res.json()` lèverait, la promesse
     // remonterait sans être attrapée, et l'écran resterait figé sans un mot.
     if (!res.ok) throw new Error(`réponse ${res.status}`)
-    data.value = await res.json()
+    const corps = await res.json()
+    // Partie avant un changement d'onglet, elle arrive après : l'afficher
+    // remettrait l'autre espace à l'écran. La demande du nouvel onglet suit.
+    if (espace !== onglet.value) return
+    data.value = corps
     error.value = null
   } catch (e) {
     error.value = `Serveur injoignable (${e.message ?? 'sans réponse'}).`
@@ -362,6 +415,24 @@ async function load() {
 
 
 
+
+/** Faux dès que le composant est démonté : les attentes ci-dessous s'arrêtent. */
+let monte = true
+const pause = (ms) => new Promise((fin) => setTimeout(fin, ms))
+
+/**
+ * Relit l'état jusqu'à ce que le travail `job` (« scan », « plan ») ait fini.
+ *
+ * Le serveur lance ses travaux en tâche de fond et rend la main aussitôt. Juger
+ * du résultat à ce moment-là, c'est juger un lot qui n'a pas commencé.
+ */
+async function attendreFin(job) {
+  await load()
+  while (monte && jobs.value[job]?.running) {
+    await pause(1500)
+    await load()
+  }
+}
 
 async function chargerPlus() {
   charge.value += PALIER
@@ -387,16 +458,22 @@ async function call(url, body = null) {
 
 async function scan() {
   busy.value = 'scan'
+  let lance = null
   try {
-    await call('/api/library/scan?deep=true')
+    lance = await call('/api/library/scan?deep=true')
     await load()
   } finally {
     busy.value = null
   }
+  if (!lance) return
   // Un scan qui trouve des fichiers appelle une identification : les séparer
   // obligeait à revenir cliquer une fois l'analyse finie, sans que rien ne le
   // dise. On enchaîne, et l'utilisateur peut arrêter quand il veut.
-  if (counts.value.unplanned) await plan()
+  //
+  // Mais APRÈS le scan : la route rend la main dès le lancement, et enchaîner
+  // tout de suite identifiait l'instantané précédent, ou un scan à moitié fait.
+  await attendreFin('scan')
+  if (monte && counts.value.unplanned && !busy.value) await plan()
 }
 
 /**
@@ -419,19 +496,32 @@ async function plan({ reset = false } = {}) {
   stopPlan.value = false
   try {
     let premier = true
-    while (premier || (!stopPlan.value && counts.value.unplanned > 0)) {
+    while (monte && (premier || (!stopPlan.value && counts.value.unplanned > 0))) {
       const restantAvant = counts.value.unplanned
-      const out = await call(`/api/review/plan?limit=100&reset=${premier && reset}`)
-      await load()
+      const repart = premier && reset
       premier = false
+      const out = await call(`/api/review/plan?limit=100&reset=${repart}`)
+      // Un refus — clé absente, sortie réseau refusée — arrive dans `error`,
+      // avec la raison donnée par le serveur.
       if (!out) break
-      if (counts.value.unplanned >= restantAvant) {
-        // Le lot n'a rien retiré de la file : insister ne ferait que répéter
-        // le même appel. Mieux vaut s'arrêter et le dire.
+      // La route rend la main dès le LANCEMENT du lot. Le compte relu tout de
+      // suite n'avait pas encore bougé, et la boucle concluait « rien n'a
+      // avancé » en plein travail : c'était l'« Identification interrompue :
+      // 68 fichier(s) », figée à l'écran pendant que le lot finissait.
+      await attendreFin('plan')
+      const erreur = out.started ? jobs.value.plan?.error : null
+      if (erreur) {
         messageAlerte.value = true
         message.value =
-          `Identification interrompue : ${counts.value.unplanned} fichier(s) n'ont pas pu ` +
-          `être planifiés. Le bandeau ci-dessus dit ce qui bloque.`
+          `Identification interrompue : le lot a échoué (${erreur}). ` +
+          `${counts.value.unplanned} fichier(s) restent à identifier ; « Identifier » reprend là où il s'est arrêté.`
+        break
+      }
+      // « Recommencer » vide la file : le compte REMONTE d'abord, ce n'est pas
+      // un lot qui piétine.
+      if (!repart && counts.value.unplanned > 0 && counts.value.unplanned >= restantAvant) {
+        messageAlerte.value = true
+        message.value = raisonArret(out)
         break
       }
     }
@@ -439,6 +529,27 @@ async function plan({ reset = false } = {}) {
     busy.value = null
     stopPlan.value = false
   }
+}
+
+/**
+ * Pourquoi un lot terminé n'a rien retiré de la file, en mots.
+ *
+ * Le message renvoyait toujours vers « le bandeau ci-dessus », y compris quand
+ * aucun bandeau n'était affiché. Il ne le cite plus que s'il existe.
+ */
+function raisonArret(out) {
+  const reste = `${counts.value.unplanned} fichier(s) restent sans plan`
+  if (blocages.value.length) {
+    const n = blocages.value.length
+    return `Identification arrêtée : ${reste}. ${n > 1 ? `${n} blocages l'expliquent` : "Un blocage l'explique"}, ` +
+      "détaillé(s) dans « À régler avant d'aller plus loin », ci-dessus."
+  }
+  if (!out.started) {
+    return `Identification arrêtée : ${reste}, mais le serveur n'en trouve aucun à identifier. ` +
+      "La liste n'est plus d'accord avec le disque : « Analyser les sources » la relit."
+  }
+  return `Identification arrêtée : ${reste}, et le serveur ne signale ni blocage ni erreur. ` +
+    "« Analyser les sources » relit la source ; si le compte ne bouge toujours pas, les journaux du conteneur disent ce que le lot a fait."
 }
 
 /**
@@ -533,6 +644,12 @@ async function apply(ids = null) {
         )
       }
       await load()
+      // L'index de la médiathèque est une photo du disque : il ne montre ce qui
+      // vient d'être rangé qu'après une relecture. Le dire ici, au moment où
+      // les lignes quittent Ranger, évite de les croire perdues.
+      if (!blanc && out.applied > 0 && (data.value?.ranged_since_index ?? 0) > 0) {
+        message.value += ' Ma médiathèque les montrera après « Relire la bibliothèque ».'
+      }
       // Ranger laisse derrière lui le dossier de la release, vide. Le proposer
       // dans un écran de réglages revenait à demander un second geste pour
       // finir le premier — et personne ne va le chercher. Un dossier vide ne
@@ -941,6 +1058,7 @@ onMounted(() => {
   document.addEventListener('keydown', surEchap)
 })
 onUnmounted(() => {
+  monte = false
   clearInterval(poller)
   document.removeEventListener('pointerdown', fermerSiDehors)
   document.removeEventListener('keydown', surEchap)
@@ -1049,6 +1167,13 @@ onUnmounted(() => {
       <button :disabled="busy || working" @click="index">Relire la bibliothèque</button>
       <span class="quoi-inline">reconstruit l'index depuis le disque</span>
     </div>
+    <!-- L'index est une photo du disque. Sans cette ligne, ce qui venait de
+         quitter Ranger n'apparaissait nulle part, sans que rien ne dise où le
+         retrouver. -->
+    <p v-if="espace === 'library' && data.ranged_since_index" class="indispo" role="status">
+      {{ data.ranged_since_index }} fichier(s) rangé(s) depuis la dernière lecture n'apparaissent
+      pas encore ici : « Relire la bibliothèque » les ajoute.
+    </p>
 
     <!-- Au FUTUR, et en disant ce qu'il reste à faire. La formulation au
          présent laissait croire que l'action avait déjà eu lieu, alors que le
@@ -1172,20 +1297,26 @@ onUnmounted(() => {
       </ul>
     </section>
 
+    <!-- Des ŒUVRES, comme les lignes de la liste : « Prêts à ranger (6) »
+         comptait six fichiers et en montrait deux lignes. Le nombre de fichiers
+         reste sur le bouton « Ranger », qui agit sur eux. -->
     <div v-if="onglet === 'source'" class="filters">
       <button :class="{ active: filter === 'all' }" @click="filter = 'all'">
-        Tout ({{ parOnglet.length }})
+        Tout ({{ tab.works ?? parOnglet.length }})
       </button>
-      <button v-if="counts.ready" class="warn" :class="{ active: filter === 'ready' }"
+      <button v-if="tab.ready" class="warn" :class="{ active: filter === 'ready' }"
               @click="filter = 'ready'">
-        Prêts à ranger ({{ counts.ready }})
+        Prêts à ranger ({{ tab.ready }})
       </button>
-      <button v-if="counts.review" :class="{ active: filter === 'review' }" @click="filter = 'review'">
-        À arbitrer ({{ counts.review }})
+      <button v-if="tab.review" :class="{ active: filter === 'review' }" @click="filter = 'review'">
+        À arbitrer ({{ tab.review }})
       </button>
-      <button v-if="counts.unplanned" :class="{ active: filter === 'unplanned' }"
+      <button v-if="tab.unplanned" :class="{ active: filter === 'unplanned' }"
               @click="filter = 'unplanned'">
-        Pas encore identifiés ({{ counts.unplanned }})
+        Pas encore identifiés ({{ tab.unplanned }})
+      </button>
+      <button v-if="tab.failed" :class="{ active: filter === 'failed' }" @click="filter = 'failed'">
+        Rangement refusé ({{ tab.failed }})
       </button>
     </div>
 
@@ -1213,8 +1344,10 @@ onUnmounted(() => {
       <ExtrasCleanup v-show="sousVue === 'place'" />
 
       <div v-if="sousVue === 'avoir'" class="filters">
+        <!-- Le même décompte que les filtres de type juste en dessous : toutes
+             les œuvres possédées, pas seulement la page chargée. -->
         <button :class="{ active: filter === 'all' }" @click="filter = 'all'">
-          Tout ({{ parOnglet.length }})
+          Tout ({{ tab.works ?? parOnglet.length }})
         </button>
         <button v-if="counts.missing" :class="{ active: filter === 'gaps' }" @click="filter = 'gaps'">
           Épisodes manquants ({{ counts.missing }})
@@ -1332,7 +1465,8 @@ onUnmounted(() => {
       >
         {{ k.label }} ({{ kindCounts[k.id] }})
       </button>
-      <span v-if="counts.total_bytes" class="total">
+      <!-- Un total de la médiathèque : il n'a rien à faire dans Ranger. -->
+      <span v-if="onglet === 'library' && counts.total_bytes" class="total">
         {{ gb(counts.total_bytes) }} Go en bibliothèque
       </span>
     </div>
@@ -1390,17 +1524,30 @@ onUnmounted(() => {
             <span class="title">
               {{ w.title }}<span v-if="w.year" class="year"> ({{ w.year }})</span>
               <span v-if="w.kind" class="kind">{{ KINDS[w.kind] ?? w.kind }}</span>
+              <span v-if="onglet === 'source' && w.source?.in_library" class="deja-la">
+                {{ dejaLa(w) }}
+              </span>
             </span>
 
-            <span class="badges">
-              <span v-if="w.owned" class="badge own">{{ w.owned.file_count }} fichier{{ w.owned.file_count > 1 ? 's' : '' }}</span>
-              <span v-if="w.owned?.total_bytes" class="badge size">{{ gb(w.owned.total_bytes) }} Go</span>
-              <span v-if="w.heaviness >= (data.heavy_ratio ?? 2)" class="badge heavy"
-                    :title="`${gb(w.bytes_per_file)} Go par fichier, contre ${(w.bytes_per_file / w.heaviness / 1024 ** 3).toFixed(1)} Go en médiane`">
-                {{ heavyLabel(w) }} le poids habituel
-              </span>
-              <span v-if="w.owned?.missing_count" class="badge gap">{{ w.owned.missing_count }} manquant{{ w.owned.missing_count > 1 ? 's' : '' }}</span>
-              <span v-if="w.owned?.duplicates?.length" class="badge dupe">{{ w.owned.duplicates.length }} doublon{{ w.owned.duplicates.length > 1 ? 's' : '' }}</span>
+            <span class="badges" :class="{ source: onglet === 'source' }">
+              <!-- Dans Ranger, les chiffres de la SOURCE. Ceux de la
+                   médiathèque y affichaient « 28 fichiers · 49,8 Go » pour
+                   quatre épisodes à ranger. -->
+              <template v-if="onglet === 'source'">
+                <span class="badge own">{{ w.source.file_count }} à ranger</span>
+                <span v-if="w.source.total_bytes" class="badge size">{{ gb(w.source.total_bytes) }} Go</span>
+                <span v-if="w.source.failed" class="badge dupe">{{ w.source.failed }} refusé{{ w.source.failed > 1 ? 's' : '' }}</span>
+              </template>
+              <template v-else>
+                <span v-if="w.owned" class="badge own">{{ w.owned.file_count }} fichier{{ w.owned.file_count > 1 ? 's' : '' }}</span>
+                <span v-if="w.owned?.total_bytes" class="badge size">{{ gb(w.owned.total_bytes) }} Go</span>
+                <span v-if="w.heaviness >= (data.heavy_ratio ?? 2)" class="badge heavy"
+                      :title="`${gb(w.bytes_per_file)} Go par fichier, contre ${(w.bytes_per_file / w.heaviness / 1024 ** 3).toFixed(1)} Go en médiane`">
+                  {{ heavyLabel(w) }} le poids habituel
+                </span>
+                <span v-if="w.owned?.missing_count" class="badge gap">{{ w.owned.missing_count }} manquant{{ w.owned.missing_count > 1 ? 's' : '' }}</span>
+                <span v-if="w.owned?.duplicates?.length" class="badge dupe">{{ w.owned.duplicates.length }} doublon{{ w.owned.duplicates.length > 1 ? 's' : '' }}</span>
+              </template>
               <span v-if="w.pending.ready.length" class="badge ready">{{ w.pending.ready.length }} prêt{{ w.pending.ready.length > 1 ? 's' : '' }}</span>
               <span v-if="arbitrables(w).length" class="badge review">{{ arbitrables(w).length }} à arbitrer</span>
               <span v-if="w.pending.unplanned_count" class="badge wait">{{ w.pending.unplanned_count }} en attente</span>
@@ -1451,6 +1598,11 @@ onUnmounted(() => {
                   >
                     {{ p.manual ? 'Changer' : "Ce n'est pas ça" }}
                   </button>
+                </li>
+                <li v-if="p.failure" class="refus">
+                  <span class="refus-quoi">{{ REASONS[p.failure.reason]?.label ?? 'Rangement refusé' }}</span>
+                  <span v-if="REASONS[p.failure.reason]?.fix" class="refus-fix">{{ REASONS[p.failure.reason].fix }}</span>
+                  <code>{{ p.failure.message }}</code>
                 </li>
                 <li v-if="playing === p.id" class="player">
                   <template v-if="preview?.playable_in_browser">
@@ -1566,6 +1718,11 @@ onUnmounted(() => {
                     Ce n'est pas ça
                   </button>
                 </li>
+                <li v-if="p.failure" class="refus">
+                  <span class="refus-quoi">{{ REASONS[p.failure.reason]?.label ?? 'Rangement refusé' }}</span>
+                  <span v-if="REASONS[p.failure.reason]?.fix" class="refus-fix">{{ REASONS[p.failure.reason].fix }}</span>
+                  <code>{{ p.failure.message }}</code>
+                </li>
                 <li v-if="playing === p.id" class="player">
                   <template v-if="preview?.playable_in_browser">
                     <video controls preload="metadata" :src="`/api/media/plan/${p.id}`"></video>
@@ -1658,7 +1815,9 @@ onUnmounted(() => {
             />
           </template>
 
-          <section v-if="w.owned" class="block">
+          <!-- Ce qu'on possède, dans la médiathèque seulement : dans Ranger,
+               la ligne dit déjà combien d'épisodes sont là. -->
+          <section v-if="w.owned && onglet === 'library'" class="block">
             <div class="block-head">
               <h4>En bibliothèque</h4>
               <span class="size">
@@ -2065,6 +2224,19 @@ button.small.danger:hover:not(:disabled) {
 .badge.dupe { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); }
 .badge.size { font-family: var(--mono); font-size: 10px; }
 .badge.heavy { background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err); }
+/* Ranger : lisible sans plisser les yeux, sans toucher aux badges de la
+   médiathèque. */
+.badges.source .badge,
+.badges.source .badge.size { font-size: var(--t-xs); }
+.deja-la { font-size: var(--t-xs); color: var(--text-faint); }
+.files li.refus {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
+  margin: 0 0 6px; padding-left: 12px; border-left: 2px solid var(--warn);
+  font-size: var(--t-xs); line-height: 1.5;
+}
+.files li.refus .refus-quoi { color: var(--warn); }
+.files li.refus .refus-fix { color: var(--text-dim); flex-basis: 100%; max-width: 680px; }
+.files li.refus code { font-size: var(--t-xs); }
 .filters.kinds { margin-top: -6px; align-items: baseline; }
 .filters .total { margin-left: auto; font-size: 11.5px; color: var(--text-faint); }
 

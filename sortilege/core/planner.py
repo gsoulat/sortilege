@@ -121,6 +121,15 @@ class Plan:
     """Les trois signaux que ``scoring.verdict`` lit en plus du score. Gardes
     pour pouvoir rejouer le verdict sans reinterroger les fournisseurs."""
 
+    apply_failure: dict[str, str] | None = None
+    """Dernier rangement REEL refuse : ``{"reason": code, "message": texte}``.
+
+    Un plan en echec reste dans la file, et c'est voulu : le fichier est
+    toujours dans la source. Mais sans sa raison, il y redevenait un « pret »
+    muet des que l'ecran se rechargeait -- le bandeau d'echecs ne vit que le
+    temps de la reponse. Porte par le plan, le motif survit au rechargement
+    comme au redemarrage. Une simulation ne l'ecrit jamais."""
+
     @property
     def is_noop(self) -> bool:
         """Le fichier est deja exactement la ou il devrait etre.

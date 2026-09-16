@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from ..config import get_settings
 from ..core.companions import TRASH_DIRNAME, trash_root_for
 from ..core.journal import (
+    ApplyResult,
     apply_plan,
     delete_ranged_source,
     evacuate_ranged_source,
@@ -39,7 +40,7 @@ from ..core.planner import Plan, redecide_plans
 from ..core.probe import probe_media
 from ..core.renaming import rename_plans
 from ..core.renaming import summarize as rename_summary
-from ..core.scanner import scan
+from ..core.scanner import ScannedFile, scan
 from ..core.scoring import Decision, Policy, VerdictSource
 from ..core.snapshot import PLANS_KEY, SnapshotError, plans_in, plans_out
 from ..core.store import Decision as RememberedDecision
@@ -271,11 +272,31 @@ def merge_plans(plans: list[Plan], sources: list[Path]) -> None:
     _persist_plans()
 
 
-def drop_applied(plan_ids: list[str]) -> None:
+def record_apply_results(results: list[ApplyResult]) -> None:
+    """Reporte un rangement REEL sur la file. Jamais pour une simulation.
+
+    - Un plan range quitte la file : sa source n'existe plus.
+    - Un plan refuse y reste, avec son motif. Le fichier est toujours dans la
+      source ; sans le motif, il redevenait un « pret » muet au premier
+      rechargement de l'ecran.
+    - Les fichiers ranges sont signales a l'index de bibliotheque, qui ne les
+      montre qu'apres une nouvelle lecture et doit pouvoir le dire.
+    """
+    ranges = 0
     with _lock:
-        for pid in plan_ids:
-            _plans.pop(pid, None)
+        for r in results:
+            if r.ok:
+                if _plans.pop(r.plan_id, None) is not None and r.reason != "noop":
+                    ranges += 1
+            elif (plan := _plans.get(r.plan_id)) is not None:
+                plan.apply_failure = {"reason": r.reason or "move_failed", "message": r.message}
     _persist_plans()
+
+    # Import local : collection ne depend pas de review, et ce lien n'a pas a
+    # exister au chargement.
+    from . import collection
+
+    collection.note_ranged(ranges)
 
 
 def _plan_out(plan: Plan) -> dict[str, object]:
@@ -330,10 +351,12 @@ class PlanJob:
     error: str | None = None
 
     done_paths: set[str] = field(default_factory=set)
-    """Fichiers deja planifies, pour ne pas les repasser aux fournisseurs.
+    """Fichiers deja passes par un lot : un historique, expose en ``planned``.
 
-    Par chemin et non par position : appliquer des plans retire des fichiers du
-    scan, et un simple compteur designerait ensuite les mauvais."""
+    Ce n'est PLUS ce qui decide de repasser un fichier aux fournisseurs --
+    ``awaiting_identification`` s'en charge, sur la file vivante et le disque.
+    Decider sur cet historique laissait des fichiers comptes « a identifier »
+    que le calcul refusait de reprendre."""
 
     @property
     def elapsed(self) -> float:
@@ -418,12 +441,48 @@ def reconcile_with_scan(present: set[str]) -> dict[str, int]:
 def planned_paths() -> set[str]:
     """Fichiers deja passes par le calcul, meme si leur plan n'existe plus.
 
-    Distinct des plans VIVANTS : un plan applique quitte la file, et se fier a
-    la file ferait retomber son fichier dans « pas encore planifie ». Le
-    compteur ne descendrait jamais, et le fichier serait repropose au calcul
-    suivant alors qu'il a deja ete range.
+    Un HISTORIQUE, plus un critere d'eligibilite : voir
+    ``awaiting_identification``. Un fichier range n'a pas besoin de cette
+    liste pour ne pas etre repropose -- il n'est plus a son ancien chemin.
     """
     return set(_job.done_paths)
+
+
+def awaiting_identification(
+    files: list[ScannedFile], plans: list[Plan] | None = None
+) -> list[ScannedFile]:
+    """Les fichiers de la source qui attendent un plan. UNE regle, pour tous.
+
+    L'ecran comptait « a identifier » tout fichier present sans plan vivant ;
+    le calcul, lui, sautait tout chemin deja passe par un lot. Un fichier dont
+    le plan avait disparu alors qu'il etait toujours la -- un rangement annule
+    depuis le journal, typiquement -- restait donc compte sans jamais etre
+    repris : « Identifier (N) » tournait a vide, et la boucle de l'ecran
+    finissait sur « Identification interrompue ».
+
+    Le disque et la file tranchent, pas l'historique :
+
+    - ni deja dans la bibliotheque, ni ecarte (echantillon) ;
+    - sans plan vivant -- un plan en echec ou a arbitrer est deja du travail
+      en cours, pas une identification a refaire ;
+    - toujours present a son chemin : le scan est un instantane, un fichier
+      range ou evacue depuis y figure encore.
+
+    ``plans`` evite de relire la file quand l'appelant en tient deja un
+    instantane : deux lectures separees laisseraient un plan publie entre les
+    deux compter a la fois comme planifie et comme en attente.
+    """
+    if plans is None:
+        plans = current_plans()
+    planifies = {str(p.source) for p in plans}
+    return [
+        f
+        for f in files
+        if not f.in_library
+        and f.skipped_reason is None
+        and str(f.path) not in planifies
+        and f.path.exists()
+    ]
 
 
 def plan_status() -> dict[str, object]:
@@ -582,21 +641,19 @@ async def build_plans(limit: int = 100, reset: bool = False) -> dict[str, object
         # fois doit montrer la progression, pas afficher un refus.
         return {**_queue(), "started": False}
 
-    # Seuls les fichiers eligibles comptent : ceux deja ranges et les
-    # echantillons ecartes ne seront jamais planifies, les inclure dans le
-    # « reste a traiter » annoncerait un travail qui n'arrivera pas.
-    eligible = [f for f in scan.files if not f.in_library and f.skipped_reason is None]
-    pending = [f for f in eligible if str(f.path) not in _job.done_paths]
-
     if reset:
         _job.done_paths.clear()
         with _lock:
             _plans.clear()
         _persist_plans()
-        pending = eligible
+
+    # La meme regle que le compteur de l'ecran, et non une regle voisine :
+    # c'est leur divergence qui faisait tourner « Identifier » a vide.
+    pending = awaiting_identification(scan.files)
 
     if not pending:
-        return {**_queue(), "started": False, "detail": "Tous les fichiers ont ete planifies."}
+        # Affiche tel quel par l'ecran quand son compte n'est plus d'accord.
+        return {**_queue(), "started": False, "detail": "Aucun fichier n'attend d'identification."}
 
     batch = pending[: max(1, limit)]
 
@@ -676,15 +733,11 @@ def _queue() -> dict[str, object]:
 
 
 def _remaining() -> int:
-    """Fichiers eligibles pas encore planifies."""
+    """Fichiers qui attendent encore un plan, selon la regle commune."""
     scan = last_scan()
     if scan is None:
         return 0
-    return sum(
-        1
-        for f in scan.files
-        if not f.in_library and f.skipped_reason is None and str(f.path) not in _job.done_paths
-    )
+    return len(awaiting_identification(scan.files))
 
 
 _avertissement_sortie = ""
@@ -877,6 +930,11 @@ async def apply(body: ApplyRequest) -> dict[str, object]:
     # sa source n'existe plus.
     sous_titres: dict[str, object] = {}
     if not simulate:
+        # La file d'abord : la recherche de sous-titres qui suit interroge le
+        # reseau et peut durer. Pendant ce temps, l'ecran relu montrait encore
+        # « pret » des fichiers deja partis de la source.
+        record_apply_results(results)
+
         # APRES le deplacement, pas avant : un sous-titre se depose a cote du
         # fichier, et l'ecrire a l'ancien emplacement le laisserait derriere.
         par_plan = {p.id: p for p in selected}
@@ -895,11 +953,6 @@ async def apply(body: ApplyRequest) -> dict[str, object]:
             ]
         )
 
-        with _lock:
-            for r in results:
-                if r.ok:
-                    _plans.pop(r.plan_id, None)
-        _persist_plans()
         if any(r.ok for r in results):
             # Sans garde de sortie : le serveur multimedia est sur le reseau
             # local, rien ne quitte la maison.

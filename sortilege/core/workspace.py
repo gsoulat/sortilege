@@ -59,6 +59,15 @@ class Pending:
     def total(self) -> int:
         return len(self.ready) + len(self.review) + len(self.rejected) + len(self.unplanned)
 
+    @property
+    def plans(self) -> list[Plan]:
+        return [*self.ready, *self.review, *self.rejected]
+
+    @property
+    def failed(self) -> int:
+        """Plans dont le dernier rangement reel a ete refuse."""
+        return sum(1 for p in self.plans if p.apply_failure)
+
 
 @dataclass(slots=True)
 class HeavyFile:
@@ -292,6 +301,49 @@ def _mark_heaviness(entries: list[WorkspaceEntry]) -> None:
             continue
         for entry in group:
             entry.heaviness = entry.bytes_per_file / median
+
+
+def in_space(entry: WorkspaceEntry, space: str) -> bool:
+    """L'entree appartient-elle a cet espace ?
+
+    Une meme oeuvre peut appartenir aux deux : une serie possedee dont quatre
+    episodes attendent dans la source. Elle apparait alors dans chacun des
+    espaces, et chacun n'en montre que SA part -- Ranger les quatre episodes,
+    la mediatheque les vingt-huit fichiers ranges.
+
+    La separation se fait ici, avant la pagination, et non dans l'ecran : une
+    page tronquee a deux cents oeuvres melangees ne permet ni de compter un
+    espace, ni de garantir qu'il y figure en entier.
+    """
+    if space == "source":
+        return entry.pending.total > 0
+    if space == "library":
+        return entry.owned is not None
+    return True
+
+
+def tab_counts(entries: list[WorkspaceEntry]) -> dict[str, object]:
+    """Les compteurs d'un onglet, en ENTREES : les lignes memes de la liste.
+
+    Distincts de ``summarize``, qui compte des FICHIERS pour la barre d'action
+    (« Ranger 6 prets »). Un filtre « Prets a ranger (6) » qui n'affiche que
+    deux lignes se lit comme une liste incomplete.
+    """
+    kinds: dict[str, int] = {}
+    for entry in entries:
+        kind = entry.kind or "unknown"
+        kinds[kind] = kinds.get(kind, 0) + 1
+    return {
+        "works": len(entries),
+        "ready": sum(1 for e in entries if e.pending.ready),
+        # « A arbitrer » reunit les douteux et les ecartes, comme le badge de
+        # la ligne : les deux se tranchent par le meme geste.
+        "review": sum(1 for e in entries if e.pending.review or e.pending.rejected),
+        "unplanned": sum(1 for e in entries if e.pending.unplanned),
+        "failed": sum(1 for e in entries if e.pending.failed),
+        "gaps": sum(1 for e in entries if e.owned is not None and e.owned.has_gaps),
+        "kinds": kinds,
+    }
 
 
 def summarize(entries: list[WorkspaceEntry]) -> dict[str, int]:

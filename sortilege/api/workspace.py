@@ -16,12 +16,21 @@ appel.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter
 
 from ..core import quality
 from ..core.planner import Plan
-from ..core.workspace import HEAVY_RATIO, WorkspaceEntry, build, summarize
+from ..core.workspace import (
+    HEAVY_RATIO,
+    WorkspaceEntry,
+    build,
+    in_space,
+    summarize,
+    tab_counts,
+)
 from . import collection, library, review
 from .deps import get_journal, get_store
 
@@ -65,6 +74,9 @@ def _plan_out(plan: Plan, *, with_alternatives: bool = False) -> dict[str, objec
         # D'ou vient l'identification. Un score nu demande de faire confiance
         # sans savoir a qui.
         "identified_by": plan.identified_by,
+        # Le dernier rangement refuse, et pourquoi. Absent, un fichier en echec
+        # redevenait un « pret » muet des le rechargement suivant.
+        "failure": plan.apply_failure,
     }
     if with_alternatives:
         out["alternatives"] = [
@@ -82,7 +94,51 @@ def _plan_out(plan: Plan, *, with_alternatives: bool = False) -> dict[str, objec
     return out
 
 
-def _entry_out(entry: WorkspaceEntry) -> dict[str, object]:
+def _source_bytes(entry: WorkspaceEntry, sizes: dict[str, int]) -> int:
+    """Poids de ce qui reste a ranger pour cette oeuvre.
+
+    La taille vient du scan, deja en memoire. Un plan dont la source n'y figure
+    pas -- calcule par le cycle automatique sur son propre scan -- est mesure
+    sur le disque ; un fichier introuvable pese zero plutot que de faire
+    echouer toute la liste.
+    """
+    total = sum(f.size_bytes for f in entry.pending.unplanned)
+    for plan in entry.pending.plans:
+        taille = sizes.get(str(plan.source))
+        if taille is None:
+            try:
+                taille = Path(plan.source).stat().st_size
+            except OSError:
+                taille = 0
+        total += taille
+    return total
+
+
+def _source_out(entry: WorkspaceEntry, sizes: dict[str, int]) -> dict[str, object]:
+    """Les chiffres de la SOURCE pour une oeuvre, ceux que Ranger affiche.
+
+    Separes de ``owned`` plutot que deduits a l'ecran : sur une oeuvre a la fois
+    possedee et en attente, Ranger montrait « 28 fichiers · 49,8 Go » -- la
+    mediatheque -- pour quatre episodes a ranger.
+    """
+    pending = entry.pending
+    owned = entry.owned
+    return {
+        "file_count": pending.total,
+        "total_bytes": _source_bytes(entry, sizes),
+        "ready": len(pending.ready),
+        "review": len(pending.review) + len(pending.rejected),
+        "unplanned": len(pending.unplanned),
+        "failed": pending.failed,
+        # De quoi arbitrer sans quitter Ranger : ce qui est deja la. Un compte,
+        # pas les totaux de la mediatheque.
+        "in_library": None
+        if owned is None
+        else {"files": owned.file_count, "episodes": owned.owned_count},
+    }
+
+
+def _entry_out(entry: WorkspaceEntry, sizes: dict[str, int]) -> dict[str, object]:
     owned = entry.owned
     return {
         "key": entry.key,
@@ -170,6 +226,7 @@ def _entry_out(entry: WorkspaceEntry) -> dict[str, object]:
                 for g in owned.duplicates
             ],
         },
+        "source": _source_out(entry, sizes),
         "pending": {
             "ready": [_plan_out(p) for p in entry.pending.ready],
             "review": [_plan_out(p, with_alternatives=True) for p in entry.pending.review],
@@ -189,8 +246,20 @@ def _entry_out(entry: WorkspaceEntry) -> dict[str, object]:
 
 
 @router.get("")
-def read_workspace(limit: int = 200, offset: int = 0) -> dict[str, object]:
+def read_workspace(
+    limit: int = 200,
+    offset: int = 0,
+    espace: Literal["all", "source", "library"] = "all",
+) -> dict[str, object]:
     """Etat courant de la mediatheque, oeuvre par oeuvre.
+
+    ``espace`` choisit les lignes : ``source`` (Ranger, ce qui reste a ranger),
+    ``library`` (Ma mediatheque, ce qu'on possede), ``all`` (tout, le defaut).
+    Le tri se fait ICI, avant la pagination : l'ecran le faisait sur une page
+    deja tronquee et melangee, d'ou un onglet Ranger rempli d'oeuvres de la
+    mediatheque et des compteurs de type qui comptaient les deux. ``tab``
+    compte les lignes de cet espace ; ``counts`` reste global, pour la barre
+    d'action.
 
     ``limit`` et ``offset`` bornent les lignes RENVOYEES, jamais celles
     comptees : les compteurs de la barre d'action portent sur la totalite, sans
@@ -203,34 +272,12 @@ def read_workspace(limit: int = 200, offset: int = 0) -> dict[str, object]:
     """
     scan = library.last_scan()
     plans = list(review.current_plans())
-    # Seulement les plans VIVANTS. On excluait aussi tout chemin deja passe par
-    # le calcul, pour empecher le compteur de remonter quand un plan applique
-    # quittait la file. C'etait la mauvaise cle : « deja identifie » ne veut pas
-    # dire « range ». Un fichier dont le plan a ete rejete, ou perdu, restait
-    # PHYSIQUEMENT dans la source tout en ayant disparu de la liste — d'ou des
-    # dossiers pleins en source que rien ne signalait plus.
-    #
-    # Le bon critere est juste en dessous : un fichier range n'existe plus a son
-    # ancien chemin, puisqu'il a ete DEPLACE. C'est le disque qui tranche, pas
-    # une liste tenue a cote.
-    planned = {str(p.source) for p in plans}
-
-    pending = (
-        []
-        if scan is None
-        else [
-            f
-            for f in scan.files
-            if not f.in_library
-            and f.skipped_reason is None
-            and str(f.path) not in planned
-            # Le scan est un instantane : un fichier range ou evacue depuis
-            # figure encore dedans. L'annoncer « en attente » ferait promettre
-            # un travail qui n'aura pas lieu. A l'inverse, un fichier toujours
-            # la est toujours a traiter, quoi qu'en dise l'historique.
-            and f.path.exists()
-        ]
-    )
+    # Seulement les plans VIVANTS, et un fichier encore present sur le disque :
+    # la regle est celle de « Identifier », partagee et non recopiee. Leur
+    # divergence laissait des fichiers comptes « a identifier » que le calcul
+    # refusait de reprendre.
+    pending = [] if scan is None else review.awaiting_identification(scan.files, plans)
+    sizes = {} if scan is None else {str(f.path): f.size_bytes for f in scan.files}
 
     entries = build(
         collection.current_works(),
@@ -239,21 +286,27 @@ def read_workspace(limit: int = 200, offset: int = 0) -> dict[str, object]:
         get_store().load().quality,
     )
     counts = summarize(entries)
+    lignes = [e for e in entries if in_space(e, espace)]
 
-    page = entries[offset : offset + max(1, limit)]
+    page = lignes[offset : offset + max(1, limit)]
 
     return {
         "counts": counts,
+        "espace": espace,
+        "tab": tab_counts(lignes),
+        # Fichiers ranges que l'index ne montre pas encore. Sans ce compte, ce
+        # qui venait de quitter Ranger n'apparaissait nulle part.
+        "ranged_since_index": collection.ranged_since_index(),
         "offset": offset,
         "limit": limit,
-        "total": len(entries),
-        "has_more": offset + len(page) < len(entries),
+        "total": len(lignes),
+        "has_more": offset + len(page) < len(lignes),
         "heavy_ratio": HEAVY_RATIO,
         # Ce que l'on peut encore defaire. La vue en a besoin pour proposer
         # l'annulation sans imposer un second appel a chaque rafraichissement.
         "journal_size": len(get_journal().read_all()),
         "shown": len(page),
-        "works": [_entry_out(e) for e in page],
+        "works": [_entry_out(e, sizes) for e in page],
         # Ce qui empeche l'outil de produire quoi que ce soit. Joint ICI plutot
         # que laisse a un second appel : une liste vide et sa raison doivent
         # arriver ensemble, sinon l'ecran affirme « rien a ranger » pendant tout

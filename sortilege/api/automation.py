@@ -187,12 +187,10 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
     # sur une bibliotheque constituee planifiait plusieurs milliers de fichiers
     # d'un seul tenant : des heures d'appels au fournisseur, pendant lesquelles
     # rien n'est applicable. Un lot par tour grignote l'arriere sans bloquer.
-    deja = review.planned_paths()
-    eligible = [
-        f
-        for f in result.files
-        if not f.in_library and f.skipped_reason is None and str(f.path) not in deja
-    ]
+    # La regle commune avec l'ecran et « Identifier » : un fichier revenu dans
+    # la source sans plan -- rangement annule -- est repris au tour suivant au
+    # lieu d'etre compte a identifier sans jamais l'etre.
+    eligible = review.awaiting_identification(result.files)
     lot = eligible[:BATCH_SIZE]
     report.remaining = max(0, len(eligible) - len(lot))
 
@@ -258,7 +256,9 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
     ]
     report.applied = sum(1 for r in results if r.ok)
 
-    review.drop_applied([r.plan_id for r in results if r.ok])
+    # Meme report que le rangement manuel : les refus gardent leur motif, et
+    # l'index de bibliotheque apprend qu'il est en retard.
+    review.record_apply_results(results)
     _watcher.mark_processed([p.source for p in plans if p.decision is not Decision.AUTO])
 
     failed = len(results) - report.applied

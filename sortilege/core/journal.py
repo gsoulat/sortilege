@@ -185,9 +185,28 @@ def _move(source: Path, destination: Path) -> str:
         # EXDEV : les deux chemins sont sur des systemes de fichiers
         # differents. C'est le cas quand les telechargements et la
         # bibliotheque sont sur des volumes distincts — copie puis suppression,
-        # nettement plus lent.
+        # nettement plus lent. Sous Docker, deux montages distincts suffisent,
+        # meme sur un seul disque.
+        pass
+
+    try:
         shutil.move(str(source), str(destination))
-        return "copy"
+    except OSError:
+        # shutil.move COPIE, puis supprime la source. Quand la suppression est
+        # refusee -- dossier de telechargement en lecture seule pour le
+        # conteneur --, la copie complete restait a destination : le rangement
+        # se disait en echec, le clic suivant repondait « la destination existe
+        # deja », et la bibliotheque relue montrait comme possede un fichier
+        # jamais range. La destination n'existait pas a l'entree (verifie
+        # ci-dessus) : ce qui s'y trouve est notre copie, entiere ou partielle,
+        # et l'original est toujours la.
+        if source.exists() and destination.exists():
+            try:
+                destination.unlink()
+            except OSError as exc:
+                logger.warning("copie orpheline non retiree (%s) : %s", destination, exc)
+        raise
+    return "copy"
 
 
 def apply_plan(
