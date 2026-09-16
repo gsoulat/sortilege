@@ -77,9 +77,15 @@ function onMetadataChange(patch) {
 
 // Un patch, pas le bloc entier : un seuil laissé à l'environnement doit y
 // rester, et `null` (retour à l'environnement) doit partir tel quel.
-function onIdentificationChange(patch) {
+//
+// La file déjà calculée n'est reclassée qu'APRÈS un enregistrement réussi :
+// reclasser sur un seuil refusé rejouerait les verdicts sous les valeurs d'avant
+// en annonçant un changement qui n'a pas eu lieu.
+const seuils = ref(null)
+
+async function onIdentificationChange(patch) {
   Object.assign(prefs.value.identification, patch)
-  save({ identification: patch })
+  if (await save({ identification: patch })) seuils.value?.reclasser()
 }
 
 function onScanChange(patch) {
@@ -221,6 +227,7 @@ async function rechargerPreferences() {
   }
 }
 
+/** Enregistre les préférences. Rend `true` si le serveur les a acceptées. */
 async function save(extra = {}) {
   saving.value = true
   saveError.value = null
@@ -254,7 +261,7 @@ async function save(extra = {}) {
         ? "Serveur injoignable : rien n'a été enregistré. L'écran montre de nouveau les réglages en place."
         : "Serveur injoignable : rien n'a été enregistré, et les réglages affichés ne sont peut-être " +
           'pas ceux en place. Recharge la page quand le serveur répond.'
-      return
+      return false
     }
     // Une 502 arrive en HTML : `res.json()` lèverait sans être attrapée, et le
     // refus n'arriverait jamais à l'écran.
@@ -273,12 +280,13 @@ async function save(extra = {}) {
         (relu
           ? " L'écran montre de nouveau les réglages tels qu'ils sont enregistrés."
           : " Les réglages affichés n'ont pas pu être relus : recharge la page.")
-      return
+      return false
     }
     prefs.value = body
     dirty.value = false
     saved.value = true
     setTimeout(() => (saved.value = false), 2500)
+    return true
   } finally {
     saving.value = false
   }
@@ -563,6 +571,7 @@ function origine(source) {
     <!-- En tête : c'est le réglage qui décide de ce qui part sans relecture. -->
     <IdentificationThresholds
       v-if="prefs.identification"
+      ref="seuils"
       :identification="prefs.identification"
       :automation="prefs.automation"
       :ai="prefs.ai"

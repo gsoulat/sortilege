@@ -168,6 +168,143 @@ const phraseIa = computed(() => {
     `${pret.value} % partent en revue sans lui.`
   )
 })
+
+// --- Reclassement de la file déjà calculée ---------------------------------
+// Le verdict d'un plan était figé à son calcul : régler « prêt » à 60 % laissait
+// « à vérifier » un plan à 67 %. La file est maintenant rejouée sous les seuils
+// enregistrés — par le parent après chaque enregistrement RÉUSSI (`reclasser`
+// est exposé), ou par le bouton. Seuls les verdicts venus des seuils bougent.
+
+const reclassement = ref(null)
+const reclassEnCours = ref(false)
+const panneReclassement = ref(null)
+// Deux enregistrements rapprochés : le second reclassement ne doit pas être
+// perdu parce que le premier tournait encore, sinon l'écran montrerait le
+// compte rendu des seuils d'avant.
+let aRefaire = false
+
+async function lireJson(res) {
+  const brut = await res.text()
+  try {
+    return JSON.parse(brut)
+  } catch {
+    return null
+  }
+}
+
+async function reclasser() {
+  if (reclassEnCours.value) {
+    aRefaire = true
+    return
+  }
+  reclassEnCours.value = true
+  panneReclassement.value = null
+  try {
+    const res = await fetch('/api/review/redecide', { method: 'POST' })
+    const corps = await lireJson(res)
+    if (!res.ok || !corps) {
+      const motif = typeof corps?.detail === 'string' && corps.detail
+      panneReclassement.value =
+        (motif || `Reclassement refusé (réponse ${res.status}).`) +
+        ' La file garde ses verdicts précédents.'
+      return
+    }
+    reclassement.value = corps
+  } catch {
+    panneReclassement.value =
+      "Serveur injoignable : la file n'a pas été reclassée, elle garde ses verdicts précédents."
+  } finally {
+    reclassEnCours.value = false
+    if (aRefaire) {
+      aRefaire = false
+      reclasser()
+    }
+  }
+}
+
+defineExpose({ reclasser })
+
+function pluriel(n, un, plusieurs) {
+  return n > 1 ? plusieurs : un
+}
+
+/** Le compte rendu, phrase par phrase. Chaque plan de la file est compté une
+ *  fois : ce qui n'a pas bougé est dit, avec sa raison. */
+const phrasesReclassement = computed(() => {
+  const r = reclassement.value
+  if (!r) return []
+  const pourcent = (v) => Math.round(v * 100)
+  const phrases = []
+  const sous =
+    `sous « prêt à ranger » ${pourcent(r.policy.auto_apply_threshold)} % et « écarté » ` +
+    `${pourcent(r.policy.reject_threshold)} %`
+
+  if (!r.examined) {
+    phrases.push(`File reclassée ${sous} : elle est vide, rien n'a bougé.`)
+    return phrases
+  }
+
+  const vers = r.changed_to ?? {}
+  const morceaux = [
+    [vers.auto, 'prêt à ranger', 'prêts à ranger'],
+    [vers.review, 'à vérifier', 'à vérifier'],
+    [vers.reject, 'écarté', 'écartés'],
+  ]
+    .filter(([n]) => n > 0)
+    .map(([n, un, plusieurs]) => `${n} « ${pluriel(n, un, plusieurs)} »`)
+  if (r.changed) {
+    phrases.push(
+      `File reclassée ${sous} : ${r.changed} ${pluriel(r.changed, 'plan change', 'plans changent')} ` +
+        `de verdict — ${morceaux.join(', ')}.`,
+    )
+  } else {
+    phrases.push(`File reclassée ${sous} : aucun plan ne change de verdict.`)
+  }
+  if (r.unchanged) {
+    phrases.push(
+      `${r.unchanged} ${pluriel(r.unchanged, 'plan garde son', 'plans gardent leur')} verdict ` +
+        'sous ces seuils.',
+    )
+  }
+  if (r.imposed) {
+    phrases.push(
+      `${r.imposed} ${pluriel(r.imposed, "plan n'a pas bougé : son verdict est imposé", "plans n'ont pas bougé : leur verdict est imposé")} ` +
+        '(confirmation ou choix à la main, identification retenue, identifiant déclaré, livre, ' +
+        "série sans numéro d'épisode, renommage, ou échec d'identification). C'est voulu.",
+    )
+  }
+  return phrases
+})
+
+const phraseAnciens = computed(() => {
+  const n = reclassement.value?.legacy
+  if (!n) return ''
+  return (
+    `${n} ${pluriel(n, 'plan a été calculé', 'plans ont été calculés')} par une version ` +
+    `précédente et ${pluriel(n, 'ne peut pas être reclassé', 'ne peuvent pas être reclassés')} :`
+  )
+})
+
+/** Le cycle automatique ne range que ce qu'il vient lui-même d'identifier
+ *  (api/automation.py : il n'applique que les plans de son propre lot, et ne
+ *  replanifie jamais un fichier déjà dans la file). Des plans devenus prêts
+ *  par reclassement n'en font pas partie. */
+const phraseRangementAuto = computed(() => {
+  const n = reclassement.value?.changed_to?.auto
+  if (!n || !props.automation?.apply_auto) return ''
+  return (
+    `Le rangement automatique ne déplacera pas ${pluriel(n, 'ce plan', 'ces ' + n + ' plans')} : ` +
+    "le cycle ne range que les fichiers qu'il vient lui-même d'identifier. " +
+    `${pluriel(n, 'Il attend', 'Ils attendent')} le bouton « Ranger … prêts » de l'onglet Ranger.`
+  )
+})
+
+const raisonBoutonReclasser = computed(() => {
+  if (modifie.value) {
+    return "Les valeurs affichées ne sont pas enregistrées : la file serait reclassée sous les seuils en place."
+  }
+  return ''
+})
 </script>
 
 <template>
@@ -284,8 +421,8 @@ const phraseIa = computed(() => {
 
     <p v-if="automation?.apply_auto" class="hint attention">
       <strong>Le rangement automatique est actif</strong> (Réglages → Automatisation) : chaque
-      plan qui atteint le seuil « prêt » est déplacé sans relecture humaine. Baisser ce seuil
-      laisse partir davantage de fichiers sans que personne ne les voie.
+      fichier que le cycle identifie et qui atteint le seuil « prêt » est déplacé sans relecture
+      humaine. Baisser ce seuil laisse partir davantage de fichiers sans que personne ne les voie.
       <template v-if="!automation.enabled">
         La boucle est arrêtée pour l'instant : cela vaudra dès qu'elle sera relancée.
       </template>
@@ -297,12 +434,40 @@ const phraseIa = computed(() => {
 
     <p v-if="phraseIa" class="hint">{{ phraseIa }}</p>
 
-    <p class="hint">
-      <strong>Les nouveaux seuils valent pour les prochaines identifications.</strong> La file
-      déjà calculée garde ses verdicts. Pour la recalculer : <strong>Ranger → Entretien →
-      « Recommencer l'identification »</strong>, qui vide la file et repasse chaque fichier chez
-      les fournisseurs.
-    </p>
+    <div class="reclasse">
+      <p class="hint">
+        <strong>Enregistrer un seuil reclasse aussi la file déjà calculée.</strong> Les plans dont
+        le verdict vient des seuils suivent les nouvelles valeurs, sans rien redemander aux
+        fournisseurs. Un verdict imposé ne bouge pas : confirmation ou choix à la main,
+        identification retenue, et les cas ci-dessous qui passent outre les seuils.
+      </p>
+      <div class="reclasse-action">
+        <button
+          type="button"
+          :disabled="reclassEnCours || Boolean(raisonBoutonReclasser)"
+          @click="reclasser"
+        >
+          {{ reclassEnCours ? 'Reclassement…' : 'Reclasser la file maintenant' }}
+        </button>
+        <span v-if="raisonBoutonReclasser" class="hint en-ligne">{{ raisonBoutonReclasser }}</span>
+      </div>
+
+      <div aria-live="polite">
+        <p v-if="panneReclassement" class="hint erreur" role="alert">{{ panneReclassement }}</p>
+        <template v-else-if="reclassement">
+          <p v-for="phrase in phrasesReclassement" :key="phrase" class="hint">{{ phrase }}</p>
+          <p v-if="phraseAnciens" class="hint attention">
+            {{ phraseAnciens }} <strong>Ranger → Entretien → « Recommencer l'identification »</strong>,
+            qui vide la file et repasse chaque fichier chez les fournisseurs.
+          </p>
+          <p v-if="phraseRangementAuto" class="hint attention">{{ phraseRangementAuto }}</p>
+          <p v-if="reclassement.planning_running" class="hint attention">
+            Un calcul de plans (lot ou cycle automatique) est en cours : les plans qu'il publie
+            encore suivent les seuils de son lancement. Reclasse la file une fois le calcul terminé.
+          </p>
+        </template>
+      </div>
+    </div>
     <p class="hint">
       Deux cas passent outre les seuils : un identifiant déclaré (<code>.nfo</code> ou tags du
       fichier) qui concorde rend le plan prêt, et un identifiant qui désigne une autre œuvre
@@ -375,6 +540,16 @@ code {
 .refus button { flex: none; font-size: var(--t-xs); padding: 3px 10px; }
 
 .retour { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+
+/* --- Reclassement de la file --- */
+.reclasse {
+  margin-top: 16px; padding-top: 12px; max-width: 680px;
+  border-top: 1px solid var(--border);
+}
+.reclasse > .hint:first-child { margin-top: 0; }
+.reclasse-action { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 10px; }
+.reclasse-action button { font-size: var(--t-sm); }
+.hint.erreur { color: var(--err); }
 .retour button { font-size: var(--t-sm); }
 
 @media (max-width: 700px) {

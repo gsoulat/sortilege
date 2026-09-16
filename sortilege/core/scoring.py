@@ -20,6 +20,45 @@ class Decision(StrEnum):
     REJECT = "reject"  # trop douteux pour meme etre propose
 
 
+class VerdictSource(StrEnum):
+    """D'ou vient le verdict d'un plan.
+
+    Seul un verdict sorti des SEUILS peut etre rejoue quand on les deplace. Les
+    autres sont imposes -- par une personne, par sa memoire, par une regle qui
+    passe outre le score -- et les recalculer reviendrait a desavouer ce qui
+    les a poses : deplacer un seuil n'a pas a defaire une confirmation manuelle.
+    """
+
+    THRESHOLDS = "seuils"
+    """Le score compare aux seuils de la politique. Rejouable."""
+
+    EXTERNAL_ID = "identifiant"
+    """Un identifiant declare (.nfo, tags) concorde ou contredit : le score n'a
+    pas ete consulte."""
+
+    MEMORY = "memoire"
+    """Une identification deja tranchee pour ce titre."""
+
+    HUMAN = "humain"
+    """Confirmation, ou choix d'un candidat, a la main."""
+
+    EPISODE_RULE = "regle_episode"
+    """Serie choisie pour un fichier sans numero d'episode : reste a arbitrer."""
+
+    BOOK_RULE = "livre"
+    """Livre : verdict tire de ce que le fichier declare, pas d'un score."""
+
+    RENAME = "renommage"
+    """Mise en conformite d'un fichier deja range : toujours proposee."""
+
+    FAILURE = "echec"
+    """Aucun candidat, chemin impossible ou erreur interne."""
+
+    UNKNOWN = "inconnue"
+    """Plan calcule par une version qui ne retenait ni l'origine du verdict ni
+    les signaux lus : il n'est pas rejouable."""
+
+
 @dataclass(slots=True)
 class Signals:
     """Les signaux disponibles pour un candidat.
@@ -218,38 +257,70 @@ def compute_score(signals: Signals) -> float:
     return max(0.0, min(1.0, score))
 
 
+def verdict(
+    score: float,
+    *,
+    external_id_match: bool | None,
+    ai_confidence: float | None,
+    runtime_plausible: bool | None,
+    policy: Policy,
+) -> tuple[Decision, VerdictSource]:
+    """Le verdict ET son origine, a partir de ce que la decision lit vraiment.
+
+    Seule implementation des regles de decision : ``decide`` l'appelle, le
+    reclassement d'une file deja calculee aussi. Elle prend le score et les
+    trois signaux consultes, pas ``Signals`` entier : c'est ce qui la rend
+    rejouable sur un plan qui n'a garde que ces valeurs.
+    """
+    # Un identifiant declare qui pointe AILLEURS disqualifie, quel que soit le
+    # score : la ressemblance des titres ne peut pas l'emporter sur une
+    # identite explicitement contredite.
+    if external_id_match is False and policy.trust_external_ids:
+        return Decision.REJECT, VerdictSource.EXTERNAL_ID
+
+    # A l'inverse, un identifiant concordant est une reponse, pas un indice.
+    # Court-circuiter le score ici evite qu'un titre exotique ou une duree
+    # atypique fasse douter d'une certitude.
+    if external_id_match is True and policy.trust_external_ids:
+        return Decision.AUTO, VerdictSource.EXTERNAL_ID
+
+    if ai_confidence is not None and not policy.trust_ai:
+        plafond = Decision.REVIEW if score >= policy.reject_threshold else Decision.REJECT
+        return plafond, VerdictSource.THRESHOLDS
+
+    # Un "film" de 22 minutes est un episode mal classe : la duree contredit
+    # frontalement le type retenu, on ne l'applique pas sans regard humain.
+    if runtime_plausible is False and score >= policy.auto_apply_threshold:
+        return Decision.REVIEW, VerdictSource.THRESHOLDS
+
+    if score >= policy.auto_apply_threshold:
+        return Decision.AUTO, VerdictSource.THRESHOLDS
+    if score >= policy.reject_threshold:
+        return Decision.REVIEW, VerdictSource.THRESHOLDS
+    return Decision.REJECT, VerdictSource.THRESHOLDS
+
+
 def decide(score: float, signals: Signals, policy: Policy) -> Decision:
     """Traduit un score en action.
 
     Deliberement separe de ``compute_score`` : la mesure et la politique sont
     deux choses distinctes. On peut durcir les seuils sans retoucher au calcul,
-    et rejouer d'anciens scores sous une nouvelle politique.
+    et rejouer d'anciens scores sous une nouvelle politique (voir ``verdict``).
     """
-    # Un identifiant declare qui pointe AILLEURS disqualifie, quel que soit le
-    # score : la ressemblance des titres ne peut pas l'emporter sur une
-    # identite explicitement contredite.
-    if signals.external_id_match is False and policy.trust_external_ids:
-        return Decision.REJECT
+    decision, _ = verdict(
+        score,
+        external_id_match=signals.external_id_match,
+        ai_confidence=signals.ai_confidence,
+        runtime_plausible=signals.runtime_plausible,
+        policy=policy,
+    )
+    return decision
 
-    # A l'inverse, un identifiant concordant est une reponse, pas un indice.
-    # Court-circuiter le score ici evite qu'un titre exotique ou une duree
-    # atypique fasse douter d'une certitude.
-    if signals.external_id_match is True and policy.trust_external_ids:
-        return Decision.AUTO
 
-    if signals.ai_confidence is not None and not policy.trust_ai:
-        return Decision.REVIEW if score >= policy.reject_threshold else Decision.REJECT
-
-    # Un « film » de 22 minutes est un episode mal classe : la duree contredit
-    # frontalement le type retenu, on ne l'applique pas sans regard humain.
-    if signals.runtime_plausible is False and score >= policy.auto_apply_threshold:
-        return Decision.REVIEW
-
-    if score >= policy.auto_apply_threshold:
-        return Decision.AUTO
-    if score >= policy.reject_threshold:
-        return Decision.REVIEW
-    return Decision.REJECT
+def verdict_line(score: float, decision: Decision) -> str:
+    """Premiere ligne des motifs. Ecrite ici seulement : le reclassement la
+    reecrit, et deux formats divergents se liraient comme deux verdicts."""
+    return f"score {score:.2f} -> {decision.value}"
 
 
 def explain(signals: Signals, score: float, decision: Decision) -> list[str]:
@@ -259,7 +330,7 @@ def explain(signals: Signals, score: float, decision: Decision) -> list[str]:
     quel signal manque. « 0.71 » ne dit rien ; « aucune annee dans le nom,
     2 candidats a egalite » dit tout.
     """
-    lines = [f"score {score:.2f} -> {decision.value}"]
+    lines = [verdict_line(score, decision)]
 
     lines.append(f"similarite du titre : {signals.title_similarity:.2f}")
     lines.append(f"qualite de lecture du nom : {signals.parse_quality:.2f}")

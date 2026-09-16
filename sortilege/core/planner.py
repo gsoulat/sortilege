@@ -19,7 +19,15 @@ from .matching import MatchResult
 from .parser import MediaKind
 from .safety import PathConfinementError, resolve_within
 from .scanner import ScannedFile
-from .scoring import Decision, Policy, compute_score, explain
+from .scoring import (
+    Decision,
+    Policy,
+    VerdictSource,
+    compute_score,
+    explain,
+    verdict,
+    verdict_line,
+)
 from .template import TemplateError, render, validate
 
 # Correspondance entre le type lu et la cle de gabarit / destination.
@@ -98,6 +106,20 @@ class Plan:
     score nu demande de faire confiance sans savoir a qui — et c'est
     exactement ce qu'on refuse de demander pour une operation qui deplace des
     fichiers."""
+
+    verdict_source: VerdictSource = VerdictSource.UNKNOWN
+    """Qui a pose ``decision`` : les seuils, ou une regle / une personne.
+
+    Seul un verdict venu des seuils se rejoue quand on les deplace (voir
+    ``redecide_plans``). Le defaut est ``UNKNOWN`` : un plan construit sans le
+    dire, ou relu d'un instantane anterieur, n'est jamais reclasse -- mieux
+    vaut un verdict fige qu'un verdict humain ecrase par erreur."""
+
+    external_id_match: bool | None = None
+    ai_confidence: float | None = None
+    runtime_plausible: bool | None = None
+    """Les trois signaux que ``scoring.verdict`` lit en plus du score. Gardes
+    pour pouvoir rejouer le verdict sans reinterroger les fournisseurs."""
 
     @property
     def is_noop(self) -> bool:
@@ -218,12 +240,16 @@ def build_plan(
             year=scanned.parsed.year,
             error="non identifie",
             alternatives=_alternatives(None, all_candidates),
+            verdict_source=VerdictSource.FAILURE,
         )
 
     score = compute_score(match.signals)
-    from .scoring import decide  # import local : evite un cycle a la lecture
-
-    decision = decide(score, match.signals, policy)
+    lus = {
+        "external_id_match": match.signals.external_id_match,
+        "ai_confidence": match.signals.ai_confidence,
+        "runtime_plausible": match.signals.runtime_plausible,
+    }
+    decision, source = verdict(score, policy=policy, **lus)
     reasons = explain(match.signals, score, decision)
 
     valeurs = build_values(scanned, match)
@@ -246,6 +272,8 @@ def build_plan(
             provider=match.candidate.provider,
             external_id=match.candidate.external_id,
             error=str(exc),
+            verdict_source=VerdictSource.FAILURE,
+            **lus,
         )
 
     # L'extension du fichier d'origine est conservee : le gabarit decrit un
@@ -274,6 +302,8 @@ def build_plan(
         companions=[(c.path, c.destination_for(destination)) for c in companions],
         leftovers=leftovers,
         alternatives=_alternatives(match, all_candidates),
+        verdict_source=source,
+        **lus,
     )
 
 
@@ -350,6 +380,7 @@ def build_book_plan(
             decision=Decision.REJECT,
             reasons=["aucun titre lisible, ni dans le fichier ni dans son nom"],
             error="non identifie",
+            verdict_source=VerdictSource.FAILURE,
         )
 
     sur = bool(livre and livre.read and livre.trustworthy)
@@ -375,6 +406,7 @@ def build_book_plan(
             reasons=[*motifs, f"chemin impossible : {exc}"],
             title=valeurs["title"],
             error=str(exc),
+            verdict_source=VerdictSource.FAILURE,
         )
 
     destination = destination.with_suffix(scanned.path.suffix)
@@ -386,6 +418,8 @@ def build_book_plan(
         kind="book",
         score=score,
         decision=Decision.AUTO if sur else Decision.REVIEW,
+        # Ni score ni seuil : le verdict decoule de ce que le fichier declare.
+        verdict_source=VerdictSource.BOOK_RULE,
         reasons=motifs,
         identified_by="fichier" if sur else "nom",
         title=valeurs["title"],
@@ -393,3 +427,94 @@ def build_book_plan(
         companions=compagnons,
         leftovers=find_leftovers(scanned.path, compagnons) if with_cleanup else [],
     )
+
+
+# --- Reclassement -----------------------------------------------------------
+
+
+@dataclass(slots=True)
+class RedecideReport:
+    """Ce que le reclassement a fait de la file, pour pouvoir le dire.
+
+    Les quatre comptes partitionnent la file : ``examined`` est leur somme. Un
+    plan qui ne bouge pas doit etre compte quelque part avec sa raison, sinon
+    l'ecran annoncerait "3 plans reclasses" sur une file de quarante sans
+    dire ce que sont devenus les trente-sept autres.
+    """
+
+    examined: int = 0
+    changed: dict[Decision, int] = field(default_factory=lambda: dict.fromkeys(Decision, 0))
+    """Plans dont le verdict a change, comptes par NOUVEAU verdict."""
+
+    unchanged: int = 0
+    """Rejouables, et du meme verdict sous la politique courante."""
+
+    imposed: int = 0
+    """Verdict pose par une personne, sa memoire, une regle ou un echec. Jamais
+    touche : c'est voulu."""
+
+    legacy: int = 0
+    """Calcules par une version qui ne gardait pas les signaux : non
+    rejouables, seule une nouvelle identification les reclasse."""
+
+    modified: bool = False
+    """Au moins un plan a ete reecrit : la file est a enregistrer."""
+
+    @property
+    def changed_total(self) -> int:
+        return sum(self.changed.values())
+
+
+def redecide_plans(plans: list[Plan], policy: Policy) -> RedecideReport:
+    """Rejoue sous ``policy`` le verdict des plans venus des seuils.
+
+    Modifie les plans EN PLACE : verdict, origine, et premiere ligne des
+    motifs. Le score ne bouge pas -- il mesure les signaux, que la politique ne
+    change pas. Aucun appel reseau : tout ce que la decision lit est garde sur
+    le plan.
+
+    Ne touche jamais un plan ``manual``, en erreur, ou dont le verdict a ete
+    impose : deplacer un seuil ne doit pas defaire une confirmation, une
+    identification memorisee ou la regle d'un identifiant declare.
+    """
+    report = RedecideReport(examined=len(plans))
+    for plan in plans:
+        source = plan.verdict_source
+        if plan.manual or plan.error is not None or source not in _REPLAYABLE:
+            report.imposed += 1
+            continue
+        if source is VerdictSource.UNKNOWN:
+            report.legacy += 1
+            continue
+
+        decision, new_source = verdict(
+            plan.score,
+            external_id_match=plan.external_id_match,
+            ai_confidence=plan.ai_confidence,
+            runtime_plausible=plan.runtime_plausible,
+            policy=policy,
+        )
+        if decision is plan.decision and new_source is source:
+            report.unchanged += 1
+            continue
+
+        report.modified = True
+        if decision is plan.decision:
+            report.unchanged += 1
+        else:
+            report.changed[decision] += 1
+        plan.decision = decision
+        plan.verdict_source = new_source
+        line = verdict_line(plan.score, decision)
+        # La premiere ligne est celle qu'ecrit ``explain`` ; un plan qui ne la
+        # porterait pas la recoit en tete plutot que de perdre un autre motif.
+        if plan.reasons and plan.reasons[0].startswith("score "):
+            plan.reasons = [line, *plan.reasons[1:]]
+        else:
+            plan.reasons = [line, *plan.reasons]
+    return report
+
+
+_REPLAYABLE = (VerdictSource.THRESHOLDS, VerdictSource.UNKNOWN)
+"""Origines qui n'excluent pas d'emblee le reclassement. ``UNKNOWN`` y figure
+pour etre compte a part (``legacy``), pas pour etre rejoue."""

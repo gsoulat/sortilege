@@ -297,3 +297,89 @@ def test_le_double_episode_accepte_aussi_ep() -> None:
     lu = parse(Path("/src/Stranger Things S04 Ep01-Ep02.mkv"))
 
     assert (lu.season, lu.episode, lu.episode_end) == (4, 1, 2)
+
+
+# --- Noms sans annee : coupe a la premiere etiquette technique --------------
+#
+# Cas reel : "Casse Tete Chinois HDLight mHDgz" gardait tout son nom pour titre.
+# Avec une annee, le titre s'arretait a elle ; sans annee, rien ne le bornait,
+# et aucun fournisseur ne reconnaissait "Casse Tete Chinois HDLight mHDgz".
+
+
+@pytest.mark.parametrize(
+    ("nom", "titre"),
+    [
+        ("Casse Tete Chinois HDLight mHDgz.mkv", "Casse Tete Chinois"),
+        ("Casse.Tete.Chinois.MULTi.1080p.WEB-DL.x264-momo.mkv", "Casse Tete Chinois"),
+        ("Casse_Tete_Chinois_4KLight_10bit_HDR_DDP5.1.mkv", "Casse Tete Chinois"),
+        ("Casse Tete Chinois hdlight.mkv", "Casse Tete Chinois"),
+        ("Le Grand Bleu mHD VFF.mkv", "Le Grand Bleu"),
+        ("Le Grand Bleu HDMA.mkv", "Le Grand Bleu"),
+        ("Le Grand Bleu HDR10 BluRay.mkv", "Le Grand Bleu"),
+        ("Le Grand Bleu VOF.mkv", "Le Grand Bleu"),
+        ("Le Grand Bleu VFQ.mkv", "Le Grand Bleu"),
+        ("Le Grand Bleu VFI.mkv", "Le Grand Bleu"),
+        ("Le Grand Bleu VF2 1080p.mkv", "Le Grand Bleu"),
+        ("Le.Grand.Bleu.TRUEFRENCH.DVDRip.mkv", "Le Grand Bleu"),
+        ("Le.Grand.Bleu.H.265.mkv", "Le Grand Bleu"),
+        ("[Groupe] Frieren [1080p].mkv", "Frieren"),
+    ],
+)
+def test_sans_annee_le_titre_s_arrete_a_la_premiere_etiquette(nom: str, titre: str) -> None:
+    lu = parse(Path("/src") / nom)
+
+    assert lu.title == titre
+    assert lu.year is None
+
+
+@pytest.mark.parametrize(
+    ("nom", "titre"),
+    [
+        ("Light Year HDLight.mkv", "Light Year"),
+        ("Hard Target HDMA 1080p.mkv", "Hard Target"),
+        ("Multiple Maniacs MULTi.mkv", "Multiple Maniacs"),
+        ("Multiple Maniacs.mkv", "Multiple Maniacs"),
+        ("Lighthouse Keepers mHDgz.mkv", "Lighthouse Keepers mHDgz"),
+    ],
+)
+def test_une_etiquette_ne_coupe_qu_en_mot_entier(nom: str, titre: str) -> None:
+    """Un mot voisin d'une etiquette n'en est pas une : "Light", "Hard",
+    "Multiple" ou "mHDgz" ne coupent rien."""
+    assert parse(Path("/src") / nom).title == titre
+
+
+def test_un_nom_qui_commence_par_une_etiquette_n_est_pas_coupe() -> None:
+    """Couper a la position zero ne laisserait aucun titre."""
+    assert parse(Path("/src/MULTi Casse Tete Chinois.mkv")).title == "Casse Tete Chinois"
+
+
+def test_une_signature_inconnue_reste_dans_le_titre() -> None:
+    """ "momo" n'est dans aucune liste : rien ne permet de le reconnaitre sans
+    etiquette avant lui, et l'inventer ferait perdre des mots de vrais titres."""
+    assert parse(Path("/src/Casse Tete Chinois momo.mkv")).title == "Casse Tete Chinois momo"
+
+
+def test_une_annee_lue_sur_le_dossier_n_empeche_pas_la_coupe() -> None:
+    """L'annee du dossier ne borne pas le nom de fichier : sans la coupe a
+    l'etiquette, le titre gardait "HDLight mHDgz"."""
+    lu = parse(
+        Path("/src/Casse Tete Chinois (2013)/Casse Tete Chinois HDLight mHDgz.mkv"),
+        ["Casse Tete Chinois (2013)"],
+    )
+
+    assert (lu.title, lu.year) == ("Casse Tete Chinois", 2013)
+
+
+def test_un_titre_repris_du_dossier_est_coupe_de_la_meme_facon() -> None:
+    lu = parse(
+        Path("/src/Casse Tete Chinois HDLight mHDgz/film.mkv"), ["Casse Tete Chinois HDLight mHDgz"]
+    )
+
+    assert lu.title == "Casse Tete Chinois"
+
+
+def test_un_episode_reste_coupe_a_son_motif() -> None:
+    lu = parse(Path("/src/Severance HDLight S02E07 MULTi.mkv"))
+
+    assert lu.kind is MediaKind.EPISODE
+    assert lu.title == "Severance"

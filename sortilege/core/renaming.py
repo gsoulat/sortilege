@@ -38,7 +38,7 @@ from .companions import find_companions
 from .planner import Plan, build_values, plan_id_for
 from .safety import PathConfinementError, resolve_within
 from .scanner import ScannedFile
-from .scoring import Decision
+from .scoring import Decision, VerdictSource
 from .template import TemplateError, render, validate
 
 logger = logging.getLogger(__name__)
@@ -103,6 +103,9 @@ def rename_plans(
                 # proposes, et c'est l'humain qui tranche.
                 score=0.0,
                 decision=Decision.REVIEW,
+                # Ce verdict ne sort pas des seuils : rejoue sous eux, le score
+                # nul en ferait un rejet.
+                verdict_source=VerdictSource.RENAME,
                 reasons=["mise en conformite avec le gabarit courant"],
                 title=scanned.parsed.title,
                 year=scanned.parsed.year,

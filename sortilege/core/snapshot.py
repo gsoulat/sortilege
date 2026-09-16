@@ -36,7 +36,7 @@ from .parser import MediaKind, ParsedName
 from .planner import Plan
 from .probe import FileProbe
 from .scanner import MIN_SIZE_BYTES, ScannedFile, ScanResult
-from .scoring import Decision
+from .scoring import Decision, VerdictSource
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +157,12 @@ def plans_out(plans: list[Plan]) -> dict:
                 "leftovers": [str(x) for x in p.leftovers],
                 "alternatives": [_candidate_out(c) for c in p.alternatives],
                 "manual": p.manual,
+                # Origine du verdict et signaux qu'il a lus : sans eux, un plan
+                # relu ne se reclasse plus quand les seuils bougent.
+                "verdict_source": str(p.verdict_source),
+                "external_id_match": p.external_id_match,
+                "ai_confidence": p.ai_confidence,
+                "runtime_plausible": p.runtime_plausible,
             }
             for p in plans
         ],
@@ -234,6 +240,46 @@ def scan_in(raw: object) -> tuple[ScanResult, bool]:
     return result, bool(data.get("deep", True))
 
 
+def _is_flag(value: object) -> bool:
+    return value is None or isinstance(value, bool)
+
+
+def _is_confidence(value: object) -> bool:
+    # ``bool`` est un ``int`` en Python : il ne passe pas pour une confiance.
+    return value is None or (isinstance(value, int | float) and not isinstance(value, bool))
+
+
+_VERDICT_SIGNALS = {
+    "external_id_match": _is_flag,
+    "ai_confidence": _is_confidence,
+    "runtime_plausible": _is_flag,
+}
+
+
+def _verdict_in(p: dict) -> dict:
+    """Origine du verdict et signaux lus, relus sans jamais lever.
+
+    Un instantane ecrit avant ces champs, ou par une version qui connait une
+    origine de plus, se relit quand meme : ses plans deviennent seulement
+    NON RECLASSABLES (origine ``UNKNOWN``). Jeter la file pour eux couterait
+    des centaines d'appels aux fournisseurs ; les rejouer sur des signaux
+    manquants ou douteux produirait un verdict faux, sans que rien ne le dise.
+    """
+    signals = {
+        name: p.get(name) if valid(p.get(name)) else None
+        for name, valid in _VERDICT_SIGNALS.items()
+    }
+    complete = all(name in p and valid(p[name]) for name, valid in _VERDICT_SIGNALS.items())
+
+    try:
+        source = VerdictSource(p.get("verdict_source", VerdictSource.UNKNOWN))
+    except (ValueError, TypeError):
+        source = VerdictSource.UNKNOWN
+    if source is VerdictSource.THRESHOLDS and not complete:
+        source = VerdictSource.UNKNOWN
+    return {"verdict_source": source, **signals}
+
+
 def plans_in(raw: object) -> list[Plan]:
     data = _require_version(raw)
     try:
@@ -261,6 +307,7 @@ def plans_in(raw: object) -> list[Plan]:
                 leftovers=[Path(x) for x in (p.get("leftovers") or [])],
                 alternatives=[Candidate(**c) for c in (p.get("alternatives") or [])],
                 manual=p.get("manual", False),
+                **_verdict_in(p),
             )
             for p in data["plans"]
         ]

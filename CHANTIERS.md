@@ -99,6 +99,8 @@ audits, deux contrôleurs et un recontrôle des derniers correctifs.
 - [x] Clé TMDB dans l'interface, avec essai réel — plus besoin d'éditer le `.env`
 - [x] Seuils d'identification en pourcentage (« prêt à ranger », « écarté »),
       avec la provenance de chaque valeur ; le `.env` reste lu en repli
+- [x] Enregistrer un seuil reclasse la file déjà calculée, sans réinterroger les
+      fournisseurs ; les verdicts humains, mémorisés ou imposés ne bougent pas
 - [x] Langue des métadonnées, taille minimale d'un fichier, listes d'exclusion
 - [x] Gabarits enregistrables, jetons des livres inclus
 
@@ -206,7 +208,11 @@ une dépendance nouvelle.
       un long enrichissement.
 - [ ] Un nettoyage des annexes peut croiser un rangement : une affiche redéposée à
       l'instant, ou un sous-titre retiré pendant une copie entre deux volumes.
-- [ ] Les nouveaux seuils ne s'appliquent qu'aux prochaines identifications : la
-      file ne peut pas être recalculée sans réinterroger les fournisseurs.
 - [ ] Un `.txt` compte comme livre : une note posée dans la médiathèque gonfle le
       compteur des livres protégés.
+- [ ] Le parser retire de vrais mots de titre pris pour des étiquettes :
+      « The French Connection » devient « The Connection », « Charlotte's Web »
+      devient « Charlotte's ».
+- [ ] La provenance d'une identification (`identified_by`) n'est pas écrite dans
+      l'instantané : elle se perd au redémarrage.
+- [ ] Les réglages `trust_ai` et `trust_external_ids` ne sont exposés nulle part.

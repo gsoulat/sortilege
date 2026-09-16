@@ -35,12 +35,12 @@ from ..core.journal import (
 from ..core.mediaserver import refresh_library
 from ..core.nfo import LocalMetadataSettings, deposit, info_from_scan
 from ..core.pipeline import BATCH_SIZE, Pipeline
-from ..core.planner import Plan
+from ..core.planner import Plan, redecide_plans
 from ..core.probe import probe_media
 from ..core.renaming import rename_plans
 from ..core.renaming import summarize as rename_summary
 from ..core.scanner import scan
-from ..core.scoring import Decision
+from ..core.scoring import Decision, Policy, VerdictSource
 from ..core.snapshot import PLANS_KEY, SnapshotError, plans_in, plans_out
 from ..core.store import Decision as RememberedDecision
 from ..core.store import title_key
@@ -429,6 +429,86 @@ def planned_paths() -> set[str]:
 def plan_status() -> dict[str, object]:
     """Etat du calcul, pour la vue unifiee. Appelee dans le processus."""
     return _plan_status()
+
+
+def redecide_queue(policy: Policy) -> dict[str, object]:
+    """Rejoue sous ``policy`` le verdict des plans de la file venus des seuils.
+
+    Sans cela, deplacer un seuil ne changeait rien a ce qui attendait deja :
+    un plan a 67 % restait "a verifier" sous un seuil regle a 60 %, et seul
+    "Recommencer l'identification" -- tout repasser chez les fournisseurs --
+    le debloquait. La decision etait figee au calcul du plan.
+
+    Les verdicts imposes (humain, memoire, identifiant declare, regle, echec)
+    ne sont jamais touches. Rend le compte rendu decrit sur la route
+    ``POST /redecide``.
+    """
+    with _lock:
+        report = redecide_plans(list(_plans.values()), policy)
+    if report.modified:
+        _persist_plans()
+
+    # Import local : ``automation`` importe deja ce module.
+    from . import automation
+
+    logger.info(
+        "file reclassee : %s change(s), %s inchange(s), %s impose(s), %s ancien(s)",
+        report.changed_total,
+        report.unchanged,
+        report.imposed,
+        report.legacy,
+    )
+    return {
+        "examined": report.examined,
+        "changed": report.changed_total,
+        "changed_to": {str(d): n for d, n in report.changed.items()},
+        "unchanged": report.unchanged,
+        "imposed": report.imposed,
+        "legacy": report.legacy,
+        "policy": {
+            "auto_apply_threshold": policy.auto_apply_threshold,
+            "reject_threshold": policy.reject_threshold,
+        },
+        # Un lot ou un cycle en cours a recu sa politique a son lancement : ce
+        # qu'il publie encore suit les seuils d'avant. L'ecran doit le dire.
+        "planning_running": _job.running or automation._state.running,
+    }
+
+
+@router.post("/redecide")
+def redecide() -> dict[str, object]:
+    """Reclasse la file sous les seuils effectifs. Aucun appel reseau.
+
+    Appelee par Reglages -> Identification apres chaque enregistrement reussi
+    d'un seuil, et par son bouton "Reclasser la file maintenant".
+
+    Reponse (``examined`` = ``changed`` + ``unchanged`` + ``imposed`` +
+    ``legacy``, chaque plan de la file est compte une fois) ::
+
+        {
+          "examined": 40,
+          "changed": 15,
+          "changed_to": {"auto": 12, "review": 3, "reject": 0},
+          "unchanged": 10,
+          "imposed": 7,
+          "legacy": 8,
+          "policy": {"auto_apply_threshold": 0.6, "reject_threshold": 0.4},
+          "planning_running": false
+        }
+
+    - ``changed`` : verdicts modifies ; ``changed_to`` les repartit par
+      NOUVEAU verdict (``auto`` = pret a ranger, ``review`` = a verifier,
+      ``reject`` = ecarte).
+    - ``unchanged`` : rejouables, meme verdict sous ces seuils.
+    - ``imposed`` : verdict pose par une personne, sa memoire, un identifiant
+      declare, une regle (livre, episode, renommage) ou un echec. Non touches,
+      c'est voulu.
+    - ``legacy`` : calcules par une version qui ne gardait pas les signaux ;
+      non reclassables sans recommencer l'identification.
+    - ``planning_running`` : un lot ou un cycle automatique tourne ; les plans
+      qu'il publie encore suivent les seuils de son lancement.
+    """
+    return redecide_queue(decision_policy())
 
 
 @router.post("/plan")
@@ -1437,6 +1517,7 @@ def confirm(plan_id: str, body: ConfirmRequest) -> dict[str, object]:
             # quel score, et le repasser au calcul reviendrait a douter de la
             # personne qui vient de decider.
             target.decision = Decision.AUTO
+            target.verdict_source = VerdictSource.HUMAN
             target.manual = True
             target.score = 1.0
             target.reasons = ["identification confirmee a la main"]

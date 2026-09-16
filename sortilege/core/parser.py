@@ -112,19 +112,40 @@ _LANGS = {
     "vo": ("vo", "vosta"),
 }
 
-# Bruit a retirer du titre une fois les champs extraits.
-_NOISE = re.compile(
-    r"\b(?:"
-    r"1080[pi]|720[pi]|2160[pi]|480[pi]|4k|uhd|hdr10?|dolby ?vision|dv|sdr|"
-    r"bluray|blu-ray|bdrip|brrip|bdremux|web-?dl|webrip|web|hdtv|pdtv|dvdrip|dvd|"
-    r"x265|x264|h ?265|h ?264|hevc|avc|av1|xvid|divx|"
-    r"aac|ac3|eac3|dts(?:-hd)?|truehd|atmos|flac|opus|mp3|"
-    r"multi|truefrench|french|vff|vostfr|vost|vo|subfrench|"
-    r"repack|proper|remux|extended|unrated|directors? cut|imax|"
-    r"complete|integrale|saison|season"
-    r")\b",
-    re.IGNORECASE,
+# Etiquettes techniques SURES : aucune n'est un mot de titre plausible. Elles
+# servent deux fois -- retirees du titre comme bruit, et, quand le nom ne porte
+# ni annee ni motif d'episode, elles marquent la FIN du titre (voir
+# ``_tag_cut``). Sans cette coupe, "Casse Tete Chinois HDLight mHDgz" gardait
+# tout ce qui suit l'etiquette, faute d'annee ou couper.
+#
+# Ecrites pour un test en mot entier, insensible a la casse. Les separateurs
+# internes sont souples ("WEB-DL", "H.265") parce que la coupe lit le nom
+# brut, avant que points et soulignes deviennent des espaces.
+_TECH_TAGS = (
+    r"(?:480|576|720|1080|2160)[pi]",
+    r"4k|4klight|uhd|hdlight|mhd|hdr(?:10)?|dolby[\s._-]?vision|1[02]bits?",
+    r"blu-?ray|bdrip|brrip|bdremux|remux|web-?dl|webrip|hdrip|hdtv|pdtv|dvdrip",
+    r"x26[45]|h[\s._]?26[45]|hevc|avc|av1|xvid|divx",
+    r"aac|e?ac3|ddp[57]?|dd[57]|dts(?:-hd)?|hdma|truehd|atmos|flac|mp3",
+    r"multi|truefrench|subfrench|vff|vof|vfq|vfi|vf2|vostfr|vost",
+    r"repack",
 )
+
+# Retires du titre, mais qui ne marquent JAMAIS sa fin : ce sont aussi des mots
+# de vrais titres : "Charlotte's Web", "The French Connection", "Mr. Holland's
+# Opus", "Season of the Witch", "The Complete Metropolis"...
+_SOFT_NOISE = (
+    r"dv|sdr|web|dvd|opus|french|vo",
+    r"proper|extended|unrated|directors? cut|imax",
+    r"complete|integrale|saison|season",
+)
+
+# Bruit a retirer du titre une fois les champs extraits.
+_NOISE = re.compile(r"\b(?:" + "|".join((*_TECH_TAGS, *_SOFT_NOISE)) + r")\b", re.IGNORECASE)
+
+# Mot entier au sens des noms de release : ni lettre ni chiffre de part et
+# d'autre. ``\b`` ne convient pas sur le nom brut, ou "_" compte comme lettre.
+_TECH_TAG = re.compile(r"(?<![^\W_])(?:" + "|".join(_TECH_TAGS) + r")(?![^\W_])", re.IGNORECASE)
 
 # Sites de telechargement direct qui signent les fichiers qu'ils diffusent,
 # puis y collent un mot pris au hasard : « Bruce tout puissant Wawacity ec »,
@@ -324,6 +345,21 @@ def _find_language(haystack: str) -> str | None:
     return None
 
 
+def _tag_cut(stem: str) -> int | None:
+    """Position de la premiere etiquette technique, ou None.
+
+    None aussi quand rien ne la precede -- groupe de fansub et separateurs mis
+    a part : un nom qui COMMENCE par une etiquette n'est jamais coupe, sans
+    quoi il ne resterait aucun titre.
+    """
+    if (m := _TECH_TAG.search(stem)) is None:
+        return None
+    before = _FANSUB_GROUP.sub("", stem[: m.start()])
+    if not re.sub(r"[\W_]+", "", before):
+        return None
+    return m.start()
+
+
 def _clean_title(raw: str, cut_at: int | None) -> str:
     title = raw[:cut_at] if cut_at is not None else raw
     title = _FANSUB_GROUP.sub("", title)
@@ -367,7 +403,9 @@ def _title_from_folder(name: str) -> str:
     """
     _, year_text = _find_year(name)
     cut = name.rfind(year_text) if year_text else -1
-    return _clean_title(name, cut if cut > 0 else None)
+    # Sans annee, le dossier se coupe comme un nom de fichier : a la premiere
+    # etiquette technique.
+    return _clean_title(name, cut if cut > 0 else _tag_cut(name))
 
 
 def parse(path: Path, ancestors: list[str] | None = None) -> ParsedName:
@@ -465,6 +503,13 @@ def parse(path: Path, ancestors: list[str] | None = None) -> ParsedName:
             pos = stem.rfind(year_text)
             if pos > 0:
                 cut_at = pos
+
+    # Ni annee dans le nom ni motif d'episode : rien n'a borne le titre, et tout
+    # ce qui suit la premiere etiquette technique y restait. Une annee lue
+    # seulement sur le DOSSIER laisse aussi ``cut_at`` vide, d'ou ce test plutot
+    # que ``year is None``.
+    if cut_at is None:
+        cut_at = _tag_cut(stem)
 
     resolution = m.group("res").lower() if (m := _RESOLUTION.search(context)) else None
     source = _find_source(lowered)

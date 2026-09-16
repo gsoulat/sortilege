@@ -31,7 +31,7 @@ from .matching import MatchResult, best_match, build_signals
 from .parser import MediaKind, ParsedName
 from .planner import Plan, build_book_plan, build_plan
 from .scanner import ScannedFile
-from .scoring import Decision, Policy
+from .scoring import Decision, Policy, VerdictSource
 from .template import PRESETS
 
 logger = logging.getLogger(__name__)
@@ -234,6 +234,7 @@ class Pipeline:
         )
         if plan.destination is not None:
             plan.decision = Decision.AUTO
+            plan.verdict_source = VerdictSource.MEMORY
             plan.score = 1.0
             plan.manual = True
             plan.identified_by = "memoire"
@@ -297,6 +298,7 @@ class Pipeline:
                     decision=Decision.REJECT,
                     reasons=[f"erreur interne : {type(exc).__name__}"],
                     error=str(exc),
+                    verdict_source=VerdictSource.FAILURE,
                 ), None
 
     def _render_book(self, scanned: ScannedFile) -> Plan:
@@ -390,17 +392,25 @@ class Pipeline:
         # Une serie sans numero d'episode ne se range pas : le gabarit produirait
         # « Saison  / Titre - SE », un chemin que personne ne veut. On le DIT au
         # lieu de le fabriquer, et le fichier reste a arbitrer.
-        if kind in ("episode", "anime") and scanned.parsed.episode is None:
-            if scanned.parsed.absolute_episode is None:
-                plan.decision = Decision.REVIEW
-                plan.reasons = [
-                    *plan.reasons,
-                    "aucun numero d'episode dans le nom du fichier : renomme-le en "
-                    "« ... S01E02 ... » ou range-le a la main",
-                ]
-
-        if plan.destination is not None:
+        #
+        # La regle est testee AVANT le passage en AUTO et l'exclut : elle etait
+        # auparavant ecrasee juste apres par le verdict humain, et le fichier
+        # partait "pret" vers "Season/Titre - SE".
+        if (
+            kind in ("episode", "anime")
+            and scanned.parsed.episode is None
+            and scanned.parsed.absolute_episode is None
+        ):
+            plan.decision = Decision.REVIEW
+            plan.verdict_source = VerdictSource.EPISODE_RULE
+            plan.reasons = [
+                *plan.reasons,
+                "aucun numero d'episode dans le nom du fichier : renomme-le en "
+                "« ... S01E02 ... » ou range-le a la main",
+            ]
+        elif plan.destination is not None:
             plan.decision = Decision.AUTO
+            plan.verdict_source = VerdictSource.HUMAN
             plan.score = 1.0
             plan.reasons = [
                 f"choisi manuellement : {chosen.title}"
