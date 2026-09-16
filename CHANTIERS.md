@@ -1,7 +1,7 @@
 # Chantiers
 
-État au 11 septembre 2026. Dernière version publiée : **v0.50.0** ; le lot
-décrit ici deviendra la **v0.51.0**.
+État au 16 septembre 2026. Dernière version publiée : **v0.51.0** ; le lot
+en cours deviendra la **v0.52.0**.
 
 Convention : `[ ]` à faire, `[~]` en cours, `[x]` fait **et vérifié dans le code**
 — pas seulement annoncé. Un audit a montré qu'un chantier se coche tout seul
@@ -50,6 +50,17 @@ audits, deux contrôleurs et un recontrôle des derniers correctifs.
       automatique, et sur toute la bibliothèque par lots qui reprennent là où ils
       se sont arrêtés, y compris sur un quota épuisé en cours de route
 
+### Récupérer de la place
+
+- [x] Nettoyage des fichiers annexes de la médiathèque, par catégorie : vignettes
+      Jellyfin (`.trickplay`), images, fiches, sous-titres, restes reconnus.
+      Jamais proposés, même en suppression définitive : vidéos, audio, livres,
+      fichiers de disque, corbeille, dossiers système, liens, et **toute extension
+      non reconnue** — un contrôle a montré qu'une catégorie ouverte détruisait des
+      vidéos et des livres rares. Corbeille par défaut
+- [x] Le nettoyage des coquilles ne prend plus un téléchargement en cours
+      (`.part`, `.!ut`) pour un dossier abandonné
+
 ### Sortie réseau
 
 - [x] Contrôle de sortie VPN : libre, signaler, exiger. Sous « exiger », rien ne
@@ -86,6 +97,8 @@ audits, deux contrôleurs et un recontrôle des derniers correctifs.
 ### Les réglages
 
 - [x] Clé TMDB dans l'interface, avec essai réel — plus besoin d'éditer le `.env`
+- [x] Seuils d'identification en pourcentage (« prêt à ranger », « écarté »),
+      avec la provenance de chaque valeur ; le `.env` reste lu en repli
 - [x] Langue des métadonnées, taille minimale d'un fichier, listes d'exclusion
 - [x] Gabarits enregistrables, jetons des livres inclus
 
@@ -191,3 +204,9 @@ une dépendance nouvelle.
       et change à chaque redémarrage.
 - [ ] La construction des collections ne revérifie pas la sortie réseau pendant
       un long enrichissement.
+- [ ] Un nettoyage des annexes peut croiser un rangement : une affiche redéposée à
+      l'instant, ou un sous-titre retiré pendant une copie entre deux volumes.
+- [ ] Les nouveaux seuils ne s'appliquent qu'aux prochaines identifications : la
+      file ne peut pas être recalculée sans réinterroger les fournisseurs.
+- [ ] Un `.txt` compte comme livre : une note posée dans la médiathèque gonfle le
+      compteur des livres protégés.

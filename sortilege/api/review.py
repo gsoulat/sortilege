@@ -40,7 +40,7 @@ from ..core.probe import probe_media
 from ..core.renaming import rename_plans
 from ..core.renaming import summarize as rename_summary
 from ..core.scanner import scan
-from ..core.scoring import Decision, Policy
+from ..core.scoring import Decision
 from ..core.snapshot import PLANS_KEY, SnapshotError, plans_in, plans_out
 from ..core.store import Decision as RememberedDecision
 from ..core.store import title_key
@@ -50,7 +50,15 @@ from ..core.vpn import egress_allowed
 from ..providers.anilist import AniListProvider
 from ..providers.base import forget_auth_errors, last_auth_error
 from ..providers.tmdb import TMDBProvider
-from .deps import get_journal, get_memory, get_store, tmdb_key, tmdb_language
+from .deps import (
+    decision_policy,
+    decision_thresholds,
+    get_journal,
+    get_memory,
+    get_store,
+    tmdb_key,
+    tmdb_language,
+)
 from .library import last_scan
 
 logger = logging.getLogger(__name__)
@@ -475,10 +483,9 @@ async def build_plans(limit: int = 100, reset: bool = False) -> dict[str, object
         library_root=conf.library_root,
         templates={k: prefs.template_for(k) for k in ("movie", "episode", "anime")},
         destination_for=store.destination_root,
-        policy=Policy(
-            auto_apply_threshold=conf.auto_apply_threshold,
-            reject_threshold=conf.reject_threshold,
-        ),
+        # Les seuils EFFECTIFS, reglage de l'ecran compris : lire ici ceux de
+        # l'environnement rendrait Reglages -> Identification sans effet.
+        policy=decision_policy(prefs),
         ai=_ai_resolver(),
         ai_threshold=prefs.ai.threshold,
         memory=get_memory(),
@@ -566,7 +573,7 @@ async def build_plans(limit: int = 100, reset: bool = False) -> dict[str, object
 
 
 def _queue() -> dict[str, object]:
-    conf = get_settings()
+    seuils = decision_thresholds()
     plans = list(_plans.values())
 
     by_decision = {d: [p for p in plans if p.decision is d] for d in Decision}
@@ -579,8 +586,8 @@ def _queue() -> dict[str, object]:
         "items": [_plan_out(p) for p in by_decision[Decision.REVIEW]],
         "rejected": [_plan_out(p) for p in by_decision[Decision.REJECT]],
         "policy": {
-            "auto_apply_threshold": conf.auto_apply_threshold,
-            "reject_threshold": conf.reject_threshold,
+            "auto_apply_threshold": seuils.auto_apply,
+            "reject_threshold": seuils.reject,
         },
         "journal_size": len(get_journal().read_all()),
         "remaining": _remaining(),
@@ -1622,10 +1629,7 @@ async def choose(plan_id: str, body: ChooseRequest) -> dict[str, object]:
         library_root=conf.library_root,
         templates={k: prefs.template_for(k) for k in ("movie", "episode", "anime")},
         destination_for=store.destination_root,
-        policy=Policy(
-            auto_apply_threshold=conf.auto_apply_threshold,
-            reject_threshold=conf.reject_threshold,
-        ),
+        policy=decision_policy(prefs),
     )
 
     rebuilt: list[Plan] = []

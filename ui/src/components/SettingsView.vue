@@ -6,6 +6,7 @@ import AiSettings from './AiSettings.vue'
 import AutomationSettings from './AutomationSettings.vue'
 import NotificationSettings from './NotificationSettings.vue'
 import MetadataSettings from './MetadataSettings.vue'
+import IdentificationThresholds from './IdentificationThresholds.vue'
 import ScanSettings from './ScanSettings.vue'
 import TemplateBuilder from './TemplateBuilder.vue'
 import TranscodeSettings from './TranscodeSettings.vue'
@@ -72,6 +73,13 @@ function onMediaServerChange(patch) {
 function onMetadataChange(patch) {
   Object.assign(prefs.value.metadata, patch)
   save({ metadata: patch })
+}
+
+// Un patch, pas le bloc entier : un seuil laissé à l'environnement doit y
+// rester, et `null` (retour à l'environnement) doit partir tel quel.
+function onIdentificationChange(patch) {
+  Object.assign(prefs.value.identification, patch)
+  save({ identification: patch })
 }
 
 function onScanChange(patch) {
@@ -295,6 +303,16 @@ const ONGLETS = [
 const onglet = ref('bibliotheque')
 
 const KINDS = ['movie', 'episode', 'anime']
+
+function pourcent(fraction) {
+  return Math.round(Number(fraction) * 100)
+}
+
+function origine(source) {
+  if (source === 'reglage') return 'réglé dans Identification'
+  if (source === 'environnement') return "valeur de l'environnement"
+  return 'provenance non renvoyée par le serveur'
+}
 </script>
 
 <template>
@@ -542,6 +560,15 @@ const KINDS = ['movie', 'episode', 'anime']
 
     <!-- ===== Identification : comment une œuvre est reconnue ===== -->
     <template v-if="onglet === 'identification'">
+    <!-- En tête : c'est le réglage qui décide de ce qui part sans relecture. -->
+    <IdentificationThresholds
+      v-if="prefs.identification"
+      :identification="prefs.identification"
+      :automation="prefs.automation"
+      :ai="prefs.ai"
+      @change="onIdentificationChange"
+    />
+
     <MetadataSettings
       v-if="prefs.metadata"
       :metadata="prefs.metadata"
@@ -600,13 +627,23 @@ const KINDS = ['movie', 'episode', 'anime']
       <section>
         <h3>Décision</h3>
         <dl>
-          <dt>Application automatique</dt>
-          <dd>score ≥ <code>{{ s.behaviour.auto_apply_threshold }}</code></dd>
-          <dt>Revue manuelle</dt>
-          <dd>entre <code>{{ s.behaviour.reject_threshold }}</code> et <code>{{ s.behaviour.auto_apply_threshold }}</code></dd>
-          <dt>Rejet</dt>
-          <dd>score &lt; <code>{{ s.behaviour.reject_threshold }}</code></dd>
+          <dt>Prêt à ranger</dt>
+          <dd>score ≥ <code>{{ pourcent(s.behaviour.auto_apply_threshold) }} %</code></dd>
+          <dt>À vérifier</dt>
+          <dd>
+            de <code>{{ pourcent(s.behaviour.reject_threshold) }} %</code> à moins de
+            <code>{{ pourcent(s.behaviour.auto_apply_threshold) }} %</code>
+          </dd>
+          <dt>Écarté</dt>
+          <dd>score &lt; <code>{{ pourcent(s.behaviour.reject_threshold) }} %</code></dd>
         </dl>
+        <!-- Ces seuils ne viennent plus seulement de l'environnement : les
+             afficher sans provenance contredirait l'onglet Identification. -->
+        <p class="note provenance">
+          « Prêt » : {{ origine(s.behaviour.auto_apply_source) }}.
+          « Écarté » : {{ origine(s.behaviour.reject_source) }}.
+          Ils se règlent dans l'onglet <strong>Identification</strong>.
+        </p>
       </section>
 
     </div>
@@ -692,6 +729,7 @@ code {
 }
 
 .note { margin: 0 0 12px; font-size: 12px; color: var(--text-faint); line-height: 1.6; max-width: 640px; }
+.note.provenance { margin: 10px 0 0; }
 
 /* --- Sources --- */
 .sources { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }

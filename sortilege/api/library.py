@@ -14,21 +14,29 @@ deplace — vit dans le journal sur disque.
 from __future__ import annotations
 
 import logging
+import stat
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from threading import Lock, Thread
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 
 from ..config import get_settings
 from ..core.companions import (
+    EXTRA_CATEGORIES,
+    TRASH_DIRNAME,
     find_empty_dirs,
+    find_extras,
     find_orphan_dirs,
     free_trash_destination,
+    send_to_trash,
     trash_root_for,
 )
-from ..core.journal import _move, prune_empty_dirs
+from ..core.journal import _move, _permission_hint, prune_empty_dirs
+from ..core.preferences import KINDS, PreferenceError
+from ..core.safety import PathConfinementError
 from ..core.scanner import ScanResult, scan
 from ..core.snapshot import SCAN_KEY, SnapshotError, scan_in, scan_out
 from .deps import get_memory, get_store, scan_rules
@@ -254,6 +262,292 @@ def prune_empty_dirs_endpoint(body: PruneRequest) -> dict[str, object]:
 
     logger.info("dossiers vides supprimes : %s", supprimes)
     return {"removed": supprimes, "failed": echecs[:20], **read_empty_dirs()}
+
+
+EXTRA_LABELS = {
+    "trickplay": "Vignettes Jellyfin (.trickplay)",
+    "images": "Images",
+    "fiches": "Fiches .nfo et .opf",
+    "sous_titres": "Sous-titres",
+    "autres": "Autres restes reconnus",
+}
+
+EXTRA_MODES = ("trash", "delete")
+
+_nettoyage_annexes = Lock()
+"""Tenu pendant un nettoyage des fichiers annexes. Deux passes simultanees se
+disputeraient les memes fichiers et rapporteraient chacune les echecs de
+l'autre."""
+
+
+class ExtrasPruneRequest(BaseModel):
+    categories: list[str] = []
+    mode: str = "trash"
+    """« trash » met en corbeille (par defaut), « delete » supprime."""
+    confirm: StrictBool = False
+    """Le booleen ``true`` et rien d'autre. Un ``bool`` ordinaire acceptait
+    « "yes" » et ``1`` : un geste qui supprime ne se confirme pas par
+    coercition. Tout autre type repond 422."""
+
+
+def _library_root() -> Path:
+    """Racine de la bibliotheque, ou un refus qui dit quoi verifier."""
+    racine = get_settings().library_root
+    if not racine.is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Bibliothèque introuvable : « {racine} ». Vérifie SORTILEGE_LIBRARY_ROOT "
+                "et que le volume est bien monté."
+            ),
+        )
+    return racine
+
+
+def displayable(texte: str) -> str:
+    """Texte sur pour une reponse JSON, meme tire d'un nom non UTF-8.
+
+    Sur un NAS Linux, un nom en latin-1 est un nom valide : Python le rend avec
+    des « surrogates » (``os.fsdecode``), que l'encodage UTF-8 de la reponse
+    refuse. Un seul de ces noms parmi les exemples faisait repondre 500 a tout
+    le releve. Les octets d'origine sont retrouves, et ce qui n'est pas de
+    l'UTF-8 devient le caractere de remplacement : le nom reste reconnaissable.
+    """
+    return texte.encode("utf-8", "surrogateescape").decode("utf-8", errors="replace")
+
+
+def _relatif(chemin: Path, racine: Path) -> str:
+    try:
+        texte = chemin.relative_to(racine).as_posix()
+    except ValueError:
+        texte = str(chemin)
+    return displayable(texte)
+
+
+def _destination_roots() -> list[Path]:
+    """Racines de destination a ne jamais supprimer, meme vides.
+
+    Une par type de media, plus la destination des fichiers volumineux quand
+    elle est active. Vider « Films/ » de ses dernieres affiches ne doit pas
+    faire disparaitre le dossier que Jellyfin surveille.
+
+    Une destination qui ne se calcule pas (reglage invalide) est sautee et
+    signalee : elle ne recoit de toute facon aucun rangement.
+    """
+    store = get_store()
+    racines: list[Path] = []
+    try:
+        prefs = store.load()
+    except (OSError, PreferenceError) as exc:
+        logger.warning("preferences illisibles, destinations non bornees (%s)", exc)
+        return racines
+    tailles: list[int | None] = [None]
+    if prefs.oversize.enabled:
+        tailles.append(prefs.oversize.threshold_bytes())
+    for kind in KINDS:
+        for taille in tailles:
+            try:
+                racines.append(store.destination_root(kind, taille))
+            except (OSError, PathConfinementError, PreferenceError) as exc:
+                logger.warning("destination %s incalculable, ignoree (%s)", kind, exc)
+    return racines
+
+
+@router.get("/extras")
+def read_extras() -> dict[str, object]:
+    """Fichiers annexes RECONNUS de la bibliotheque, par categorie.
+
+    Surtout les affiches et fiches deposees a chaque rangement, et les
+    vignettes que Jellyfin regenere : elles finissent par peser, et
+    l'utilisateur veut pouvoir les retirer par categorie. Rien n'est touche ici.
+
+    Contrat de la reponse :
+
+    - ``root`` : racine parcourue ;
+    - ``categories`` : 5 entrees, toujours, dans l'ordre ``trickplay``,
+      ``images``, ``fiches``, ``sous_titres``, ``autres`` — chacune
+      ``{key, label, count, bytes, samples}``, ``samples`` bornes a 8 chemins
+      relatifs ;
+    - ``protected`` : ``{videos, audio, books, unknown, unknown_samples}``.
+      ``unknown`` compte les fichiers qu'aucune liste ne reconnait, jamais
+      proposes ; ``unknown_samples`` en donne 8 au plus, relatifs ;
+    - ``skipped_dirs`` : dossiers illisibles sautes — non nul, le releve est
+      incomplet ;
+    - ``total_bytes``, ``redeposit`` (``{artwork, nfo, opf}``), ``trash_path``.
+
+    Tous les chemins passent par ``displayable`` : un nom non UTF-8 s'affiche
+    avec un caractere de remplacement au lieu de faire echouer la reponse.
+
+    ``redeposit`` rappelle que le depot est encore actif : retirer les affiches
+    sans le couper, c'est les voir revenir au prochain rangement.
+    """
+    racine = _library_root()
+    extras = find_extras(racine)
+    fiches = get_store().load().local_metadata
+    return {
+        "root": displayable(str(racine)),
+        "categories": [
+            {
+                "key": cle,
+                "label": EXTRA_LABELS[cle],
+                "count": len(extras.categories[cle].files),
+                "bytes": extras.categories[cle].bytes,
+                "samples": [_relatif(f, racine) for f in extras.categories[cle].files[:8]],
+            }
+            for cle in EXTRA_CATEGORIES
+        ],
+        "protected": {
+            "videos": extras.videos,
+            "audio": extras.audio,
+            "books": extras.books,
+            "unknown": extras.unknown,
+            "unknown_samples": [_relatif(f, racine) for f in extras.unknown_samples],
+        },
+        "skipped_dirs": extras.skipped_dirs,
+        "total_bytes": extras.total_bytes,
+        "redeposit": {"artwork": fiches.artwork, "nfo": fiches.nfo, "opf": fiches.opf},
+        "trash_path": displayable(str(racine / TRASH_DIRNAME)),
+    }
+
+
+@router.post("/extras/prune")
+def prune_extras(body: ExtrasPruneRequest) -> dict[str, object]:
+    """Met en corbeille (ou supprime) les fichiers annexes des categories choisies.
+
+    Le parcours est REFAIT ici : la liste affichee a pu vieillir, et un chemin
+    envoye par le client ne serait qu'une invitation a toucher n'importe quoi.
+    Seules les categories voyagent dans la requete.
+
+    Corbeille par defaut, sous un nom libre : un homonyme deja a l'abri n'est
+    jamais ecrase. ``mode=delete`` supprime definitivement, sur demande.
+
+    Un echec n'arrete pas la passe ; il est compte et nomme. Les dossiers
+    devenus vides partent ensuite, sans jamais remonter jusqu'a la racine ni
+    supprimer une racine de destination (« Films/ », « Series/ »...).
+
+    Contrat : corps ``{categories, mode, confirm}`` ; ``confirm`` doit etre le
+    booleen ``true`` (``false`` ou absent : 400 ; ``"yes"``, ``1`` : 422).
+    Reponse ``{mode, removed, bytes, failed, failed_count, trash_path,
+    removed_dirs}``, ``failed`` borne a 20 messages.
+
+    Rien n'est journalise, comme pour les coquilles : le journal d'annulation
+    sert a retrouver des videos. Une fiche deposee qui a disparu ne fait pas
+    echouer l'annulation d'un rangement (voir ``journal._undo_depot``).
+    """
+    if not body.confirm:
+        raise HTTPException(
+            status_code=400,
+            detail="Le nettoyage doit être confirmé : renvoie la demande avec « confirm » à vrai.",
+        )
+    if body.mode not in EXTRA_MODES:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Mode inconnu : « {body.mode} ». Choisis « trash » (corbeille) "
+                "ou « delete » (suppression définitive)."
+            ),
+        )
+    if not body.categories:
+        raise HTTPException(
+            status_code=400,
+            detail="Aucune catégorie choisie : coche au moins une catégorie à nettoyer.",
+        )
+    inconnues = [c for c in body.categories if c not in EXTRA_CATEGORIES]
+    if inconnues:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Catégorie inconnue : {', '.join(f'« {c} »' for c in inconnues)}. "
+                f"Catégories possibles : {', '.join(EXTRA_CATEGORIES)}."
+            ),
+        )
+
+    if not _nettoyage_annexes.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="Un nettoyage des fichiers annexes est déjà en cours : attends sa fin.",
+        )
+    try:
+        return _prune_extras(_library_root(), set(body.categories), body.mode)
+    finally:
+        _nettoyage_annexes.release()
+
+
+def _prune_extras(racine: Path, demandees: set[str], mode: str) -> dict[str, object]:
+    # Bornes calculees AVANT le geste : c'est la destination telle qu'elle est
+    # reglee maintenant qui doit survivre.
+    bornes = [racine, *_destination_roots()]
+    extras = find_extras(racine)
+    borne = racine.resolve()
+    corbeille = racine / TRASH_DIRNAME if mode == "trash" else None
+
+    retires, octets, dossiers = 0, 0, 0
+    echecs: list[str] = []
+    parents: set[Path] = set()
+
+    for cle in EXTRA_CATEGORIES:
+        if cle not in demandees:
+            continue
+        for fichier in extras.categories[cle].files:
+            relatif = _relatif(fichier, racine)
+            try:
+                info = fichier.lstat()
+                if not stat.S_ISREG(info.st_mode):
+                    echecs.append(f"{relatif} : n'est plus un fichier ordinaire, laissé en place")
+                    continue
+                # Un dossier remplace par un lien entre l'inventaire et l'action
+                # ferait sortir de la bibliotheque : on verifie au dernier moment.
+                if not fichier.resolve().is_relative_to(borne):
+                    echecs.append(f"{relatif} : hors de la bibliothèque, laissé en place")
+                    continue
+                if corbeille is None:
+                    fichier.unlink()
+                else:
+                    # Nom LIBRE, et repli par copie seulement entre deux volumes.
+                    send_to_trash(fichier, corbeille)
+            except OSError as exc:
+                motif = exc.strerror or str(exc)
+                if isinstance(exc, PermissionError):
+                    motif += _permission_hint(fichier)
+                echecs.append(f"{relatif} : {displayable(motif)}")
+                continue
+            except UnicodeError:
+                # Nom non UTF-8 (latin-1 d'un NAS) : le nom aplati de la
+                # corbeille ne s'encode pas. Ce fichier reste, les autres
+                # continuent — une exception ici interrompait toute la passe.
+                echecs.append(
+                    f"{relatif} : nom de fichier qui n'est pas de l'UTF-8, "
+                    "impossible à mettre en corbeille — laissé en place"
+                )
+                continue
+            retires += 1
+            octets += info.st_size
+            parents.add(fichier.parent)
+
+    # Les plus profonds d'abord : un parent vide ne l'est qu'une fois ses
+    # sous-dossiers partis. La racine et les destinations sont des bornes,
+    # jamais des candidates.
+    for parent in sorted(parents, key=lambda p: -len(p.parts)):
+        dossiers += prune_empty_dirs(parent, bornes)
+
+    logger.info(
+        "fichiers annexes nettoyes : mode=%s, %s fichier(s), %s octet(s), %s echec(s), "
+        "%s dossier(s) vide(s)",
+        mode,
+        retires,
+        octets,
+        len(echecs),
+        dossiers,
+    )
+    return {
+        "mode": mode,
+        "removed": retires,
+        "bytes": octets,
+        "failed": echecs[:20],
+        "failed_count": len(echecs),
+        "trash_path": displayable(str(corbeille)) if corbeille is not None else None,
+        "removed_dirs": dossiers,
+    }
 
 
 def _reconcile(result: ScanResult) -> None:

@@ -277,7 +277,7 @@ def apply_plan(
             False,
             str(plan.source),
             str(plan.destination),
-            f"deplacement impossible : {exc}"
+            f"déplacement impossible : {exc}"
             + (_permission_hint(plan.source) if isinstance(exc, PermissionError) else ""),
             reason=_os_reason(exc),
         )
@@ -482,7 +482,7 @@ def _why_not_writable(plan: Plan) -> str | None:
         while not cible.exists() and cible != cible.parent:
             cible = cible.parent
         if not os.access(cible, os.W_OK):
-            return f"impossible d'ecrire dans « {cible} »" + _permission_hint(cible / "x")
+            return f"impossible d'écrire dans « {cible} »" + _permission_hint(cible / "x")
     return None
 
 
@@ -530,21 +530,21 @@ def _permission_hint(path: Path) -> str:
     mode = stat.filemode(info.st_mode)
     moi, mon_groupe = os.getuid(), os.getgid()
     detail = (
-        f" — le DOSSIER « {parent.name} » appartient a {info.st_uid}:{info.st_gid} "
-        f"en {mode} ; Sortilege tourne en {moi}:{mon_groupe}. "
-        "Supprimer ou deplacer un fichier exige l'ecriture sur son dossier, pas sur lui."
+        f" — le DOSSIER « {parent.name} » appartient à {info.st_uid}:{info.st_gid} "
+        f"en {mode} ; Sortilège tourne en {moi}:{mon_groupe}. "
+        "Supprimer ou déplacer un fichier exige l'écriture sur son dossier, pas sur lui."
     )
 
     if info.st_uid != moi:
         detail += f" Mets PUID={info.st_uid} et PGID={info.st_gid} dans ton docker-compose."
     elif not info.st_mode & 0o200:
         detail += (
-            " Le proprietaire lui-meme n'a pas le droit d'ecrire : corrige le mode du dossier."
+            " Le propriétaire lui-même n'a pas le droit d'écrire : corrige le mode du dossier."
         )
     else:
         detail += (
-            " L'identite concorde pourtant : cherche du cote des ACL du partage, "
-            "d'un montage en lecture seule, ou d'un volume different de celui que tu crois."
+            " L'identité concorde pourtant : cherche du côté des ACL du partage, "
+            "d'un montage en lecture seule, ou d'un volume différent de celui que tu crois."
         )
     return detail
 
@@ -796,7 +796,7 @@ def _replace_with_source(
             False,
             str(plan.source),
             str(plan.destination),
-            f"impossible d'ecarter le fichier range : {exc}" + _permission_hint(plan.destination),
+            f"impossible d'écarter le fichier rangé : {exc}" + _permission_hint(plan.destination),
             reason=_os_reason(exc),
         ), ""
     _record(journal, plan, plan.destination, ecarte, methode, "trash")
@@ -1225,13 +1225,29 @@ def _undo(
         target = Path(record.source)
 
         if not source.is_file():
+            if _compagnon_retire(record, source, target):
+                # Affiche ou sous-titre retire depuis par le nettoyage des
+                # fichiers annexes : il n'y a rien a ramener. Garder l'entree la
+                # ferait echouer a chaque annulation, pour toujours.
+                results.append(
+                    ApplyResult(
+                        record.plan_id,
+                        True,
+                        record.destination,
+                        None,
+                        "fichier associé déjà absent, rien à ramener",
+                        reason="ok",
+                    )
+                )
+                defaites.add(id(record))
+                continue
             results.append(
                 ApplyResult(
                     record.plan_id,
                     False,
                     record.destination,
                     record.source,
-                    "fichier introuvable a sa destination — deja deplace ailleurs ?",
+                    "fichier introuvable à sa destination — déjà déplacé ailleurs ?",
                 )
             )
             continue
@@ -1243,7 +1259,7 @@ def _undo(
                     False,
                     record.destination,
                     record.source,
-                    "l'emplacement d'origine est occupe — rien n'a ete ecrase",
+                    "l'emplacement d'origine est occupé — rien n'a été écrasé",
                 )
             )
             continue
@@ -1283,6 +1299,22 @@ pas de garder une fiche."""
 
 _FICHES_COMMUNES = frozenset({"tvshow", "movie"})
 """Radicaux des fiches qui decrivent un DOSSIER, et non un fichier."""
+
+
+def _compagnon_retire(record: MoveRecord, destination: Path, origine: Path) -> bool:
+    """Un compagnon ACCESSOIRE absent de sa destination comme de son origine.
+
+    Une affiche ou un sous-titre emporte avec la video peut avoir ete retire
+    ensuite, volontairement, par le nettoyage des fichiers annexes. Seuls les
+    accessoires beneficient de cette lecture : une video absente, elle, reste
+    une anomalie a signaler.
+    """
+    return (
+        record.kind == "companion"
+        and destination.suffix.lower() in _ACCESSOIRES
+        and not destination.is_symlink()
+        and not origine.exists()
+    )
 
 
 def _est_un_media(chemin: Path) -> bool:

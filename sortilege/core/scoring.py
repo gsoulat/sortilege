@@ -77,7 +77,8 @@ class Signals:
 
 
 AUTO_APPLY_THRESHOLD = 0.92
-"""Au-dessus : on applique sans demander. Regle depuis l'environnement."""
+"""Au-dessus : on applique sans demander. Defaut livre : l'environnement puis
+Reglages -> Identification le remplacent (voir ``api/deps.decision_thresholds``)."""
 
 REJECT_THRESHOLD = 0.40
 """En dessous : rejet direct, sans encombrer la file de revue."""
@@ -91,7 +92,8 @@ REJECT_THRESHOLD = 0.40
 
 @dataclass(slots=True)
 class Policy:
-    """Seuils, pilotes par l'environnement. Voir config.py."""
+    """Seuils de decision. Construite par ``api/deps.decision_policy``, seule
+    source des seuils effectifs : reglage de l'interface, sinon environnement."""
 
     auto_apply_threshold: float = AUTO_APPLY_THRESHOLD
     reject_threshold: float = REJECT_THRESHOLD

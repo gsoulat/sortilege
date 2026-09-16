@@ -21,11 +21,13 @@ import logging
 import os
 import re
 import shutil
-from dataclasses import dataclass
+import stat
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 
+from .ebook import BOOK_EXTENSIONS
 from .parser import VIDEO_EXTENSIONS
 
 logger = logging.getLogger(__name__)
@@ -371,6 +373,8 @@ def find_empty_dirs(roots: list[Path]) -> list[Path]:
 # metadonnees, sous-titres, sommes de controle, restes d'extraction. Aucun de
 # ces fichiers n'a de valeur seul — ils decrivent ou completent une video qui
 # n'est plus la.
+# Jamais de marqueur de telechargement en cours (.part, .!ut...) : un dossier
+# qui n'en contient qu'un est un transfert vivant, pas une coquille.
 ORPHAN_EXTENSIONS = {
     *ARTWORK_EXTENSIONS,
     ".nfo",
@@ -388,8 +392,6 @@ ORPHAN_EXTENSIONS = {
     ".md5",
     ".url",
     ".log",
-    ".part",
-    ".!ut",
 }
 
 
@@ -478,3 +480,377 @@ def find_orphan_dirs(roots: list[Path]) -> list[OrphanDir]:
             orphelins.append(OrphanDir(path=chemin, files=chemins, bytes=taille))
 
     return sorted(orphelins, key=lambda o: str(o.path))
+
+
+# --- Fichiers annexes de la bibliotheque -------------------------------------
+
+EXTRA_CATEGORIES: tuple[str, ...] = ("trickplay", "images", "fiches", "sous_titres", "autres")
+"""Categories proposees au nettoyage, dans l'ordre ou elles s'affichent."""
+
+FICHE_EXTENSIONS = {".nfo", ".opf"}
+
+# Principe de surete : on ne propose que ce qu'on sait reconnaitre. Chaque
+# categorie est une liste FERMEE. Un fichier qu'aucune ne retient n'est jamais
+# propose : il est compte a part (``unknown``), pour que l'ecran dise ce qu'il
+# laisse en place. « autres » a ete un fourre-tout — tout ce qui n'etait ni
+# image, ni fiche, ni sous-titre — et une passe « supprimer » y a detruit des
+# videos .ogm, des pistes TrueHD, des livres .azw et une base Calibre.
+
+# Videos que ``VIDEO_EXTENSIONS`` ne range pas, mais qui restent des videos : les
+# proposer ferait supprimer un film d'un seul geste. Les images de disque (.iso,
+# .img, .bin, .mdf, .nrg) en font partie : ce sont le plus souvent des DVD.
+_AUTRES_VIDEOS = {
+    ".webm",
+    ".flv",
+    ".f4v",
+    ".ogv",
+    ".ogm",
+    ".ogx",
+    ".3gp",
+    ".3g2",
+    ".vob",
+    ".evo",
+    ".divx",
+    ".xvid",
+    ".rm",
+    ".rmvb",
+    ".asf",
+    ".mts",
+    ".m2t",
+    ".m2v",
+    ".m1v",
+    ".mp2v",
+    ".mpe",
+    ".mpv",
+    ".mk3d",
+    ".trp",
+    ".tp",
+    ".mod",
+    ".tod",
+    ".dv",
+    ".mxf",
+    ".wtv",
+    ".dvr-ms",
+    ".vro",
+    ".rec",
+    ".qt",
+    ".h264",
+    ".264",
+    ".hevc",
+    ".y4m",
+    ".amv",
+    ".nsv",
+    ".iso",
+    ".img",
+    ".bin",
+    ".mdf",
+    ".nrg",
+}
+
+_VIDEOS = VIDEO_EXTENSIONS | _AUTRES_VIDEOS
+
+# Film decoupe en morceaux (« Film.mkv.001 », « Film.mkv.002 ») : chaque morceau
+# est une partie de la video, pas un reste.
+_MORCEAU_DE_VIDEO = re.compile(
+    r"\.(?:" + "|".join(re.escape(e[1:]) for e in sorted(_VIDEOS)) + r")\.\d{2,3}$",
+    re.IGNORECASE,
+)
+
+# Pistes audio : une piste .mka ou .thd posee a cote d'un film est son doublage,
+# et une bibliotheque peut abriter des livres audio. Rien de tout cela n'est un
+# reste.
+AUDIO_EXTENSIONS = {
+    ".mka",
+    ".mp3",
+    ".mp2",
+    ".mpa",
+    ".mpc",
+    ".flac",
+    ".m4a",
+    ".m4b",
+    ".m4r",
+    ".aac",
+    ".ac3",
+    ".eac3",
+    ".dts",
+    ".dtshd",
+    ".thd",
+    ".truehd",
+    ".mlp",
+    ".ogg",
+    ".oga",
+    ".opus",
+    ".spx",
+    ".weba",
+    ".wav",
+    ".wma",
+    ".aiff",
+    ".aif",
+    ".ape",
+    ".wv",
+    ".alac",
+    ".tta",
+    ".dsf",
+    ".dff",
+    ".amr",
+    ".caf",
+    ".aax",
+    ".aa",
+}
+
+# Livres que ``BOOK_EXTENSIONS`` ne range pas (le scan ne sait pas les lire),
+# mais qui restent des livres. Un .txt ou un .doc est un livre possible : dans le
+# doute, il est protege.
+_AUTRES_LIVRES = {
+    ".azw",
+    ".kfx",
+    ".kepub",
+    ".prc",
+    ".pdb",
+    ".lit",
+    ".lrf",
+    ".ibooks",
+    ".chm",
+    ".djv",
+    ".xps",
+    ".cb7",
+    ".cbt",
+    ".cba",
+    ".rtf",
+    ".doc",
+    ".docx",
+    ".odt",
+    ".txt",
+}
+
+_LIVRES = BOOK_EXTENSIONS | _AUTRES_LIVRES
+
+# Arborescences de disque (DVD, Blu-ray, HD DVD, AVCHD) : leurs fichiers ne sont
+# pas des annexes mais la structure qui rend la video lisible.
+_DOSSIERS_DE_DISQUE = {"video_ts", "audio_ts", "bdmv", "certificate", "hvdvd_ts"}
+
+# Les memes fichiers, quand l'arborescence a ete aplatie (« DVD/VTS_01_0.IFO »
+# sans dossier VIDEO_TS) : proteges ou qu'ils soient.
+_FICHIERS_DE_DISQUE = {".ifo", ".bup", ".bdmv", ".mpls", ".clpi", ".evo"}
+
+# Corbeilles, vignettes et dossiers techniques des NAS et des systemes, en plus
+# de tout dossier cache. Compares sans casse et espaces normalises (voir
+# ``_nom_de_dossier``).
+_DOSSIERS_SYSTEME = {
+    "@eadir",
+    "@__thumb",
+    "@synoresource",
+    "#recycle",
+    "#snapshot",
+    "@recycle",
+    "@recycle.bin",
+    "@recently-snapshot",
+    "$recycle.bin",
+    "system volume information",
+    "lost+found",
+    "network trash folder",
+    "temporary items",
+}
+
+# Dechets RECONNUS, seuls admis dans « autres ». Aucun format ambigu : .txt peut
+# etre un livre, .xml un « ComicInfo.xml », .bak l'original qu'une fiche a
+# remplace, .log le journal d'extraction d'un CD (EAC) qu'on ne refait pas sans
+# le disque. Sommes de controle, raccourcis, fichiers de parite et d'index de
+# release : rien qui ait de valeur une fois la video en place.
+DECHETS_EXTENSIONS = frozenset(
+    {
+        ".sfv",
+        ".md5",
+        ".sha1",
+        ".sha256",
+        ".url",
+        ".lnk",
+        ".nzb",
+        ".torrent",
+        ".par2",
+        ".srr",
+        ".srs",
+    }
+)
+
+# Fichiers systeme reconnus par leur NOM, compares sans casse.
+DECHETS_NOMS = frozenset({"thumbs.db", "ehthumbs.db", "desktop.ini", ".ds_store"})
+
+# Cache de Jellyfin : « <video>.trickplay/<largeur> - <n>x<n>/<i>.jpg ». Il le
+# regenere, c'est le seul endroit ou un fichier non reconnu peut etre propose.
+_MARQUE_TRICKPLAY = ".trickplay"
+
+UNKNOWN_SAMPLES = 8
+"""Exemples de fichiers inconnus gardes pour l'ecran."""
+
+
+@dataclass(slots=True)
+class ExtraCategory:
+    """Les fichiers d'une categorie, dans l'ordre du parcours."""
+
+    files: list[Path] = field(default_factory=list)
+    bytes: int = 0
+
+
+@dataclass(slots=True)
+class Extras:
+    """Inventaire des fichiers annexes sous la racine d'une bibliotheque."""
+
+    root: Path
+    categories: dict[str, ExtraCategory]
+    videos: int = 0
+    books: int = 0
+    audio: int = 0
+    unknown: int = 0
+    """Fichiers qu'aucune liste ne reconnait : jamais proposes."""
+    unknown_samples: list[Path] = field(default_factory=list)
+    skipped_dirs: int = 0
+    """Dossiers illisibles sautes : le releve est alors incomplet."""
+
+    @property
+    def total_bytes(self) -> int:
+        return sum(c.bytes for c in self.categories.values())
+
+
+def _nom_de_dossier(nom: str) -> str:
+    """Nom compare sans casse, blancs normalises (espace insecable compris)."""
+    return " ".join(nom.split()).casefold()
+
+
+def _dans_un_disque(dossiers: tuple[str, ...]) -> bool:
+    return any(_nom_de_dossier(d) in _DOSSIERS_DE_DISQUE for d in dossiers)
+
+
+def _dans_un_trickplay(dossiers: tuple[str, ...]) -> bool:
+    return any(_MARQUE_TRICKPLAY in d.casefold() for d in dossiers)
+
+
+def classify_extra(relatif: Path) -> str:
+    """Nature d'un fichier, d'apres son chemin RELATIF a la racine.
+
+    Rend une categorie de ``EXTRA_CATEGORIES``, ou une famille jamais proposee :
+    « videos », « books », « audio » (comptees), « disque » et « cache »
+    (structure de disque, fichier cache), « unknown » (non reconnu).
+
+    Le chemin doit etre relatif : un nom de racine comme « /srv/x.trickplay »
+    ferait sinon basculer toute la bibliotheque dans la categorie trickplay.
+
+    L'ordre est celui de la surete. Les protections passent AVANT tout : une
+    video rangee par erreur dans un dossier .trickplay reste une video. Seuls
+    les fichiers caches passent devant, et ils ne sont jamais proposes non plus
+    (sauf « .DS_Store », dechet reconnu) : un « ._Film.mkv » de macOS n'est pas
+    une video de plus a compter.
+    """
+    nom = relatif.name
+    bas = nom.casefold()
+    dossiers = relatif.parts[:-1]
+    extension = relatif.suffix.casefold()
+
+    if _sans_interet(nom) and bas not in DECHETS_NOMS:
+        return "cache"
+    if extension in _VIDEOS or _MORCEAU_DE_VIDEO.search(bas):
+        return "videos"
+    if extension in _LIVRES:
+        return "books"
+    if extension in AUDIO_EXTENSIONS:
+        return "audio"
+    if extension in _FICHIERS_DE_DISQUE or _dans_un_disque(dossiers):
+        return "disque"
+
+    trickplay = _dans_un_trickplay(dossiers)
+    if bas in DECHETS_NOMS:
+        return "trickplay" if trickplay else "autres"
+    if trickplay:
+        return "trickplay"
+    if extension in ARTWORK_EXTENSIONS:
+        return "images"
+    if extension in FICHE_EXTENSIONS:
+        return "fiches"
+    if extension in SUBTITLE_EXTENSIONS:
+        return "sous_titres"
+    if extension in DECHETS_EXTENSIONS:
+        return "autres"
+    return "unknown"
+
+
+def extra_category(relatif: Path) -> str | None:
+    """Categorie proposee d'un fichier (chemin relatif), ou None : jamais propose."""
+    nature = classify_extra(relatif)
+    return nature if nature in EXTRA_CATEGORIES else None
+
+
+def _dossier_ignore(nom: str) -> bool:
+    return nom.startswith(".") or _nom_de_dossier(nom) in _DOSSIERS_SYSTEME or nom == TRASH_DIRNAME
+
+
+def find_extras(root: Path) -> Extras:
+    """Les fichiers annexes RECONNUS sous la bibliotheque, par categorie.
+
+    Les affiches, fiches et sous-titres deposes a cote de chaque media finissent
+    par peser : quelques centaines de Mo sur une grosse bibliotheque. Ce
+    parcours les classe pour que l'utilisateur choisisse ce qu'il retire.
+
+    Ne sont JAMAIS proposes :
+
+    - les videos, livres et pistes audio — comptes a part, pour que l'ecran
+      dise ce qui est protege et pas seulement ce qui partira ;
+    - tout fichier qu'aucune liste ne reconnait — compte dans ``unknown``, avec
+      quelques exemples ;
+    - la corbeille, les dossiers caches et les dossiers systeme ;
+    - les structures de disque (VIDEO_TS, BDMV, HVDVD_TS, et les .ifo, .bup,
+      .bdmv, .mpls, .clpi, .evo ou qu'ils soient) ;
+    - les liens symboliques, dossiers comme fichiers : un lien peut designer un
+      fichier HORS de la bibliotheque, et le mettre en corbeille ou le
+      supprimer toucherait ce qu'on n'a jamais demande a ranger. Seuls les
+      fichiers ordinaires sont retenus.
+
+    Un dossier illisible est saute et compte (``skipped_dirs``), et le parcours
+    continue.
+    """
+    extras = Extras(root=root, categories={cle: ExtraCategory() for cle in EXTRA_CATEGORIES})
+    if not root.is_dir():
+        return extras
+
+    def illisible(exc: OSError) -> None:
+        extras.skipped_dirs += 1
+        logger.warning("dossier illisible ignore pendant l'inventaire (%s)", exc.strerror)
+
+    for courant, sous_dossiers, fichiers in os.walk(root, onerror=illisible):
+        chemin = Path(courant)
+        # Elagage sur place : os.walk ne descend que dans ce qui reste. Il ne
+        # suit pas les liens symboliques, mais les liste parmi les dossiers.
+        sous_dossiers[:] = sorted(
+            d for d in sous_dossiers if not _dossier_ignore(d) and not (chemin / d).is_symlink()
+        )
+        base = chemin.relative_to(root)
+
+        for nom in sorted(fichiers):
+            fichier = chemin / nom
+            nature = classify_extra(base / nom)
+            if nature == "videos":
+                extras.videos += 1
+                continue
+            if nature == "books":
+                extras.books += 1
+                continue
+            if nature == "audio":
+                extras.audio += 1
+                continue
+            if nature == "unknown":
+                extras.unknown += 1
+                if len(extras.unknown_samples) < UNKNOWN_SAMPLES:
+                    extras.unknown_samples.append(fichier)
+                continue
+            if nature not in EXTRA_CATEGORIES:
+                continue  # structure de disque, fichier cache
+            try:
+                info = fichier.lstat()
+            except OSError:
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                continue  # lien symbolique, tube, socket : jamais propose
+            categorie = extras.categories[nature]
+            categorie.files.append(fichier)
+            categorie.bytes += info.st_size
+
+    return extras

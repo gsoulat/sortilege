@@ -329,4 +329,4 @@ def test_un_refus_de_permission_nomme_le_proprietaire(space: Path, monkeypatch) 
     # qui gouverne une suppression. Diagnostiquer le fichier envoie chercher au
     # mauvais endroit.
     assert "DOSSIER" in message
-    assert "Sortilege tourne en" in message
+    assert "Sortilège tourne en" in message

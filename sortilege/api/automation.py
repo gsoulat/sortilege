@@ -32,13 +32,13 @@ from ..core.notify import cycle_notification, failure_notification, send
 from ..core.pipeline import BATCH_SIZE, Pipeline
 from ..core.planner import Plan
 from ..core.scanner import scan
-from ..core.scoring import Decision, Policy
+from ..core.scoring import Decision
 from ..core.vpn import egress_allowed
 from ..core.watch import Watcher
 from ..providers.anilist import AniListProvider
 from ..providers.tmdb import TMDBProvider
 from . import library, review
-from .deps import get_journal, get_memory, get_store, scan_rules, tmdb_key
+from .deps import decision_policy, get_journal, get_memory, get_store, scan_rules, tmdb_key
 
 logger = logging.getLogger(__name__)
 
@@ -174,10 +174,10 @@ async def run_cycle(*, forced: bool = False) -> CycleReport:
         library_root=conf.library_root,
         templates={k: prefs.template_for(k) for k in ("movie", "episode", "anime")},
         destination_for=store.destination_root,
-        policy=Policy(
-            auto_apply_threshold=conf.auto_apply_threshold,
-            reject_threshold=conf.reject_threshold,
-        ),
+        # Memes seuils effectifs que le traitement manuel : un cycle qui lirait
+        # encore l'environnement rangerait sans relecture selon d'AUTRES seuils
+        # que ceux affiches dans Reglages -> Identification.
+        policy=decision_policy(prefs),
         ai=review._ai_resolver(),
         ai_threshold=prefs.ai.threshold,
         memory=get_memory(),

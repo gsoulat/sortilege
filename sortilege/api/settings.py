@@ -31,8 +31,10 @@ from ..core.nfo import ON_EXISTING_CHOICES, LocalMetadataSettings
 from ..core.notify import Notification, send
 from ..core.preferences import (
     KINDS,
+    THRESHOLD_FROM_ENV,
     AISettings,
     AutomationSettings,
+    IdentificationSettings,
     MediaServerSettings,
     MetadataSettings,
     NotificationSettings,
@@ -44,6 +46,8 @@ from ..core.preferences import (
     SubtitleSettings,
     TranscodeSettings,
     VpnSettings,
+    as_percent,
+    effective_thresholds,
 )
 from ..core.probe import ffprobe_available
 from ..core.quality import STRATEGIES as QUALITY_STRATEGIES
@@ -53,7 +57,7 @@ from ..core.vpn import egress_allowed
 from ..core.vpn import reset_cache as reset_vpn_cache
 from ..providers.base import forget_auth_errors, last_auth_error
 from ..providers.tmdb import TMDBProvider
-from .deps import get_memory, get_store, tmdb_key, tmdb_language
+from .deps import decision_thresholds, get_memory, get_store, tmdb_key, tmdb_language
 
 router = APIRouter(prefix="/api/settings", tags=["reglages"])
 
@@ -162,6 +166,29 @@ class VpnIn(BaseModel):
     reference_ip: str | None = None
 
 
+class IdentificationIn(BaseModel):
+    """Seuils de decision, en POURCENTAGE ENTIER de 0 a 100.
+
+    Trois etats par champ — d'ou la lecture de ``model_fields_set`` :
+
+    - **absent** : le reglage enregistre ne bouge pas ;
+    - **un entier** : il devient le reglage, prioritaire sur l'environnement ;
+    - **null** : le reglage est efface, et l'environnement reprend la main
+      (``SORTILEGE_AUTO_APPLY_THRESHOLD`` / ``SORTILEGE_REJECT_THRESHOLD``,
+      a defaut les valeurs livrees).
+
+    ``null`` et non « - » comme pour les cles : ces champs sont des nombres, et
+    un « - » y serait une chaine de plus a refuser. Pas de confusion possible
+    ici entre « vide » et « ne change pas » : un nombre n'a pas de chaine vide.
+    """
+
+    auto_apply_percent: int | None = None
+    """Pret a ranger a partir de ce score."""
+
+    reject_percent: int | None = None
+    """Ecarte en dessous de ce score."""
+
+
 class PreferencesIn(BaseModel):
     custom_sources: list[str] | None = None
     enabled_sources: list[str] | None = None
@@ -179,6 +206,34 @@ class PreferencesIn(BaseModel):
     local_metadata: LocalMetadataIn | None = None
     subtitles: SubtitlesIn | None = None
     vpn: VpnIn | None = None
+    identification: IdentificationIn | None = None
+
+
+def _identification_out(prefs: Preferences) -> dict[str, object]:
+    """Seuils effectifs en pourcentage, d'ou vient chacun, et ceux du .env.
+
+    La source est rendue pour la meme raison que pour la cle TheMovieDB : un
+    seuil affiche sans provenance laisse croire que le modifier ici est sans
+    effet, ou que le .env ne compte plus.
+    """
+    conf = get_settings()
+    seuils = decision_thresholds(prefs)
+    declares = conf.model_fields_set
+    return {
+        "auto_apply_percent": seuils.auto_apply_percent,
+        "reject_percent": seuils.reject_percent,
+        "auto_apply_source": seuils.auto_apply_source,
+        "reject_source": seuils.reject_source,
+        "environment": {
+            "auto_apply_percent": as_percent(conf.auto_apply_threshold),
+            "reject_percent": as_percent(conf.reject_threshold),
+            # Faux = aucune variable posee : c'est la valeur livree avec
+            # Sortilege, et l'ecran ne doit pas l'attribuer a un .env.
+            "auto_apply_declared": "auto_apply_threshold" in declares,
+            "reject_declared": "reject_threshold" in declares,
+        },
+        "ignored_reason": seuils.ignored_reason,
+    }
 
 
 def _ai_ready(prefs: Preferences) -> dict[str, object]:
@@ -216,6 +271,7 @@ def read_preferences() -> dict[str, object]:
         ],
         "library_root": str(conf.library_root),
         "resolved_destinations": {k: str(store.destination_root(k)) for k in KINDS},
+        "identification": _identification_out(prefs),
         "ai": {
             "enabled": prefs.ai.enabled,
             "provider": prefs.ai.provider,
@@ -473,6 +529,37 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
             patch["reference_ip"] = "" if valeur == "-" else valeur
         tunnel = VpnSettings(**{**asdict(current.vpn), **patch})
 
+    seuils = current.identification
+    if body.identification is not None:
+        champs = {}
+        for nom in body.identification.model_fields_set:
+            valeur = getattr(body.identification, nom)
+            if valeur is None:
+                champs[nom] = THRESHOLD_FROM_ENV
+                continue
+            if not 0 <= valeur <= 100:
+                # Refuse ICI et non au magasin : -1 y est la sentinelle
+                # « environnement », et un -1 envoye par erreur passerait pour
+                # une demande de repli.
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Un seuil doit être compris entre 0 et 100 % (reçu : {valeur}). "
+                    "Pour revenir à la valeur de l'environnement, envoie null.",
+                )
+            champs[nom] = valeur
+        seuils = IdentificationSettings(**{**asdict(current.identification), **champs})
+        # Le melange avec l'environnement ne se verifie qu'ici, ou il est
+        # connu : un « pret » regle a 35 % sous un « ecarte » du .env a 40 %
+        # doit etre refuse a la saisie, pas decouvert au calcul suivant.
+        conf = get_settings()
+        try:
+            effective_thresholds(
+                seuils, conf.auto_apply_threshold, conf.reject_threshold, strict=True
+            )
+        except PreferenceError as exc:
+            motif = str(exc)
+            raise HTTPException(status_code=400, detail=motif[:1].upper() + motif[1:]) from exc
+
     merged = Preferences(
         custom_sources=(
             current.custom_sources if body.custom_sources is None else body.custom_sources
@@ -499,6 +586,7 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
         local_metadata=fiches,
         subtitles=sous_titres,
         vpn=tunnel,
+        identification=seuils,
     )
 
     try:
@@ -933,15 +1021,21 @@ def browse(path: str | None = None) -> dict[str, object]:
 @router.get("")
 def read_settings() -> dict[str, object]:
     s = get_settings()
+    seuils = decision_thresholds()
 
     return {
         "paths": {
             "source_roots": [str(p) for p in s.source_roots],
             "library_root": str(s.library_root),
         },
+        # Les seuils EFFECTIFS : depuis qu'ils se reglent dans Reglages ->
+        # Identification, ceux de l'environnement ne sont plus qu'un repli, et
+        # les afficher seuls ici contredirait l'autre ecran.
         "behaviour": {
-            "auto_apply_threshold": s.auto_apply_threshold,
-            "reject_threshold": s.reject_threshold,
+            "auto_apply_threshold": seuils.auto_apply,
+            "reject_threshold": seuils.reject,
+            "auto_apply_source": seuils.auto_apply_source,
+            "reject_source": seuils.reject_source,
         },
         "providers": [
             {

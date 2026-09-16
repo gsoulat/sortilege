@@ -123,6 +123,163 @@ class MetadataSettings:
     score, et remplit la file de revue d'identifications pourtant justes."""
 
 
+THRESHOLD_FROM_ENV = -1
+"""Valeur sentinelle d'un seuil : « aucun reglage, l'environnement decide »."""
+
+SOURCE_SETTING = "reglage"
+SOURCE_ENV = "environnement"
+
+
+@dataclass
+class IdentificationSettings:
+    """Seuils de decision du score de confiance, en POURCENTAGE ENTIER.
+
+    Ils vivaient dans l'environnement seul (``SORTILEGE_AUTO_APPLY_THRESHOLD``,
+    ``SORTILEGE_REJECT_THRESHOLD``) : les changer imposait d'editer un fichier
+    et de redemarrer, pour le reglage qui decide ce qui part sans relecture.
+
+    L'environnement reste lu en REPLI, exactement comme la cle TheMovieDB : une
+    installation qui y a fixe ses seuils les garde tant que personne n'a rien
+    enregistre depuis l'ecran. Chaque seuil a son propre repli.
+
+    Un entier sentinelle (``THRESHOLD_FROM_ENV``) et non ``None`` pour dire
+    « pas de reglage » : ``_meme_nature`` controle une valeur relue d'apres la
+    nature de son defaut, et un defaut ``None`` laisserait tout passer — une
+    chaine ecrite a la main arriverait jusqu'a la comparaison du score et
+    leverait au milieu d'un calcul de plans. Des pourcentages entiers et non
+    des fractions : c'est l'unite de l'ecran, et un entier ne porte pas de
+    0.9200000000000001 d'arrondi.
+    """
+
+    auto_apply_percent: int = THRESHOLD_FROM_ENV
+    """A partir de ce score, le plan est pret a ranger (AUTO)."""
+
+    reject_percent: int = THRESHOLD_FROM_ENV
+    """Sous ce score, le plan est ecarte (REJECT). Entre les deux : a verifier."""
+
+
+@dataclass(frozen=True, slots=True)
+class EffectiveThresholds:
+    """Les seuils qui s'appliquent vraiment, et d'ou chacun vient."""
+
+    auto_apply: float
+    reject: float
+    auto_apply_source: str
+    reject_source: str
+    ignored_reason: str = ""
+    """Non vide quand un reglage enregistre est IGNORE au profit de
+    l'environnement. Dit pourquoi : un reglage ecarte sans un mot serait un
+    reglage qui « ne marche pas »."""
+
+    @property
+    def auto_apply_percent(self) -> int:
+        return as_percent(self.auto_apply)
+
+    @property
+    def reject_percent(self) -> int:
+        return as_percent(self.reject)
+
+
+def as_percent(fraction: float) -> int:
+    """0.92 -> 92. Arrondi et non tronque : 0.92 * 100 vaut 92.00000000000001."""
+    return round(fraction * 100)
+
+
+def check_thresholds(reglage: IdentificationSettings) -> tuple[int | None, int | None]:
+    """Controle ce que le bloc peut verifier SEUL, sans l'environnement.
+
+    Rend les deux pourcentages retenus, ``None`` pour un seuil non regle. Le
+    melange reglage / environnement est verifie par ``effective_thresholds`` :
+    le magasin ne connait pas l'environnement.
+    """
+    retenus: list[int | None] = []
+    for valeur, libelle in (
+        (reglage.auto_apply_percent, "prêt à ranger"),
+        (reglage.reject_percent, "écarté"),
+    ):
+        if valeur == THRESHOLD_FROM_ENV:
+            retenus.append(None)
+            continue
+        if not 0 <= valeur <= 100:
+            raise PreferenceError(
+                f"le seuil « {libelle} » doit être compris entre 0 et 100 % (reçu : {valeur})."
+            )
+        retenus.append(valeur)
+    auto, rejet = retenus
+    if auto is not None and rejet is not None and rejet >= auto:
+        raise PreferenceError(_message_ordre(rejet, auto, "", ""))
+    return auto, rejet
+
+
+def _message_ordre(rejet: int, auto: int, origine_rejet: str, origine_auto: str) -> str:
+    return (
+        f"le seuil « écarté » ({rejet} %{origine_rejet}) doit rester strictement sous le seuil "
+        f"« prêt à ranger » ({auto} %{origine_auto}) : sinon plus aucun plan n'arrive « à "
+        "vérifier », tout est rangé sans relecture ou écarté."
+    )
+
+
+def effective_thresholds(
+    reglage: IdentificationSettings,
+    env_auto_apply: float,
+    env_reject: float,
+    *,
+    strict: bool = False,
+) -> EffectiveThresholds:
+    """Seuils effectifs : le reglage d'abord, l'environnement en repli.
+
+    Meme ordre que la cle TheMovieDB, pour la meme raison : l'inverse donnerait
+    une saisie acceptee, enregistree, et sans effet sur toute installation qui
+    a un .env.
+
+    Un melange incoherent (un seuil regle, l'autre venu de l'environnement, et
+    « ecarte » au-dessus de « pret ») est REFUSE avec ``strict`` — c'est le cas
+    de l'enregistrement. Sans ``strict`` — le calcul des plans, qui ne doit
+    jamais lever —, le reglage est ignore en bloc et l'environnement s'applique
+    : c'est ce qui arrive quand le .env change apres coup. ``ignored_reason``
+    le dit a l'ecran.
+    """
+    try:
+        auto_pct, rejet_pct = check_thresholds(reglage)
+        auto = env_auto_apply if auto_pct is None else auto_pct / 100
+        rejet = env_reject if rejet_pct is None else rejet_pct / 100
+        if (auto_pct is not None or rejet_pct is not None) and rejet >= auto:
+            raise PreferenceError(
+                _message_ordre(
+                    as_percent(rejet),
+                    as_percent(auto),
+                    ", valeur du .env" if rejet_pct is None else "",
+                    ", valeur du .env" if auto_pct is None else "",
+                )
+            )
+    except PreferenceError as exc:
+        if strict:
+            raise
+        logger.warning(
+            "seuils de decision : reglage ignore (pret=%s, ecarte=%s), environnement applique",
+            reglage.auto_apply_percent,
+            reglage.reject_percent,
+        )
+        motif = str(exc)
+        return EffectiveThresholds(
+            auto_apply=env_auto_apply,
+            reject=env_reject,
+            auto_apply_source=SOURCE_ENV,
+            reject_source=SOURCE_ENV,
+            ignored_reason=(
+                f"Réglage ignoré : {motif[:1].lower()}{motif[1:]} Les deux seuils de "
+                "l'environnement s'appliquent en attendant."
+            ),
+        )
+
+    return EffectiveThresholds(
+        auto_apply=auto,
+        reject=rejet,
+        auto_apply_source=SOURCE_ENV if auto_pct is None else SOURCE_SETTING,
+        reject_source=SOURCE_ENV if rejet_pct is None else SOURCE_SETTING,
+    )
+
+
 @dataclass
 class ScanSettings:
     """Ce que le parcours des sources ecarte avant meme de l'analyser.
@@ -365,6 +522,7 @@ class Preferences:
     local_metadata: LocalMetadataSettings = field(default_factory=LocalMetadataSettings)
     subtitles: SubtitleSettings = field(default_factory=SubtitleSettings)
     vpn: VpnSettings = field(default_factory=VpnSettings)
+    identification: IdentificationSettings = field(default_factory=IdentificationSettings)
 
     def template_for(self, kind: str) -> str:
         return self.templates.get(kind) or PRESETS["jellyfin"].get(kind, "")
@@ -558,6 +716,9 @@ class PreferenceStore:
                 local_metadata=_bloc(LocalMetadataSettings, raw.get("local_metadata")),
                 subtitles=_bloc(SubtitleSettings, raw.get("subtitles")),
                 vpn=_bloc(VpnSettings, raw.get("vpn")),
+                # Absent d'un fichier ecrit avant ce reglage : les defauts disent
+                # « environnement » pour les deux seuils, rien ne change.
+                identification=_bloc(IdentificationSettings, raw.get("identification")),
             )
             return self._cache
 
@@ -852,6 +1013,13 @@ class PreferenceStore:
 
         if prefs.automation.quiet_seconds < 0:
             raise PreferenceError("le délai de stabilité ne peut pas être négatif")
+
+        # Ce que le bloc peut verifier seul. Le melange avec l'environnement se
+        # verifie a l'enregistrement depuis l'API : le magasin ne connait pas
+        # l'environnement, et refuser ICI un melange devenu incoherent parce
+        # que le .env a change ferait echouer tous les enregistrements, y
+        # compris ceux qui n'ont rien a voir avec les seuils.
+        check_thresholds(prefs.identification)
 
         if not 0.0 <= prefs.ai.threshold <= 1.0:
             raise PreferenceError("le seuil IA doit être compris entre 0 et 1")

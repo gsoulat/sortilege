@@ -607,3 +607,24 @@ def test_une_saison_illisible_protege_la_serie(tmp_path: Path) -> None:
         saison.chmod(0o755)
 
     assert "Serie (2020)" not in noms
+
+
+def test_un_telechargement_en_cours_n_est_pas_une_coquille(tmp_path: Path) -> None:
+    """Un dossier qui ne contient qu'un « .part » est un transfert vivant.
+
+    Le nettoyage des coquilles le proposait, et la corbeille emportait le
+    telechargement en cours."""
+    from sortilege.core.companions import find_orphan_dirs
+
+    en_cours = tmp_path / "Film.2020.1080p"
+    en_cours.mkdir()
+    (en_cours / "Film.2020.1080p.mkv.part").write_bytes(b"x")
+    (en_cours / "Film.2020.1080p.nfo").write_text("release", encoding="utf-8")
+    coquille = tmp_path / "Vieux.2019"
+    coquille.mkdir()
+    (coquille / "Vieux.2019.nfo").write_text("release", encoding="utf-8")
+
+    noms = {o.path.name for o in find_orphan_dirs([tmp_path])}
+
+    assert "Vieux.2019" in noms, "temoin : une vraie coquille reste detectee"
+    assert "Film.2020.1080p" not in noms

@@ -4,6 +4,7 @@ import CandidatePicker from './CandidatePicker.vue'
 import ImageZoom from './ImageZoom.vue'
 import BookReader from './BookReader.vue'
 import ConfirmAction from './ConfirmAction.vue'
+import ExtrasCleanup from './ExtrasCleanup.vue'
 
 /**
  * Vue unique de la médiathèque.
@@ -1202,6 +1203,15 @@ onUnmounted(() => {
         </button>
       </div>
 
+      <!-- Les fichiers annexes (affiches, fiches, sous-titres) ne sont pas des
+           œuvres : ils ne dépendent ni des filtres ni de la liste ci-dessous, et
+           restent proposés quand aucune œuvre n'est à alléger. Placés AVANT les
+           filtres pour ne pas s'intercaler entre eux et la liste qu'ils trient.
+           `v-show` et non `v-if` : une analyse de plusieurs minutes sur un NAS,
+           ou le compte rendu d'un nettoyage, ne doit pas disparaître parce
+           qu'on est passé voir « Ce que je possède ». -->
+      <ExtrasCleanup v-show="sousVue === 'place'" />
+
       <div v-if="sousVue === 'avoir'" class="filters">
         <button :class="{ active: filter === 'all' }" @click="filter = 'all'">
           Tout ({{ parOnglet.length }})
@@ -1265,7 +1275,7 @@ onUnmounted(() => {
       <!-- Un écran vide qui ne dit rien laisse croire à une panne. Ici il dit
            ce qui a été cherché, et ce qui reste à régler pour trouver mieux. -->
       <p v-if="sousVue === 'place' && !parOnglet.length" class="rien-a-gagner">
-        Rien à récupérer : aucun doublon, aucun fichier anormalement lourd, et tout
+        Aucune œuvre à alléger : aucun doublon, aucun fichier anormalement lourd, et tout
         respecte la stratégie de son type. Les dossiers vides et la corbeille se vident
         dans <em>Réglages → Bibliothèque</em> et <em>Réglages → Système</em>.
       </p>

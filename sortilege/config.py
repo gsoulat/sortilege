@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     # Les defauts viennent de scoring.py, seul endroit ou ces seuils sont
     # ecrits : c'est la que la decision est prise, et deux declarations
     # finissent toujours par diverger sans que rien ne le signale.
+    # Ce ne sont plus que des REPLIS : Reglages -> Identification l'emporte
+    # quand un seuil y est enregistre. Ne pas les lire directement pour
+    # decider d'un plan — passer par ``api/deps.decision_policy``.
     auto_apply_threshold: float = AUTO_APPLY_THRESHOLD
     reject_threshold: float = REJECT_THRESHOLD
 
