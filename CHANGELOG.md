@@ -1,6 +1,37 @@
 # CHANGELOG
 
 
+## v0.52.1 (2026-09-16)
+
+### Bug Fixes
+
+- Un seuil enregistre reclasse la file deja calculee
+  ([`1598684`](https://github.com/gsoulat/sortilege/commit/15986847241aa123f9d41e28f719fbb9f8065cfb))
+
+Signale par l'utilisateur : le seuil « pret a ranger » regle a 60 %, des plans a 64, 67, 70 ou 73 %
+  restaient « a arbitrer ». Le seuil marchait ; il ne s'appliquait qu'aux plans calcules APRES. Un
+  verdict etait fige au calcul, et « Identifier » ne rejoue jamais un plan existant : le geste
+  naturel ne faisait rien, et seule « Recommencer l'identification » — qui reinterroge tous les
+  fournisseurs — changeait quelque chose.
+
+**La decision devient rejouable.** Chaque plan garde son score, les trois signaux que la decision
+  lit, et l'origine de son verdict. Enregistrer un seuil reclasse la file sans rappeler personne, et
+  l'ecran dit ce qui a bouge. Jamais reclasses : un verdict rendu a la main, une identification
+  memorisee, un identifiant declare, une regle d'episode. Les plans calcules par une version
+  precedente n'ont pas ces signaux : ils sont comptes a part, et l'ecran renvoie vers « Recommencer
+  l'identification » pour cette seule fois.
+
+**Corrige en chemin.** Choisir un candidat pour une serie sans numero d'episode ecrasait la regle
+  qui la garde « a verifier » : le fichier partait pret vers « Season/… - SE.mkv ».
+
+**Noms sans annee.** « Casse Tete Chinois HDLight mHDgz » gardait ses etiquettes dans le titre, ce
+  qui faussait la recherche. Sans annee pour borner le titre, il est coupe a la premiere etiquette
+  technique reconnue (HDLight, 4KLight, HDMA, 10bit, VFF…), en mot entier, sans jamais couper un
+  vrai titre comme « Light Year ».
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.52.0 (2026-09-16)
 
 ### Features
