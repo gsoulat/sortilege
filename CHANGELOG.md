@@ -1,6 +1,47 @@
 # CHANGELOG
 
 
+## v0.52.0 (2026-09-16)
+
+### Features
+
+- Nettoyer les fichiers annexes, seuils d'identification en pourcentage
+  ([`e8e0974`](https://github.com/gsoulat/sortilege/commit/e8e0974d439051bb445e36742b567ab2b7f51246))
+
+**Retirer ce qui n'est pas une video**
+
+Le depot d'affiches de la v0.51 et les vignettes de defilement de Jellyfin (`.trickplay`)
+  remplissent la mediatheque d'images. « Recuperer de la place » propose desormais les fichiers
+  annexes par categorie, avec leur nombre et leur poids : vignettes Jellyfin, images, fiches .nfo et
+  .opf, sous-titres, autres. Les vignettes et les images sont cochees par defaut ; les fiches et les
+  sous-titres portent un avertissement, parce que sans fiche Jellyfin reidentifie par le nom.
+
+Jamais proposes, meme en suppression definitive : videos (formats rares compris), pistes audio,
+  livres, contenu de VIDEO_TS et BDMV, corbeille, dossiers systeme du NAS, liens symboliques, et
+  tout ce qui est hors de la racine. Le serveur refait le parcours au moment du geste au lieu de
+  croire la liste de l'ecran. Corbeille par defaut — et l'ecran dit que la place n'est liberee
+  qu'une fois la corbeille videe.
+
+Un controle independant a detruit 82 fichiers precieux avec la premiere version : la categorie «
+  autres » prenait tout ce qu'elle ne connaissait pas, des videos .ogm aux livres .azw. Elle ne
+  prend plus qu'une liste fermee de dechets reconnus ; une extension inconnue n'est jamais proposee,
+  et un test rejoue ces 82 fichiers. Meme faille corrigee dans le nettoyage des coquilles, qui
+  prenait un telechargement en cours (.part) pour un dossier abandonne.
+
+En chemin : annuler un rangement dont l'affiche ou le sous-titre ont ete retires depuis ne tombe
+  plus en echec, et le message de permission refusee est accentue.
+
+**Le seuil « c'est bon » se regle en pourcentage**
+
+Les seuils « pret a ranger » et « ecarte » venaient de l'environnement seul. Ils se reglent dans
+  Reglages → Identification, avec la provenance de chaque valeur ; une installation qui les fixe
+  dans son .env les garde tant que rien n'est enregistre. Toutes les decisions passent par une
+  fonction unique : identification, choix manuel, cycle automatique. Les nouveaux seuils
+  s'appliquent aux prochaines identifications, et l'ecran le dit.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.51.0 (2026-09-11)
 
 ### Features
