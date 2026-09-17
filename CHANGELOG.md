@@ -1,6 +1,38 @@
 # CHANGELOG
 
 
+## v0.52.3 (2026-09-17)
+
+### Bug Fixes
+
+- Reconnaitre une copie interrompue, et ne conseiller PUID que s'il ne bloque pas l'autre bout
+  ([`9da40c7`](https://github.com/gsoulat/sortilege/commit/9da40c720d3c4e6a1f3ec2fff5d6c8aa73a022fd))
+
+Signale par l'utilisateur : « la copie fait 3,31 Go, le fichier range 3,31 Go — ce n'est pas le meme
+  fichier », et « Mets PUID=999 » alors que Sortilege tourne en 1000:1000.
+
+**L'arrondi cachait l'ecart.** Deux tailles affichees identiques suivies de « ce n'est pas le meme
+  fichier » se lisaient comme une contradiction. L'ecart exact est maintenant donne.
+
+**Une copie coupee passait pour un autre encodage.** Quand un deplacement est interrompu en pleine
+  copie (conteneur redemarre), le plus petit des deux fichiers est le debut exact du plus gros, ou
+  un fichier vide. « Garder le plus petit » y gardait un film tronque et mettait l'entier en
+  corbeille. Ce cas est reconnu par cinq fenetres d'1 Mio, dont l'en-tete et la fin du plus petit :
+  il a son propre groupe « Copie interrompue » avec « Garder le fichier complet », et ni « Garder le
+  plus petit » ni une strategie de qualite ne gardent plus le tronque.
+
+**Le conseil PUID deplacait le blocage.** Aligner Sortilege sur le proprietaire des telechargements
+  (999) l'empechait d'ecrire dans une bibliotheque en 1000. Le conseil verifie desormais l'autre
+  bout du deplacement ; s'il deviendrait inaccessible, il dit de reattribuer le dossier bloque et de
+  regler le client de telechargement (USER_ID/GROUP_ID chez jlesage) sur l'identite de Sortilege.
+
+**Le rangement reel accusait toujours la source.** Une bibliotheque verrouillee faisait conseiller
+  de chercher dans les telechargements, avec « l'identite concorde pourtant ». Le cote qui refuse
+  est maintenant retrouve apres coup, comme en simulation.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.52.2 (2026-09-16)
 
 ### Bug Fixes
