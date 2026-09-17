@@ -1,6 +1,50 @@
 # CHANGELOG
 
 
+## v0.53.0 (2026-09-17)
+
+### Features
+
+- Passer partout ou le NAS le permet, et une passe UX sur toute l'interface
+  ([`f136493`](https://github.com/gsoulat/sortilege/commit/f1364936aa6631c6ab706b8622a703d4de472704))
+
+Demande de l'utilisateur : « tu peux pas faire le necessaire pour que l'application ait les
+  permissions necessaires ? », puis « fais une analyse 5 fois et fais la meilleure UI/UX ».
+
+**Aucune identite ordinaire ne passait.** Telechargements en 999:999, vignettes Jellyfin en 0:0,
+  bibliotheque en 1000:1000 : sous Unix, deplacer un fichier exige d'ecrire dans son DOSSIER, et
+  aucun reglage logiciel ne contourne trois proprietaires sans ecriture au groupe. `PUID=auto` lit
+  les dossiers montes au demarrage et choisit : l'identite demandee si elle ecrit partout, sinon la
+  seule qui convienne, sinon root — avec le motif dans les journaux du conteneur, racine par racine.
+  Le compromis de root est assume et dit.
+
+**Root ne doit pas laisser une bibliotheque inadministrable.** Tout fichier et tout dossier deposes
+  prennent l'identite du dossier qui les accueille : la mediatheque reste administrable depuis un
+  partage reseau. Les fiches, affiches et sous-titres naissaient par ailleurs en 0600 — donc
+  illisibles par un serveur multimedia tournant sous un autre compte ; ils sont en 0644, et le mode
+  est pose sur le descripteur AVANT publication, ce qui supprime la fenetre ou un lien symbolique
+  aurait fait changer les droits d'un fichier ailleurs.
+
+**Doublons.** « Supprimer les doublons selon la strategie » depuis « Ce que je possede », avec les
+  strategies nommees, et la mise en corbeille en variante. L'index oublie ce qui vient d'etre retire
+  — y compris quand une lecture de bibliotheque tournait au meme moment, cas ou la photo d'avant
+  ecrasait le resultat et faisait reapparaitre le doublon supprime. Ce qu'on possede d'une saison
+  est recalcule : vider un emplacement la laissait se dire complete.
+
+**Les refus se regroupent par cause.** Un dossier root bloquant 3 887 fichiers affichait 3 887 fois
+  le meme conseil de quatre lignes.
+
+**Passe UX/UI, cinq analyses independantes.** Le plus grave etait une action IMPOSSIBLE : le tiroir
+  Entretien se refermait au clic d'armement et demontait son propre bouton, donc « Tout effacer » ne
+  pouvait jamais etre confirme. Ensuite : tout echec d'appel etait muet, et le serveur continuait
+  pendant que l'ecran se taisait ; Ranger affirmait « la source est vide, c'est l'etat recherche »
+  sans avoir rien mesure ; deux renvois nommaient des ecrans inexistants ; `button.primary` n'etait
+  defini nulle part pour l'ecran principal ; la page defilait lateralement sur telephone ; les
+  filtres a zero etaient a 2,31:1. Detail dans CHANTIERS.md, avec ce qui reste.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.52.3 (2026-09-17)
 
 ### Bug Fixes
