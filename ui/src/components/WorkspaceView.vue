@@ -695,7 +695,7 @@ const REASONS = {
   },
   permission_denied: {
     label: 'Permission refusée',
-    fix: "Sur le NAS : « ls -ln » sur le dossier concerné donne l'UID propriétaire, puis aligne PUID / PGID du conteneur Sortilège dessus — ou donne l'écriture au groupe que les deux conteneurs partagent.",
+    fix: "Le message de chaque fichier dit quoi changer : PUID / PGID de Sortilège quand la bibliothèque le permet, sinon l'identité du client de téléchargement (USER_ID / GROUP_ID pour JDownloader) et le propriétaire des dossiers déjà téléchargés.",
     detail:
       "Sortilège n'a pas le droit d'écrire là où il doit agir, le plus souvent dans le dossier de TÉLÉCHARGEMENT : ses fichiers appartiennent au client qui les a créés — JDownloader, un client torrent. Aucun réglage de Sortilège ne contourne cela, c'est une permission du NAS. Le droit qui manque porte d'ailleurs sur le DOSSIER, jamais sur le fichier : sous Unix, déplacer un fichier exige d'écrire dans le répertoire qui le contient.",
   },
@@ -719,7 +719,14 @@ const REASONS = {
     // refus délibéré, et il demande une décision qu'aucun algorithme ne peut
     // prendre à ta place.
     label: 'Deux fichiers différents, pas un doublon',
-    fix: "Le fichier rangé et la copie n'ont pas la même taille : ce sont deux encodages distincts de la même œuvre, pas deux exemplaires du même fichier. Rien n'a été touché — supprimer l'un des deux te ferait perdre une version. Compare-les avec « ▶ Voir », garde celui que tu préfères, et supprime l'autre toi-même.",
+    fix: "Le fichier rangé et la copie n'ont pas la même taille, même quand l'arrondi affiche le même nombre : l'écart exact est donné pour chaque fichier. Ce ne sont pas deux exemplaires du même fichier, et rien n'a été touché. Compare-les avec « ▶ Voir », ou tranche pour tout le groupe ci-dessous.",
+    detail:
+      "Quelques octets ou kilo-octets d'écart signalent le plus souvent la même vidéo republiée avec d'autres étiquettes (titre de piste, nom du site) : garder l'un ou l'autre revient au même. Plusieurs centaines de mégaoctets, c'est un autre encodage.",
+  },
+  incomplete_copy: {
+    action: 'complet',
+    label: 'Copie interrompue',
+    fix: "Le plus petit des deux fichiers est le début exact du plus gros : un déplacement a été coupé en pleine copie, par un redémarrage du conteneur par exemple. Le plus gros contient tout ; le plus petit est un film tronqué.",
   },
   not_ranged: {
     label: "Le fichier n'est pas à destination",
@@ -1239,7 +1246,12 @@ onUnmounted(() => {
               Garder le plus gros
             </button>
           </div>
-          <p v-if="g.action === 'arbitrer'" class="fix">
+          <div v-if="g.action === 'complet'" class="actions">
+            <button class="act" :disabled="evacuating" @click="evacuate(g, { mode: 'keep_larger' })">
+              Garder le fichier complet ({{ g.items.length }})
+            </button>
+          </div>
+          <p v-if="g.action === 'arbitrer' || g.action === 'complet'" class="fix">
             Le fichier écarté part en <strong>corbeille</strong>, pas à la poubelle, et
             l'opération est journalisée — « Annuler… » la défait comme n'importe quel
             rangement.

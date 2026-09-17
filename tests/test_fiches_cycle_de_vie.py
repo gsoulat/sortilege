@@ -572,7 +572,9 @@ def test_la_marque_de_renommage_survit_a_la_confirmation(tmp_path: Path) -> None
 def test_le_fichier_remplace_emporte_ses_sous_titres_en_corbeille(tmp_path: Path) -> None:
     source = tmp_path / "dl" / "Dune (2021).mkv"
     source.parent.mkdir()
-    source.write_bytes(b"x" * 10)
+    # Deux contenus distincts : « x » * 10 serait le debut exact de « x » * 100,
+    # donc une copie interrompue, que « garder le plus petit » refuse.
+    source.write_bytes(b"y" * 10)
     destination = _film(tmp_path)
     destination.write_bytes(b"x" * 100)
     sous_titre = destination.with_name("Dune (2021).fr.srt")
@@ -591,7 +593,7 @@ def test_le_fichier_remplace_emporte_ses_sous_titres_en_corbeille(tmp_path: Path
     resultat = keep_by_size(plan, journal, tmp_path / "corbeille", keep="smaller")
 
     assert resultat.ok
-    assert destination.read_bytes() == b"x" * 10
+    assert destination.read_bytes() == b"y" * 10
     assert not sous_titre.exists()
     assert "sous-titre" in resultat.message
     ecartes = [r for r in journal.read_all() if r.kind == "trash" and r.source == str(sous_titre)]

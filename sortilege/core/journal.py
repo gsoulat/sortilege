@@ -297,7 +297,7 @@ def apply_plan(
             str(plan.source),
             str(plan.destination),
             f"déplacement impossible : {exc}"
-            + (_permission_hint(plan.source) if isinstance(exc, PermissionError) else ""),
+            + (_cote_refuse(plan) if isinstance(exc, PermissionError) else ""),
             reason=_os_reason(exc),
         )
 
@@ -481,6 +481,19 @@ def _depose_manifeste(
     return ", ".join(faits)
 
 
+def _cote_refuse(plan: Plan) -> str:
+    """Le conseil d'un deplacement refuse, sur le BON cote.
+
+    L'erreur systeme ne dit pas lequel des deux dossiers a refuse, et le
+    conseil portait toujours sur la source : une bibliotheque verrouillee
+    envoyait chercher dans les telechargements, avec « l'identite concorde
+    pourtant ». La question se repose donc apres coup, comme en simulation.
+    """
+    if refus := _why_not_writable(plan):
+        return f" — {refus}"
+    return _permission_hint(plan.source, plan.destination)
+
+
 def _why_not_writable(plan: Plan) -> str | None:
     """Ce qui empechera le deplacement, avant de l'avoir tente.
 
@@ -494,14 +507,16 @@ def _why_not_writable(plan: Plan) -> str | None:
     existe deja et doit etre inscriptible.
     """
     if not os.access(plan.source.parent, os.W_OK):
-        return "dossier source en lecture seule" + _permission_hint(plan.source)
+        return "dossier source en lecture seule" + _permission_hint(plan.source, plan.destination)
 
     if plan.destination is not None:
         cible = plan.destination.parent
         while not cible.exists() and cible != cible.parent:
             cible = cible.parent
         if not os.access(cible, os.W_OK):
-            return f"impossible d'écrire dans « {cible} »" + _permission_hint(cible / "x")
+            return f"impossible d'écrire dans « {cible} »" + _permission_hint(
+                cible / "x", plan.source
+            )
     return None
 
 
@@ -512,6 +527,105 @@ def _lisible(octets: int) -> str:
         if octets >= seuil:
             return f"{octets / seuil:.2f} {unite}".replace(".", ",")
     return f"{octets} octets"
+
+
+_FENETRE = 1024 * 1024
+_ECHANTILLONS = 5
+
+
+def _ecart(taille_copie: int, taille_rangee: int) -> str:
+    """Les deux tailles, ET leur ecart en clair.
+
+    L'arrondi le cachait : « la copie fait 3,31 Go, le fichier range 3,31 Go —
+    ce n'est pas le meme fichier » se lit comme une contradiction, alors que
+    quelques octets separent bel et bien les deux.
+    """
+    return (
+        f"la copie fait {_lisible(taille_copie)}, le fichier rangé "
+        f"{_lisible(taille_rangee)} (écart : {_lisible(abs(taille_copie - taille_rangee))})"
+    )
+
+
+def _debut_de(petit: Path, gros: Path) -> bool:
+    """Le plus petit fichier est-il le debut exact du plus gros ?
+
+    C'est la trace d'une copie INTERROMPUE — conteneur redemarre, disque plein
+    en cours de route : le plus gros contient tout, le plus petit s'arrete en
+    chemin. Le confondre avec « deux encodages » est dangereux, parce que
+    « garder le plus petit » y garderait un film tronque.
+
+    Verifie par echantillons, pas en entier : relire deux films complets sur
+    un NAS prendrait des minutes par paire. Cinq fenetres d'un mégaoctet, dont
+    l'en-tete et la fin du plus petit. Deux encodages distincts different des
+    l'en-tete ; un meme encodage re-etiquete aussi. Seule une copie coupee
+    coincide aux cinq endroits.
+
+    Un fichier VIDE est le debut de n'importe quel fichier, et c'est bien ce
+    que laisse une copie tuee avant son premier octet : le fichier cible est
+    cree, rien n'y est ecrit. Le nettoyage de ``_move`` ne tourne que sur une
+    exception, jamais sur un conteneur tue.
+    """
+    try:
+        taille = petit.stat().st_size
+        if taille >= gros.stat().st_size:
+            return False
+        if taille == 0:
+            return True
+        with petit.open("rb") as a, gros.open("rb") as b:
+            for i in range(_ECHANTILLONS):
+                debut = max(0, (taille - _FENETRE) * i // (_ECHANTILLONS - 1))
+                longueur = min(_FENETRE, taille - debut)
+                a.seek(debut)
+                b.seek(debut)
+                if a.read(longueur) != b.read(longueur):
+                    return False
+    except OSError:
+        return False
+    return True
+
+
+def _refus_de_taille(
+    plan: Plan, destination: Path, taille_copie: int, taille_rangee: int
+) -> ApplyResult:
+    """Refus commun quand la copie et le fichier range n'ont pas la meme taille.
+
+    Deux situations que tout separe, et que « ce n'est pas le meme fichier »
+    confondait : deux encodages distincts, a arbitrer ; ou une copie
+    interrompue, ou le plus gros contient deja tout.
+    """
+    if taille_copie < taille_rangee:
+        petit, gros, lequel = plan.source, destination, "la copie"
+    else:
+        petit, gros, lequel = destination, plan.source, "le fichier rangé"
+
+    if _debut_de(petit, gros):
+        constat = (
+            "est vide"
+            if min(taille_copie, taille_rangee) == 0
+            else ("est le début exact de l'autre")
+        )
+        return ApplyResult(
+            plan.id,
+            False,
+            str(plan.source),
+            str(destination),
+            (
+                f"{_ecart(taille_copie, taille_rangee)} — {lequel} {constat} : une copie "
+                "interrompue. Rien n'a été touché ; garde le plus gros."
+            ),
+            reason="incomplete_copy",
+        )
+    return ApplyResult(
+        plan.id,
+        False,
+        str(plan.source),
+        str(destination),
+        (
+            f"{_ecart(taille_copie, taille_rangee)} — ce n'est pas le même fichier, "
+            "rien n'a été touché"
+        ),
+        reason="size_mismatch",
+    )
 
 
 def _os_reason(exc: OSError) -> str:
@@ -528,7 +642,31 @@ def _os_reason(exc: OSError) -> str:
     return "move_failed"
 
 
-def _permission_hint(path: Path) -> str:
+def _ecrirait(info: os.stat_result, uid: int, gid: int) -> bool:
+    """Une identite pourrait-elle ecrire dans ce dossier ?
+
+    Evalue sans y etre : c'est tout l'objet, on veut savoir ce que PUID/PGID
+    changeraient AVANT de le conseiller. Les groupes secondaires de cette
+    identite sont inconnus depuis le conteneur ; seuls proprietaire, groupe
+    principal et « autres » sont lus.
+    """
+    if uid == 0:
+        return True
+    if info.st_uid == uid:
+        return bool(info.st_mode & 0o200)
+    if info.st_gid == gid:
+        return bool(info.st_mode & 0o020)
+    return bool(info.st_mode & 0o002)
+
+
+def _premier_dossier_existant(path: Path) -> Path:
+    dossier = path if path.is_dir() else path.parent
+    while not dossier.exists() and dossier != dossier.parent:
+        dossier = dossier.parent
+    return dossier
+
+
+def _permission_hint(path: Path, autre: Path | None = None) -> str:
     """Dit qui possede le DOSSIER PARENT, et sous quelle identite on tourne.
 
     Le parent, pas le fichier : sous Unix, supprimer ou deplacer un fichier
@@ -539,6 +677,12 @@ def _permission_hint(path: Path) -> str:
 
     Les deux identites et le mode sont connus ici, a l'instant de l'echec.
     Les donner evite d'avoir a ouvrir un terminal pour les retrouver.
+
+    ``autre`` est l'autre bout du deplacement. Conseiller « PUID=999 » sans le
+    regarder deplacait le blocage : telechargements en 999, bibliotheque en
+    1000, et Sortilege aligne sur les premiers ne pouvait plus ecrire dans la
+    seconde. Quand c'est le cas, c'est le client de telechargement qu'il faut
+    aligner, pas Sortilege.
     """
     parent = path.parent
     try:
@@ -555,7 +699,29 @@ def _permission_hint(path: Path) -> str:
     )
 
     if info.st_uid != moi:
-        detail += f" Mets PUID={info.st_uid} et PGID={info.st_gid} dans ton docker-compose."
+        bloque = None
+        if autre is not None:
+            cote = _premier_dossier_existant(autre)
+            try:
+                cote_info = cote.stat()
+            except OSError:
+                cote_info = None
+            if cote_info is not None and not _ecrirait(cote_info, info.st_uid, info.st_gid):
+                bloque = (cote, cote_info)
+        if bloque is None:
+            detail += f" Mets PUID={info.st_uid} et PGID={info.st_gid} dans ton docker-compose."
+        else:
+            cote, cote_info = bloque
+            detail += (
+                f" Ne change PAS PUID/PGID : en {info.st_uid}:{info.st_gid}, Sortilège ne "
+                f"pourrait plus écrire dans « {cote} » ({cote_info.st_uid}:{cote_info.st_gid} "
+                f"en {stat.filemode(cote_info.st_mode)}). Rends plutôt « {parent} » et ses "
+                f"voisins à {moi}:{mon_groupe} : chown -R {moi}:{mon_groupe} sur leur dossier "
+                "racine. Si un programme les remplit — JDownloader, un client torrent —, "
+                f"règle-le aussi sur {moi}:{mon_groupe} (USER_ID/GROUP_ID chez jlesage, "
+                "PUID/PGID chez linuxserver), sinon ses prochains dossiers reviendront en "
+                f"{info.st_uid}:{info.st_gid}."
+            )
     elif not info.st_mode & 0o200:
         detail += (
             " Le propriétaire lui-même n'a pas le droit d'écrire : corrige le mode du dossier."
@@ -614,17 +780,7 @@ def delete_ranged_source(plan: Plan) -> ApplyResult:
     source_size = plan.source.stat().st_size
     target_size = plan.destination.stat().st_size
     if source_size != target_size:
-        return ApplyResult(
-            plan.id,
-            False,
-            str(plan.source),
-            str(plan.destination),
-            (
-                f"la copie fait {_lisible(source_size)}, le fichier range "
-                f"{_lisible(target_size)} — ce n'est pas le meme fichier, rien n'a ete touche"
-            ),
-            reason="size_mismatch",
-        )
+        return _refus_de_taille(plan, plan.destination, source_size, target_size)
 
     try:
         plan.source.unlink()
@@ -635,7 +791,11 @@ def delete_ranged_source(plan: Plan) -> ApplyResult:
             str(plan.source),
             str(plan.destination),
             f"suppression impossible : {exc}"
-            + (_permission_hint(plan.source) if isinstance(exc, PermissionError) else ""),
+            + (
+                _permission_hint(plan.source, plan.destination)
+                if isinstance(exc, PermissionError)
+                else ""
+            ),
             reason=_os_reason(exc),
         )
 
@@ -680,13 +840,23 @@ def keep_by_strategy(
             reason="source_missing",
         )
 
+    taille_copie = plan.source.stat().st_size
+    taille_rangee = plan.destination.stat().st_size
     verdict = quality.compare(
         strat,
         candidate_resolution=candidate_resolution,
-        candidate_size=plan.source.stat().st_size,
+        candidate_size=taille_copie,
         incumbent_resolution=incumbent_resolution,
-        incumbent_size=plan.destination.stat().st_size,
+        incumbent_size=taille_rangee,
     )
+
+    # Une strategie qui prefere le plus leger ne doit jamais choisir une copie
+    # coupee en route : le plus gros, la, contient tout.
+    garde_le_plus_petit = (taille_copie < taille_rangee) == verdict.keep_candidate
+    if taille_copie != taille_rangee and garde_le_plus_petit:
+        refus = _refus_de_taille(plan, plan.destination, taille_copie, taille_rangee)
+        if refus.reason == "incomplete_copy":
+            return refus
 
     if not verdict.keep_candidate:
         resultat = evacuate_ranged_source(plan, journal, trash_root, force=True)
@@ -744,6 +914,13 @@ def keep_by_size(
             "les deux fichiers ont la meme taille : rien a departager",
             reason="size_mismatch",
         )
+
+    if keep == "smaller":
+        # Le plus petit peut etre une copie coupee en route : le garder
+        # mettrait un film tronque en bibliotheque, et l'entier en corbeille.
+        refus = _refus_de_taille(plan, plan.destination, taille_copie, taille_rangee)
+        if refus.reason == "incomplete_copy":
+            return refus
 
     copie_gagne = (
         taille_copie < taille_rangee if keep == "smaller" else taille_copie > taille_rangee
@@ -815,7 +992,8 @@ def _replace_with_source(
             False,
             str(plan.source),
             str(plan.destination),
-            f"impossible d'écarter le fichier rangé : {exc}" + _permission_hint(plan.destination),
+            f"impossible d'écarter le fichier rangé : {exc}"
+            + _permission_hint(plan.destination, plan.source),
             reason=_os_reason(exc),
         ), ""
     _record(journal, plan, plan.destination, ecarte, methode, "trash")
@@ -835,7 +1013,7 @@ def _replace_with_source(
             False,
             str(plan.source),
             str(plan.destination),
-            f"remplacement impossible : {exc}" + _permission_hint(plan.source),
+            f"remplacement impossible : {exc}" + _permission_hint(plan.source, plan.destination),
             reason=_os_reason(exc),
         ), ""
     _record(journal, plan, plan.source, plan.destination, methode, "video")
@@ -915,17 +1093,7 @@ def evacuate_ranged_source(
     # refuser une seconde fois empecherait d'appliquer ce que
     # l'utilisateur a choisi.
     if source_size != target_size and not force:
-        return ApplyResult(
-            plan.id,
-            False,
-            str(plan.source),
-            str(plan.destination),
-            (
-                f"la copie fait {_lisible(source_size)}, le fichier range "
-                f"{_lisible(target_size)} — ce n'est pas le meme fichier, rien n'a ete touche"
-            ),
-            reason="size_mismatch",
-        )
+        return _refus_de_taille(plan, plan.destination, source_size, target_size)
 
     if trash_root is None:
         return ApplyResult(
@@ -966,7 +1134,11 @@ def evacuate_ranged_source(
                 str(plan.source),
                 str(target),
                 f"suppression impossible : {exc}"
-                + (_permission_hint(plan.source) if isinstance(exc, PermissionError) else ""),
+                + (
+                    _permission_hint(plan.source, plan.destination)
+                    if isinstance(exc, PermissionError)
+                    else ""
+                ),
                 reason=_os_reason(exc),
             )
         return ApplyResult(
@@ -987,7 +1159,11 @@ def evacuate_ranged_source(
             str(plan.source),
             str(target),
             f"evacuation impossible : {exc}"
-            + (_permission_hint(plan.source) if isinstance(exc, PermissionError) else ""),
+            + (
+                _permission_hint(plan.source, plan.destination)
+                if isinstance(exc, PermissionError)
+                else ""
+            ),
             reason=_os_reason(exc),
         )
 

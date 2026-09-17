@@ -1,7 +1,7 @@
 # Chantiers
 
-État au 16 septembre 2026. Dernière version publiée : **v0.51.0** ; le lot
-en cours deviendra la **v0.52.0**.
+État au 17 septembre 2026. Dernière version publiée : **v0.52.2** ; le lot
+en cours deviendra la **v0.52.3**.
 
 Convention : `[ ]` à faire, `[~]` en cours, `[x]` fait **et vérifié dans le code**
 — pas seulement annoncé. Un audit a montré qu'un chantier se coche tout seul
@@ -26,6 +26,13 @@ audits, deux contrôleurs et un recontrôle des derniers correctifs.
       coquilles en mode « supprimer », vidage) passent par une double
       confirmation. Le nettoyage des coquilles ne touche plus la corbeille
 - [x] Doublons, stratégie de qualité par type, budget de poids par fichier
+- [x] Copie interrompue reconnue : quand le plus petit des deux fichiers est le
+      début exact du plus gros (cinq fenêtres d'1 Mio) ou vide, le refus le dit,
+      et ni « Garder le plus petit » ni une stratégie ne gardent le tronqué.
+      L'écart exact s'affiche : l'arrondi montrait « 3,31 Go » des deux côtés
+- [x] Conseil de permission : PUID/PGID n'est proposé que si l'autre bout du
+      déplacement reste inscriptible sous cette identité ; sinon, réattribuer le
+      dossier bloqué et régler le client de téléchargement
 - [x] Réencodage nocturne différé, **sur sa propre page**, avec vérification de
       durée avant remplacement
 - [x] Livres EPUB et PDF, lecteur intégré (HTML nettoyé, cadre bac à sable)
