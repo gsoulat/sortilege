@@ -5,6 +5,16 @@ import ImageZoom from './ImageZoom.vue'
 import BookReader from './BookReader.vue'
 import ConfirmAction from './ConfirmAction.vue'
 import ExtrasCleanup from './ExtrasCleanup.vue'
+import {
+  accord,
+  constatServeur,
+  nombre,
+  pluriel,
+  refusSansMotif,
+  serveurEnErreur,
+  serveurMuet,
+  verbe,
+} from '../lib/langue.js'
 
 /**
  * Vue unique de la médiathèque.
@@ -16,7 +26,7 @@ import ExtrasCleanup from './ExtrasCleanup.vue'
  * Deux partis pris gouvernent ce composant :
  *
  * 1. **Rien n'attend la fin de rien.** L'état est relu périodiquement pendant
- *    qu'un travail tourne, et la liste se remplit. « Exécuter » agit sur ce qui
+ *    qu'un travail tourne, et la liste se remplit. « Ranger » agit sur ce qui
  *    est prêt à cet instant, y compris pendant que le calcul continue.
  * 2. **Ce qui demande une action passe devant.** Le tri est fait côté serveur
  *    et n'est pas alphabétique : quelques lignes actionnables ne doivent pas
@@ -108,6 +118,20 @@ const jobs = computed(() => data.value?.jobs ?? {})
 const counts = computed(() => data.value?.counts ?? {})
 
 /**
+ * « Selon la stratégie » sans dire laquelle demande une confiance aveugle
+ * avant une suppression. Le serveur n'envoie que les types RÉELLEMENT
+ * présents : une médiathèque sans animés n'a pas à lire une règle pour eux.
+ */
+const strategiesLisibles = computed(() => {
+  const noms = { movie: 'films', episode: 'séries', anime: 'animés' }
+  const s = data.value?.strategies ?? {}
+  return Object.entries(noms)
+    .filter(([cle]) => s[cle])
+    .map(([cle, nom]) => `${nom} : ${s[cle]}`)
+    .join(' · ')
+})
+
+/**
  * Les compteurs de l'onglet affiché, en LIGNES de la liste.
  *
  * `counts` compte des fichiers pour la barre d'action (« Ranger 6 prêts ») et
@@ -132,6 +156,44 @@ const blocages = computed(() => data.value?.blockers ?? [])
  * distingue « rien à récupérer » de « rien n'a été mesuré ».
  */
 const sansIndex = computed(() => !(counts.value.library_works ?? 0))
+
+/**
+ * Symétrique de `sansIndex`, côté source : la liste vide se lit « c'est déjà
+ * rangé » alors qu'elle peut vouloir dire « on n'a pas encore regardé ».
+ * L'écran affirmait « la source est vide. C'est l'état recherché » pendant
+ * qu'un bandeau, dix lignes plus haut, disait « aucun scan effectué ».
+ */
+const sansScan = computed(() => data.value?.diagnostics?.scanned === false)
+
+/**
+ * Pourquoi tel filtre de « Récupérer de la place » est gris. C'était un
+ * `title` : invisible au doigt, hors d'atteinte au clavier — exactement ce que
+ * `ConfirmAction` désigne comme l'erreur à ne pas commettre.
+ */
+const raisonsFiltres = computed(() => {
+  const raisons = []
+  if (!counts.value.duplicates) raisons.push('aucun doublon détecté')
+  if (!counts.value.heavy) raisons.push('aucun fichier anormalement lourd')
+  if (!counts.value.off_strategy) raisons.push('tout suit la stratégie de son type')
+  return raisons
+})
+
+/**
+ * Ce que le dernier scan n'a PAS pu lire. Un scan qui saute quatre mille
+ * fichiers faute de droits produisait un écran satisfait : c'est l'application
+ * qui mentait sur ce qu'elle avait fait.
+ */
+const scanIncomplet = computed(() => {
+  const d = data.value?.diagnostics
+  if (!d?.scanned) return null
+  const sautes = d.skipped ?? 0
+  const erreurs = d.errors?.length ?? 0
+  if (!sautes && !erreurs) return null
+  const bouts = []
+  if (sautes) bouts.push(`${accord(sautes, 'fichier', 'sauté')}`)
+  if (erreurs) bouts.push(`${accord(erreurs, 'erreur', 'rencontrée')}`)
+  return `Le dernier scan a ${bouts.join(' et ')}.`
+})
 const working = computed(
   () => jobs.value.scan?.running || jobs.value.plan?.running || jobs.value.index?.running,
 )
@@ -252,6 +314,11 @@ const placeRecuperable = computed(() => {
 watch(sousVue, () => {
   filter.value = sousVue.value === 'place' ? 'place' : 'all'
   tri.value = sousVue.value === 'place' ? 'poids' : 'titre'
+  // La recherche et le type restaient en place, comme des filtres invisibles :
+  // on arrivait sur « Récupérer de la place » avec « severance » encore saisi,
+  // et l'écran n'avait aucun message pour cet état.
+  recherche.value = ''
+  kind.value = 'all'
   charge.value = PALIER
 })
 
@@ -272,6 +339,9 @@ watch(onglet, () => {
   filter.value = 'all'
   tri.value = onglet.value === 'source' ? 'defaut' : 'titre'
   recherche.value = ''
+  // Le type survivait au changement d'onglet, lui aussi : « Séries » resté
+  // actif donnait une liste vide dans un onglet qui n'en a pas.
+  kind.value = 'all'
   charge.value = PALIER
   // Les lignes affichées appartiennent à l'autre espace : les garder le temps
   // de la réponse montrerait la médiathèque dans Ranger, ou l'inverse. L'écran
@@ -335,7 +405,7 @@ const activity = computed(() => {
   const { scan, plan, index } = jobs.value
   if (scan?.running) return { label: 'Analyse des fichiers', ...progress(scan) }
   if (plan?.running) return { label: 'Identification', ...progress(plan) }
-  if (index?.running) return { label: 'Lecture de la bibliothèque', ...progress(index) }
+  if (index?.running) return { label: 'Lecture de la médiathèque', ...progress(index) }
   return null
 })
 
@@ -363,10 +433,20 @@ function progress(job) {
 const raisonIndispo = computed(() => {
   if (busy.value) return "Une action est déjà en cours : les autres reprennent dès qu'elle rend la main."
   if (working.value) {
-    return `${activity.value?.label ?? 'Un travail'} en cours : « Analyser les sources » et « Identifier » attendent la fin.`
+    const attendent =
+      onglet.value === 'source'
+        ? '« Analyser les sources » et « Identifier » attendent la fin'
+        : '« Relire la médiathèque » attend la fin'
+    return `${activity.value?.label ?? 'Un travail'} en cours : ${attendent}.`
   }
+  // Ce qui suit ne parle que de Ranger. Côté médiathèque, un bouton grisé
+  // n'a que deux causes, et elles sont dites plus haut.
+  if (onglet.value !== 'source') return null
   const aIdentifier = counts.value.unplanned ?? 0
   const prets = counts.value.ready ?? 0
+  if (sansScan.value) {
+    return "La source n'a jamais été lue : les compteurs valent zéro parce que rien n'a été mesuré. Lance « Analyser les sources »."
+  }
   if (!aIdentifier && !prets) {
     return "Rien à identifier ni à ranger : la source est vide. « Analyser les sources » la relit si tu viens d'y déposer des fichiers."
   }
@@ -393,19 +473,38 @@ async function load() {
   // mélangées, l'onglet Ranger se remplissait de la médiathèque dès qu'elle
   // était indexée.
   const espace = onglet.value
+  // `fetch` ne rejette que sur perte de contact, et son message est écrit en
+  // anglais : « Serveur injoignable (Failed to fetch) » renvoyait au visage
+  // d'un lecteur français le texte brut du navigateur. Les deux cas se disent
+  // ici, chacun avec le geste qui lui va.
+  const res = await fetch(`/api/workspace?limit=${charge.value}&espace=${espace}`).catch(
+    () => null,
+  )
+  // Le bandeau au-dessus de la liste est seul à parler ; l'écran de panne, lui,
+  // porte déjà « Vérifie que le conteneur tourne » et « docker logs
+  // sortilege ». Le geste à faire ne s'écrit donc qu'une fois.
+  const seul = Boolean(data.value)
   try {
-    const res = await fetch(`/api/workspace?limit=${charge.value}&espace=${espace}`)
+    if (!res) {
+      error.value = seul ? serveurMuet() : constatServeur()
+      return
+    }
     // Une réponse 502 arrive en HTML : `res.json()` lèverait, la promesse
     // remonterait sans être attrapée, et l'écran resterait figé sans un mot.
-    if (!res.ok) throw new Error(`réponse ${res.status}`)
+    if (!res.ok) {
+      error.value = seul ? serveurEnErreur(res.status) : constatServeur(res.status)
+      return
+    }
     const corps = await res.json()
     // Partie avant un changement d'onglet, elle arrive après : l'afficher
     // remettrait l'autre espace à l'écran. La demande du nouvel onglet suit.
     if (espace !== onglet.value) return
     data.value = corps
     error.value = null
-  } catch (e) {
-    error.value = `Serveur injoignable (${e.message ?? 'sans réponse'}).`
+  } catch {
+    // Une réponse annoncée bonne dont le corps n'est pas du JSON : le serveur
+    // parle, mais pas une langue qu'on lise.
+    error.value = seul ? serveurEnErreur(res.status) : constatServeur(res.status)
   } finally {
     chargement.value = false
   }
@@ -439,16 +538,48 @@ async function chargerPlus() {
   await load()
 }
 
+/**
+ * Tout appel d'action passe par ici — et c'est ici que le silence était le plus
+ * cher. `fetch` rejette quand le contact est perdu (conteneur redémarré, proxy
+ * qui coupe une requête trop longue) et `res.json()` lève sur une page d'erreur
+ * HTML : aucun appelant n'attrapait ces deux cas, tous étant en `try/finally`
+ * sans `catch`. Le bouton redevenait normal, l'écran ne disait RIEN, et le
+ * serveur, lui, finissait de déplacer ses trois cents fichiers dans son thread.
+ * On recliquait sur une opération déjà en cours.
+ *
+ * Le message ne peut pas prétendre savoir ce qui a été fait, justement parce
+ * que le contact est perdu : il renvoie au Journal, qui le sait.
+ */
 async function call(url, body = null) {
   error.value = null
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: body ? JSON.stringify(body) : '{}',
-  })
-  const parsed = await res.json()
+  let res
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: body ? JSON.stringify(body) : '{}',
+    })
+  } catch {
+    error.value =
+      'Contact perdu avec le serveur. Il a pu continuer sans nous : le Journal '
+      + 'dit ce qui a réellement bougé. Ne relance pas avant de l’avoir regardé.'
+    return null
+  }
+
+  let parsed
+  try {
+    parsed = await res.json()
+  } catch {
+    error.value =
+      `Le serveur a répondu ${res.status} sans message utilisable. Regarde le `
+      + 'Journal et les journaux du conteneur avant de relancer.'
+    return null
+  }
+
   if (!res.ok) {
-    error.value = parsed.detail ?? 'Échec.'
+    // Le motif du serveur d'abord : lui seul sait. « Échec. » tout seul ne
+    // disait ni ce qui s'était passé, ni ce qu'il en restait sur le disque.
+    error.value = parsed.detail ?? refusSansMotif(res.status)
     return null
   }
   return parsed
@@ -512,9 +643,11 @@ async function plan({ reset = false } = {}) {
       const erreur = out.started ? jobs.value.plan?.error : null
       if (erreur) {
         messageAlerte.value = true
+        const n = counts.value.unplanned
         message.value =
           `Identification interrompue : le lot a échoué (${erreur}). ` +
-          `${counts.value.unplanned} fichier(s) restent à identifier ; « Identifier » reprend là où il s'est arrêté.`
+          `${pluriel(n, 'fichier')} ${verbe(n, 'reste', 'restent')} à identifier ; ` +
+          "« Identifier » reprend là où il s'est arrêté."
         break
       }
       // « Recommencer » vide la file : le compte REMONTE d'abord, ce n'est pas
@@ -538,11 +671,12 @@ async function plan({ reset = false } = {}) {
  * aucun bandeau n'était affiché. Il ne le cite plus que s'il existe.
  */
 function raisonArret(out) {
-  const reste = `${counts.value.unplanned} fichier(s) restent sans plan`
+  const sansPlan = counts.value.unplanned
+  const reste = `${pluriel(sansPlan, 'fichier')} ${verbe(sansPlan, 'reste', 'restent')} sans plan`
   if (blocages.value.length) {
-    const n = blocages.value.length
-    return `Identification arrêtée : ${reste}. ${n > 1 ? `${n} blocages l'expliquent` : "Un blocage l'explique"}, ` +
-      "détaillé(s) dans « À régler avant d'aller plus loin », ci-dessus."
+    return `Identification arrêtée : ${reste}. ` +
+      `${accord(blocages.value.length, 'blocage', 'détaillé')} dans ` +
+      "« À régler avant d'aller plus loin », ci-dessus."
   }
   if (!out.started) {
     return `Identification arrêtée : ${reste}, mais le serveur n'en trouve aucun à identifier. ` +
@@ -553,7 +687,7 @@ function raisonArret(out) {
 }
 
 /**
- * Vérifie tout le trajet sans rien déplacer. Distinct d'« Exécuter » parce que
+ * Vérifie tout le trajet sans rien déplacer. Distinct de « Ranger » parce que
  * ce sont deux décisions : « est-ce que ça marcherait » et « fais-le ».
  */
 // L'annulation vit désormais sur sa propre page, où chaque ligne se défait
@@ -584,6 +718,10 @@ async function index() {
  * échec, lui, se dit : il signale presque toujours un problème de droits.
  */
 async function nettoyerVides() {
+  // Ce compte rendu SUIT celui du rangement, il ne le remplace pas. D'ou le
+  // « += » — et d'ou cette garde : appele hors du chemin de `apply`, il
+  // afficherait « null 3 dossier(s) vide(s) supprime(s) ».
+  if (typeof message.value !== 'string') message.value = ''
   try {
     const res = await fetch('/api/library/empty-dirs/prune', {
       method: 'POST',
@@ -593,10 +731,10 @@ async function nettoyerVides() {
     if (!res.ok) return
     const out = await res.json()
     if (out.removed) {
-      message.value += ` ${out.removed} dossier(s) vide(s) supprimé(s).`
+      message.value += ` ${accord(out.removed, 'dossier vide', 'supprimé', 'dossiers vides')}.`
     }
     if (out.failed?.length) {
-      message.value += ` ${out.failed.length} dossier(s) n'ont pas pu être supprimés.`
+      message.value += ` Suppression refusée sur ${pluriel(out.failed.length, 'dossier')}.`
       // Presque toujours un probleme de droits : cela doit se voir, sans pour
       // autant faire passer le rangement lui-meme pour un echec.
       messageAlerte.value = true
@@ -616,23 +754,33 @@ async function apply(ids = null) {
     if (out) {
       failures.value = out.results.filter((r) => !r.ok)
       messageAlerte.value = Boolean(out.failed)
-      message.value = blanc
-        ? `Essai : ${out.applied} déplacement(s) possible(s), ${out.failed} bloqué(s).`
-        : `${out.applied} fichier(s) rangé(s)` + (out.failed ? `, ${out.failed} en échec.` : '.')
-      // La cause domine le compte : « 340 en échec » ne dit pas quoi faire,
-      // « tous parce que la destination existe déjà » si.
-      const [first] = failureGroups.value
-      if (first) {
-        const part = first.items.length === out.failed ? 'tous' : `dont ${first.items.length}`
-        message.value += ` — ${part} : ${first.label.toLowerCase()}.`
+      // La phrase se monte en entier avant son point final. Coudre la cause
+      // après coup donnait « 48 fichier(s) rangé(s), 3 en échec. — tous : la
+      // destination existe déjà. » : un point, un tiret, puis une minuscule.
+      let dit = blanc
+        ? `Essai : ${accord(out.applied, 'déplacement', 'possible')}`
+        : accord(out.applied, 'fichier', 'rangé')
+      if (out.failed) dit += `, ${pluriel(out.failed, 'refusé')}`
+      // La cause domine le compte : « 340 refusés » ne dit pas quoi faire,
+      // « tous parce que la destination existe déjà » si. « Tous » n'a de sens
+      // qu'à partir de deux — sur un seul refus, la cause est la cause.
+      const [premier] = failureGroups.value
+      if (premier) {
+        const cause = premier.label.toLowerCase()
+        if (premier.items.length !== out.failed) {
+          dit += ` — dont ${nombre(premier.items.length)} parce que ${cause}`
+        } else {
+          dit += out.failed > 1 ? ` — tous parce que ${cause}` : ` — ${cause}`
+        }
       }
+      message.value = `${dit}.`
       // Ce que le rangement a fait À CÔTÉ des déplacements. Le serveur le
       // rendait et l'écran le jetait : des sous-titres refusés faute de sortie
       // VPN confirmée, ou des affiches non téléchargées, ne se voyaient nulle
       // part. Les phrases du serveur sont reprises telles quelles.
       if (!blanc) {
         const st = out.subtitles ?? {}
-        if (st.written > 0) message.value += ` ${st.written} sous-titre(s) déposé(s).`
+        if (st.written > 0) message.value += ` ${accord(st.written, 'sous-titre', 'déposé')}.`
         // Le motif du fournisseur voyage aussi après un succès partiel : un quota
         // épuisé en cours de route explique pourquoi les derniers fichiers n'ont
         // rien reçu. Ne le dire que faute de dépôt le taisait justement là.
@@ -648,7 +796,7 @@ async function apply(ids = null) {
       // vient d'être rangé qu'après une relecture. Le dire ici, au moment où
       // les lignes quittent Ranger, évite de les croire perdues.
       if (!blanc && out.applied > 0 && (data.value?.ranged_since_index ?? 0) > 0) {
-        message.value += ' Ma médiathèque les montrera après « Relire la bibliothèque ».'
+        message.value += ' Ma médiathèque les montrera après « Relire la médiathèque ».'
       }
       // Ranger laisse derrière lui le dossier de la release, vide. Le proposer
       // dans un écran de réglages revenait à demander un second geste pour
@@ -695,7 +843,7 @@ const REASONS = {
   },
   permission_denied: {
     label: 'Permission refusée',
-    fix: "Le message de chaque fichier dit quoi changer : PUID / PGID de Sortilège quand la bibliothèque le permet, sinon l'identité du client de téléchargement (USER_ID / GROUP_ID pour JDownloader) et le propriétaire des dossiers déjà téléchargés.",
+    fix: "Le message de chaque fichier dit quoi changer : PUID / PGID de Sortilège quand la médiathèque le permet, sinon l'identité du client de téléchargement (USER_ID / GROUP_ID pour JDownloader) et le propriétaire des dossiers déjà téléchargés.",
     detail:
       "Sortilège n'a pas le droit d'écrire là où il doit agir, le plus souvent dans le dossier de TÉLÉCHARGEMENT : ses fichiers appartiennent au client qui les a créés — JDownloader, un client torrent. Aucun réglage de Sortilège ne contourne cela, c'est une permission du NAS. Le droit qui manque porte d'ailleurs sur le DOSSIER, jamais sur le fichier : sous Unix, déplacer un fichier exige d'écrire dans le répertoire qui le contient.",
   },
@@ -730,11 +878,11 @@ const REASONS = {
   },
   not_ranged: {
     label: "Le fichier n'est pas à destination",
-    fix: "La copie ne peut pas être évacuée : rien ne prouve qu'elle existe ailleurs. Range-la d'abord avec « Exécuter ».",
+    fix: "La copie ne peut pas être évacuée : rien ne prouve qu'elle existe ailleurs. Range-la d'abord avec « Ranger ».",
   },
   no_trash: {
     label: 'Aucune corbeille configurée',
-    fix: "La racine de bibliothèque n'est pas accessible en écriture — la corbeille y vit.",
+    fix: "La racine de la médiathèque n'est pas accessible en écriture — la corbeille y vit.",
   },
 }
 
@@ -797,11 +945,12 @@ async function evacuate(group, { mode = 'trash' } = {}) {
         evacPoller = null
         evacuating.value = false
         evacProgress.value = null
-        const verbe = mode === 'delete' ? 'supprimée(s)' : 'mise(s) en corbeille'
+        const fait =
+          mode === 'delete'
+            ? accord(status.evacuated, 'copie', 'supprimée')
+            : `${accord(status.evacuated, 'copie', 'mise')} en corbeille`
         messageAlerte.value = Boolean(status.failed)
-        message.value =
-          `${status.evacuated} copie(s) ${verbe}` +
-          (status.failed ? `, ${status.failed} refusée(s).` : '.')
+        message.value = fait + (status.failed ? `, ${pluriel(status.failed, 'refusée')}.` : '.')
         failures.value = status.results ?? []
         await load()
       }
@@ -848,8 +997,9 @@ async function trashDuplicates(work) {
     // haut : quand on agit sur une ligne au milieu d'une liste de six cents,
     // un message hors de l'écran équivaut à pas de message du tout.
     dupeMessage.value[work.key] = out
-      ? `${out.trashed} en corbeille` + (out.failed ? `, ${out.failed} en échec` : '')
-      : error.value ?? 'Échec.'
+      ? `${nombre(out.trashed)} en corbeille` +
+        (out.failed ? `, ${pluriel(out.failed, 'refusé')}` : '')
+      : error.value ?? refusSansMotif()
     if (out) await load()
   } finally {
     busy.value = null
@@ -864,15 +1014,20 @@ async function trashDuplicates(work) {
  * rien ne le signale. Et il ne refait pas l'arbitrage — l'exemplaire gardé est
  * celui que la stratégie du type a déjà désigné.
  */
-async function pruneDuplicates() {
-  busy.value = 'prune'
+async function pruneDuplicates({ trash = false } = {}) {
+  busy.value = trash ? 'prune-trash' : 'prune'
   try {
-    const out = await call('/api/collection/duplicates/prune', { confirm: true })
+    const out = await call('/api/collection/duplicates/prune', { confirm: true, trash })
     if (out) {
       messageAlerte.value = Boolean(out.failed)
-      message.value =
-        `${out.deleted} exemplaire(s) en trop supprimé(s), ${gb(out.freed_bytes)} Go libérés` +
-        (out.failed ? `, ${out.failed} en échec.` : '.')
+      const fait = trash
+        ? `${accord(out.deleted, 'exemplaire en trop', 'mis', 'exemplaires en trop')} en corbeille`
+        : `${accord(out.deleted, 'exemplaire en trop', 'supprimé', 'exemplaires en trop')}, ` +
+          `${gb(out.freed_bytes)} Go libérés`
+      message.value = fait + (out.failed ? `, ${pluriel(out.failed, 'refusé')}.` : '.')
+      // Le serveur retire de son index ce qu'il vient d'enlever du disque :
+      // ce rechargement montre donc la médiathèque telle qu'elle est, sans
+      // « Relire la médiathèque ».
       await load()
     }
   } finally {
@@ -898,9 +1053,9 @@ async function deleteDuplicates(work) {
   try {
     const out = await call('/api/collection/duplicates/delete', { groups, confirm: true })
     dupeMessage.value[work.key] = out
-      ? `${out.deleted} supprimé(s), ${gb(out.freed_bytes)} Go libérés` +
-        (out.failed ? `, ${out.failed} en échec` : '')
-      : error.value ?? 'Échec.'
+      ? `${pluriel(out.deleted, 'supprimé')}, ${gb(out.freed_bytes)} Go libérés` +
+        (out.failed ? `, ${pluriel(out.failed, 'refusé')}` : '')
+      : error.value ?? refusSansMotif()
     if (out) await load()
   } finally {
     busy.value = null
@@ -956,20 +1111,24 @@ async function togglePlayer(id) {
   }
   playing.value = id
   preview.value = null
-  try {
-    const res = await fetch(`/api/media/plan/${id}/positions`)
-    if (!res.ok) throw new Error(`réponse ${res.status}`)
-    preview.value = await res.json()
-  } catch (e) {
-    // Distinguer « ce fichier ne se lit pas » de « le serveur n'a pas répondu ».
-    // Les confondre accusait le fichier d'un défaut qui venait du réseau, et
-    // envoyait chercher la panne au mauvais endroit.
-    preview.value = {
-      available: false,
-      playable_in_browser: false,
-      panne: e.message ?? 'serveur injoignable',
+  // Distinguer « ce fichier ne se lit pas » de « le serveur n'a pas répondu ».
+  // Les confondre accusait le fichier d'un défaut qui venait du réseau, et
+  // envoyait chercher la panne au mauvais endroit. Le message de `fetch`, lui,
+  // est en anglais : il ne traverse pas jusqu'à l'écran.
+  const res = await fetch(`/api/media/plan/${id}/positions`).catch(() => null)
+  let panne = 'Sortilège ne répond pas'
+  if (res) {
+    panne = `Sortilège a répondu une erreur (réponse ${res.status})`
+    if (res.ok) {
+      try {
+        preview.value = await res.json()
+        return
+      } catch {
+        panne = 'réponse illisible du serveur'
+      }
     }
   }
+  preview.value = { available: false, playable_in_browser: false, panne }
 }
 
 // Image agrandie, ou null. Une jaquette de trente pixels ne permet pas de
@@ -1005,7 +1164,8 @@ async function remiseAZero() {
     if (out) {
       messageAlerte.value = false
       message.value =
-        `Liste effacée : ${out.cleared_plans} plan(s) et ${out.cleared_thumbnails} aperçu(s). ` +
+        `Liste effacée : ${pluriel(out.cleared_plans, 'plan')} et ` +
+        `${pluriel(out.cleared_thumbnails, 'aperçu')}. ` +
         'Lance « Analyser les sources » pour repartir.'
       charge.value = PALIER
       await load()
@@ -1067,6 +1227,9 @@ onMounted(() => {
 onUnmounted(() => {
   monte = false
   clearInterval(poller)
+  // Ce sondage-la tournait encore apres le demontage : toutes les 700 ms, il
+  // interrogeait le serveur puis ecrivait dans les `ref` d'un composant mort.
+  clearInterval(evacPoller)
   document.removeEventListener('pointerdown', fermerSiDehors)
   document.removeEventListener('keydown', surEchap)
 })
@@ -1113,7 +1276,7 @@ onUnmounted(() => {
       <!-- « Simuler » etait un bouton a part pour le MEME appel serveur, avec
            un drapeau different. Devenu une case attachee au bouton principal :
            c'est une variante de l'execution, pas une autre action. -->
-      <label class="essai" :title="'Ne déplace rien, montre seulement ce qui serait fait'">
+      <label class="essai" :title="'Ne range rien : montre seulement ce qui serait rangé.'">
         <input type="checkbox" v-model="sansToucher" />
         essai à blanc
       </label>
@@ -1131,15 +1294,21 @@ onUnmounted(() => {
         >
           Entretien ▾
         </button>
-        <div v-if="menuOuvert" class="tiroir" @click="menuOuvert = false">
-          <button :disabled="busy || working" @click="index">
-            Relire la bibliothèque
+        <!-- Le `@click` vivait sur CE conteneur : le premier clic d'un
+             ConfirmAction remontait jusqu'ici, `menuOuvert` repassait à faux,
+             et le `v-if` démontait le bouton avant son second clic. « Tout
+             effacer » était donc impossible à confirmer, à la souris comme au
+             clavier. La fermeture appartient aux gestes qui se terminent d'un
+             seul clic, pas au conteneur. -->
+        <div v-if="menuOuvert" class="tiroir">
+          <button :disabled="busy || working" @click="menuOuvert = false; index()">
+            Relire la médiathèque
             <span class="quoi">reconstruit l'index depuis le disque</span>
           </button>
           <button
             v-if="counts.works"
             :disabled="busy || working"
-            @click="plan({ reset: true })"
+            @click="menuOuvert = false; plan({ reset: true })"
           >
             Recommencer l'identification
             <span class="quoi">vide la file de plans et repart du premier fichier</span>
@@ -1148,13 +1317,13 @@ onUnmounted(() => {
             v-if="counts.works"
             label="Tout effacer"
             confirm-label="Confirmer : tout effacer"
-            :detail="`Vide la liste — ${counts.works} œuvre(s), plans et aperçus. Ton journal `
+            :detail="`Vide la liste — ${pluriel(counts.works, 'œuvre')}, plans et aperçus. Ton journal `
               + `d'annulation (${data.journal_size}) et tes identifications retenues sont `
               + `conservés, et aucun fichier n'est déplacé.`"
             :busy="busy === 'reset'"
             :disabled="busy || working"
             :disabled-reason="raisonIndispo"
-            @confirm="remiseAZero"
+            @confirm="menuOuvert = false; remiseAZero()"
           />
         </div>
       </div>
@@ -1164,22 +1333,22 @@ onUnmounted(() => {
          cause est commune à presque tous ces boutons, et un `title` par bouton
          n'existe ni au doigt ni au clavier. `role="status"` pour qu'un
          changement d'état soit annoncé sans voler le focus. -->
-    <p v-if="espace === 'source' && raisonIndispo" class="indispo" role="status">
+    <p v-if="raisonIndispo" class="indispo" role="status">
       {{ raisonIndispo }}
     </p>
 
     <!-- Une seule action porte sur la médiathèque : la relire. Le reste de
          l'entretien vit avec le rangement, qui le produit. -->
     <div v-if="espace === 'library'" class="toolbar">
-      <button :disabled="busy || working" @click="index">Relire la bibliothèque</button>
+      <button :disabled="busy || working" @click="index">Relire la médiathèque</button>
       <span class="quoi-inline">reconstruit l'index depuis le disque</span>
     </div>
     <!-- L'index est une photo du disque. Sans cette ligne, ce qui venait de
          quitter Ranger n'apparaissait nulle part, sans que rien ne dise où le
          retrouver. -->
     <p v-if="espace === 'library' && data.ranged_since_index" class="indispo" role="status">
-      {{ data.ranged_since_index }} fichier(s) rangé(s) depuis la dernière lecture n'apparaissent
-      pas encore ici : « Relire la bibliothèque » les ajoute.
+      {{ accord(data.ranged_since_index, 'fichier', 'rangé') }} depuis la dernière lecture.
+      « Relire la médiathèque » met l'index à jour.
     </p>
 
     <!-- Au FUTUR, et en disant ce qu'il reste à faire. La formulation au
@@ -1213,16 +1382,23 @@ onUnmounted(() => {
       </ul>
     </section>
 
-    <p v-if="error" class="err-msg">{{ error }}</p>
-    <p v-if="message" class="ok-msg" :class="{ alerte: messageAlerte }">{{ message }}</p>
+    <!-- Annonces : ces deux lignes sont le seul retour des actions de
+         l'écran, et elles apparaissent loin du bouton cliqué. Les panneaux de
+         réglages le font déjà ; l'écran principal l'oubliait. -->
+    <p v-if="error" class="err-msg" role="alert">{{ error }}</p>
+    <p v-if="message" class="ok-msg" role="status" :class="{ alerte: messageAlerte }">{{ message }}</p>
 
     <!-- Pourquoi ça a échoué. En haut, pas enfoui : chercher la cause sous
          trois cents lignes revient à ne pas la donner. -->
     <section v-if="failureGroups.length" class="failures">
-      <h3>Ce qui a bloqué</h3>
+      <h3>Ce qui a été refusé</h3>
       <ul>
         <li v-for="g in failureGroups" :key="g.key">
-          <button class="head" @click="ouvert = ouvert === g.key ? null : g.key">
+          <button
+            class="head"
+            :aria-expanded="ouvert === g.key"
+            @click="ouvert = ouvert === g.key ? null : g.key"
+          >
             <span class="chev" :class="{ closed: ouvert !== g.key }">▾</span>
             <span class="count">{{ g.items.length }}</span>
             <span class="label">{{ g.label }}</span>
@@ -1237,34 +1413,39 @@ onUnmounted(() => {
             <summary>Pourquoi ?</summary>
             <p>{{ g.detail }}</p>
           </details>
+          <!-- Ce qui arrive au fichier écarté se lit AVANT les boutons : sous
+               eux, la phrase arrivait après le clic. Et les boutons nomment ce
+               qui PART, pas seulement ce qui reste : « Garder le plus petit »
+               ne disait pas qu'un fichier s'en allait. -->
+          <p v-if="g.action === 'arbitrer' || g.action === 'complet'" class="fix">
+            Le fichier écarté part dans la <strong>corbeille</strong> de Sortilège et
+            l'opération est journalisée : « Annuler » la défait comme n'importe quel
+            rangement.
+          </p>
           <!-- Arbitrage par la taille : deux encodages, il faut choisir. -->
           <div v-if="g.action === 'arbitrer'" class="actions">
             <button class="act" :disabled="evacuating" @click="evacuate(g, { mode: 'keep_smaller' })">
-              Garder le plus petit ({{ g.items.length }})
+              Garder le plus petit des deux ({{ pluriel(g.items.length, 'fichier') }} en corbeille)
             </button>
             <button class="act" :disabled="evacuating" @click="evacuate(g, { mode: 'keep_larger' })">
-              Garder le plus gros
+              Garder le plus gros des deux ({{ pluriel(g.items.length, 'fichier') }} en corbeille)
             </button>
           </div>
           <div v-if="g.action === 'complet'" class="actions">
             <button class="act" :disabled="evacuating" @click="evacuate(g, { mode: 'keep_larger' })">
-              Garder le fichier complet ({{ g.items.length }})
+              Garder le fichier complet
+              ({{ accord(g.items.length, 'fichier', 'tronqué') }} en corbeille)
             </button>
           </div>
-          <p v-if="g.action === 'arbitrer' || g.action === 'complet'" class="fix">
-            Le fichier écarté part en <strong>corbeille</strong>, pas à la poubelle, et
-            l'opération est journalisée — « Annuler… » la défait comme n'importe quel
-            rangement.
-          </p>
 
           <div v-if="g.action === 'evacuate'" class="actions">
             <button class="act" :disabled="evacuating" @click="evacuate(g)">
-              {{ evacuating ? 'En cours…' : `Mettre ces ${g.items.length} copies en corbeille` }}
+              {{ evacuating ? 'En cours…' : `Mettre ${pluriel(g.items.length, 'copie')} en corbeille` }}
             </button>
             <ConfirmAction
               label="Supprimer sans passer par la corbeille"
-              :confirm-label="`Confirmer : supprimer ces ${g.items.length} copies`"
-              :detail="`${g.items.length} fichier(s) effacé(s) définitivement. Rien ne les `
+              :confirm-label="`Confirmer : supprimer ${pluriel(g.items.length, 'copie')}`"
+              :detail="`${accord(g.items.length, 'fichier', 'effacé')} définitivement. Rien ne les `
                 + `rendra : l'exemplaire déjà rangé, lui, ne bouge pas.`"
               :busy="evacuating"
               :disabled="evacuating"
@@ -1278,7 +1459,7 @@ onUnmounted(() => {
             <div class="stats">
               <span>{{ evacProgress.processed }} / {{ evacProgress.total }}</span>
               <span class="ok-count">{{ evacProgress.evacuated }} en corbeille</span>
-              <span v-if="evacProgress.failed" class="ko-count">{{ evacProgress.failed }} refusée(s)</span>
+              <span v-if="evacProgress.failed" class="ko-count">{{ pluriel(evacProgress.failed, 'refusée') }}</span>
               <span v-if="evacProgress.current" class="current">{{ evacProgress.current }}</span>
             </div>
             <!-- Les motifs de refus, pendant l'opération et non après : sur
@@ -1290,7 +1471,7 @@ onUnmounted(() => {
                 <span>{{ r.message }}</span>
               </li>
               <li v-if="evacProgress.results.length > 5" class="more">
-                … et {{ evacProgress.results.length - 5 }} autres refus
+                … et {{ pluriel(evacProgress.results.length - 5, 'autre refus', 'autres refus') }}
               </li>
             </ul>
           </div>
@@ -1313,21 +1494,21 @@ onUnmounted(() => {
          comptait six fichiers et en montrait deux lignes. Le nombre de fichiers
          reste sur le bouton « Ranger », qui agit sur eux. -->
     <div v-if="onglet === 'source'" class="filters">
-      <button :class="{ active: filter === 'all' }" @click="filter = 'all'">
+      <button :class="{ active: filter === 'all' }" :aria-pressed="filter === 'all'" @click="filter = 'all'">
         Tout ({{ tab.works ?? parOnglet.length }})
       </button>
-      <button v-if="tab.ready" class="warn" :class="{ active: filter === 'ready' }"
+      <button v-if="tab.ready" class="warn" :class="{ active: filter === 'ready' }" :aria-pressed="filter === 'ready'"
               @click="filter = 'ready'">
         Prêts à ranger ({{ tab.ready }})
       </button>
-      <button v-if="tab.review" :class="{ active: filter === 'review' }" @click="filter = 'review'">
+      <button v-if="tab.review" :class="{ active: filter === 'review' }" :aria-pressed="filter === 'review'" @click="filter = 'review'">
         À arbitrer ({{ tab.review }})
       </button>
-      <button v-if="tab.unplanned" :class="{ active: filter === 'unplanned' }"
+      <button v-if="tab.unplanned" :class="{ active: filter === 'unplanned' }" :aria-pressed="filter === 'unplanned'"
               @click="filter = 'unplanned'">
         Pas encore identifiés ({{ tab.unplanned }})
       </button>
-      <button v-if="tab.failed" :class="{ active: filter === 'failed' }" @click="filter = 'failed'">
+      <button v-if="tab.failed" :class="{ active: filter === 'failed' }" :aria-pressed="filter === 'failed'" @click="filter = 'failed'">
         Rangement refusé ({{ tab.failed }})
       </button>
     </div>
@@ -1337,10 +1518,10 @@ onUnmounted(() => {
            de filtres : « qu'est-ce que je possède » et « où sont mes 600 Go ».
            La seconde est la raison d'être de l'outil, elle méritait son écran. -->
       <div class="sous-vues">
-        <button :class="{ actif: sousVue === 'avoir' }" @click="sousVue = 'avoir'">
+        <button :class="{ actif: sousVue === 'avoir' }" :aria-pressed="sousVue === 'avoir'" @click="sousVue = 'avoir'">
           Ce que je possède
         </button>
-        <button :class="{ actif: sousVue === 'place' }" @click="sousVue = 'place'">
+        <button :class="{ actif: sousVue === 'place' }" :aria-pressed="sousVue === 'place'" @click="sousVue = 'place'">
           Récupérer de la place
           <span v-if="placeRecuperable" class="gain">≈ {{ gb(placeRecuperable) }} Go</span>
         </button>
@@ -1358,10 +1539,10 @@ onUnmounted(() => {
       <div v-if="sousVue === 'avoir'" class="filters">
         <!-- Le même décompte que les filtres de type juste en dessous : toutes
              les œuvres possédées, pas seulement la page chargée. -->
-        <button :class="{ active: filter === 'all' }" @click="filter = 'all'">
+        <button :class="{ active: filter === 'all' }" :aria-pressed="filter === 'all'" @click="filter = 'all'">
           Tout ({{ tab.works ?? parOnglet.length }})
         </button>
-        <button v-if="counts.missing" :class="{ active: filter === 'gaps' }" @click="filter = 'gaps'">
+        <button v-if="counts.missing" :class="{ active: filter === 'gaps' }" :aria-pressed="filter === 'gaps'" @click="filter = 'gaps'">
           Épisodes manquants ({{ counts.missing }})
         </button>
       </div>
@@ -1371,34 +1552,29 @@ onUnmounted(() => {
            doublons » indiscernable de « il n'y a pas de doublons » — et une
            bibliotheque jamais indexee affiche zero partout. -->
       <div v-else class="filters">
-        <button :class="{ active: filter === 'place' }" @click="filter = 'place'">
+        <button :class="{ active: filter === 'place' }" :aria-pressed="filter === 'place'" @click="filter = 'place'">
           Tout ce qui pèse pour rien ({{ parOnglet.length }})
         </button>
         <button
-          :class="{ active: filter === 'dupes', muet: !counts.duplicates }"
+          :class="{ active: filter === 'dupes', muet: !counts.duplicates }" :aria-pressed="filter === 'dupes'"
           :disabled="!counts.duplicates"
-          :title="counts.duplicates ? '' : sansIndex
-            ? 'La bibliothèque n\'a pas encore été lue : rien à comparer'
-            : 'Aucun doublon détecté'"
           @click="filter = 'dupes'"
         >
           Doublons ({{ counts.duplicates ?? 0 }})
         </button>
         <button
           class="heavy-filter"
-          :class="{ active: filter === 'heavy', muet: !counts.heavy }"
+          :class="{ active: filter === 'heavy', muet: !counts.heavy }" :aria-pressed="filter === 'heavy'"
           :disabled="!counts.heavy"
-          :title="counts.heavy
-            ? `Au moins ${data.heavy_ratio} fois le poids habituel de leur type`
-            : 'Aucun fichier anormalement lourd'"
+          :title="counts.heavy ? `Au moins ${data.heavy_ratio} fois le poids habituel de leur type` : ''"
           @click="filter = 'heavy'"
         >
           Surpoids ({{ counts.heavy ?? 0 }})
         </button>
         <button
-          :class="{ active: filter === 'offstrat', muet: !counts.off_strategy }"
+          :class="{ active: filter === 'offstrat', muet: !counts.off_strategy }" :aria-pressed="filter === 'offstrat'"
           :disabled="!counts.off_strategy"
-          :title="'Fichiers dont la résolution ne suit pas la stratégie choisie pour leur type'"
+          :title="counts.off_strategy ? 'Fichiers dont la résolution ne suit pas la stratégie choisie pour leur type' : ''"
           @click="filter = 'offstrat'"
         >
           Hors stratégie ({{ counts.off_strategy ?? 0 }})
@@ -1408,12 +1584,22 @@ onUnmounted(() => {
         </button>
       </div>
 
+      <!-- Les filtres restent visibles à zéro, c'est voulu ; mais leur raison
+           vivait dans un `title` que le doigt ne fait pas apparaître et que le
+           clavier n'atteint pas. Elle s'écrit ici. -->
+      <p
+        v-if="sousVue === 'place' && raisonsFiltres.length && !sansIndex"
+        class="filtres-vides"
+      >
+        {{ raisonsFiltres.join(' · ') }}
+      </p>
+
       <!-- Le cas qui explique tous les zeros d'un coup. -->
       <p v-if="sansIndex" class="hint-index">
-        La bibliothèque n'a jamais été lue : doublons, surpoids et écarts à la stratégie
+        La médiathèque n'a jamais été lue : doublons, surpoids et écarts à la stratégie
         se calculent dessus, donc tout affiche zéro.
         <button class="small" :disabled="busy || working" @click="index">
-          Lire la bibliothèque maintenant
+          Lire la médiathèque maintenant
         </button>
       </p>
 
@@ -1422,24 +1608,43 @@ onUnmounted(() => {
       <p v-if="sousVue === 'place' && !parOnglet.length" class="rien-a-gagner">
         Aucune œuvre à alléger : aucun doublon, aucun fichier anormalement lourd, et tout
         respecte la stratégie de son type. Les dossiers vides et la corbeille se vident
-        dans <em>Réglages → Bibliothèque</em> et <em>Réglages → Système</em>.
+        dans <em>Réglages → Médiathèque</em> et <em>Réglages → Système</em>.
       </p>
     </template>
 
-    <div v-if="onglet === 'library' && filter === 'dupes' && counts.duplicates" class="lot">
+    <!-- Ce lot vivait sous le seul filtre « Doublons » de « Récupérer de la
+         place ». Depuis « Ce que je possède », où les badges « 1 doublon »
+         sont pourtant sous les yeux, aucun geste d'ensemble n'existait. -->
+    <div
+      v-if="onglet === 'library' && counts.duplicates && (sousVue === 'avoir' || filter === 'dupes')"
+      class="lot"
+    >
       <span class="warn-text">
         Ne garde qu'un exemplaire par emplacement : celui que la stratégie de son type
-        désigne. Porte sur TOUTE la bibliothèque, pas seulement sur les lignes affichées.
+        désigne<span v-if="strategiesLisibles"> — {{ strategiesLisibles }}</span>. Porte sur
+        TOUTE la médiathèque, pas seulement sur les lignes affichées, et la liste
+        se met à jour aussitôt.
       </span>
+      <button
+        class="act"
+        :disabled="busy === 'prune' || busy === 'prune-trash'"
+        :title="busy === 'prune' || busy === 'prune-trash' ? 'Un nettoyage est déjà en cours.' : ''"
+        @click="pruneDuplicates({ trash: true })"
+      >
+        {{ busy === 'prune-trash'
+          ? 'En cours…'
+          : `Mettre en corbeille les doublons de ${pluriel(counts.duplicates, 'emplacement')}` }}
+      </button>
       <ConfirmAction
-        label="Nettoyer tous les doublons"
-        :confirm-label="`Confirmer — ${counts.duplicates} emplacement(s)`"
-        :detail="`Supprime les exemplaires en trop de ${counts.duplicates} emplacement(s) sur `
-          + `toute la bibliothèque. Celui que la stratégie désigne reste en place.`"
+        label="Supprimer les doublons selon la stratégie"
+        :confirm-label="`Confirmer — ${pluriel(counts.duplicates, 'emplacement')}`"
+        :detail="`Supprime les exemplaires en trop de ${pluriel(counts.duplicates, 'emplacement')} sur `
+          + `toute la médiathèque, sans passer par la corbeille. Celui que la stratégie `
+          + `désigne reste en place.`"
         :busy="busy === 'prune'"
-        :disabled="busy === 'prune'"
+        :disabled="busy === 'prune' || busy === 'prune-trash'"
         disabled-reason="Un nettoyage est déjà en cours."
-        @confirm="pruneDuplicates"
+        @confirm="pruneDuplicates()"
       />
     </div>
 
@@ -1460,18 +1665,19 @@ onUnmounted(() => {
           <option v-if="onglet === 'library'" value="recuperable">Place récupérable</option>
         </select>
       </label>
-      <span v-if="recherche && works.length" class="compte">{{ works.length }} résultat(s)</span>
+      <span v-if="recherche && works.length" class="compte">{{ pluriel(works.length, 'résultat') }}</span>
     </div>
 
     <!-- Livres et animes rejoignent films et séries. Le type existait dans les
          données depuis toujours ; seuls deux des quatre avaient un bouton, et
          rien ne disait que les deux autres étaient filtrables. -->
     <div class="filters kinds">
-      <button :class="{ active: kind === 'all' }" @click="kind = 'all'">Tous types</button>
+      <button :class="{ active: kind === 'all' }" :aria-pressed="kind === 'all'" @click="kind = 'all'">Tous types</button>
       <button
         v-for="k in KIND_FILTRES"
         :key="k.id"
         :class="{ active: kind === k.id, muet: !kindCounts[k.id] }"
+        :aria-pressed="kind === k.id"
         :disabled="!kindCounts[k.id]"
         @click="kind = k.id"
       >
@@ -1479,16 +1685,18 @@ onUnmounted(() => {
       </button>
       <!-- Un total de la médiathèque : il n'a rien à faire dans Ranger. -->
       <span v-if="onglet === 'library' && counts.total_bytes" class="total">
-        {{ gb(counts.total_bytes) }} Go en bibliothèque
+        {{ gb(counts.total_bytes) }} Go en médiathèque
       </span>
     </div>
 
     <!-- La raison des boutons grisés, écrite plutôt que cachée dans un
          `title`. Elle nomme la LISTE et non la médiathèque : le type existe
          peut-être ailleurs, il n'est simplement pas ici. -->
-    <p v-if="typesVides.length" class="indispo">
-      Aucun résultat de ce type dans cette liste : {{ typesVides.join(', ') }}. Le filtre
-      reste affiché — un compte à zéro dit qu'on a mesuré, un bouton absent ne dit rien.
+    <!-- Muet quand rien n'a ete mesure : « aucun résultat de ce type » se lit
+         comme un constat, alors que la seule chose vraie est qu'on n'a pas
+         encore regardé — et la ligne au-dessus le dit deja. -->
+    <p v-if="typesVides.length && !sansScan" class="indispo">
+      Aucun résultat de ce type dans cette liste : {{ typesVides.join(', ') }}.
     </p>
 
     <p
@@ -1496,12 +1704,20 @@ onUnmounted(() => {
       class="empty"
     >
       <template v-if="recherche">Aucun titre ne correspond à « {{ recherche }} ».</template>
+      <template v-else-if="onglet === 'source' && sansScan">
+        La source n'a jamais été lue : cette liste est vide parce que rien n'a été mesuré,
+        pas parce qu'il n'y a rien.
+        <button class="small" :disabled="busy || working" @click="scan">
+          Analyser les sources maintenant
+        </button>
+      </template>
       <template v-else-if="onglet === 'source'">
         Rien ne traîne dans la source. C'est l'état recherché — lance « Analyser les sources »
         si tu viens d'ajouter des fichiers.
+        <span v-if="scanIncomplet" class="incomplet">{{ scanIncomplet }}</span>
       </template>
       <template v-else>
-        La bibliothèque est vide pour ce filtre. « Relire la bibliothèque » la reconstruit.
+        La médiathèque est vide pour ce filtre. « Relire la médiathèque » la reconstruit.
       </template>
     </p>
 
@@ -1584,7 +1800,7 @@ onUnmounted(() => {
               <h4>Prêts à ranger</h4>
               <button class="primary small" :disabled="busy"
                       @click="apply(w.pending.ready.map((p) => p.id))">
-                Exécuter ces {{ w.pending.ready.length }}
+                Ranger ces {{ w.pending.ready.length }}
               </button>
             </div>
             <ul class="files">
@@ -1686,8 +1902,8 @@ onUnmounted(() => {
               <h4>
                 À arbitrer
                 <span v-if="w.pending.rejected?.length" class="sous-titre">
-                  dont {{ w.pending.rejected.length }} écarté(s) par le score — à vérifier
-                  soi-même
+                  dont {{ pluriel(w.pending.rejected.length, 'écarté') }} par le score — à
+                  vérifier soi-même
                 </span>
               </h4>
               <!-- La portée est écrite sur le bouton. Un bouton par ligne qui
@@ -1831,7 +2047,7 @@ onUnmounted(() => {
                la ligne dit déjà combien d'épisodes sont là. -->
           <section v-if="w.owned && onglet === 'library'" class="block">
             <div class="block-head">
-              <h4>En bibliothèque</h4>
+              <h4>En médiathèque</h4>
               <span class="size">
                 {{ gb(w.owned.total_bytes) }} Go — {{ gb(w.bytes_per_file) }} Go par fichier
                 <template v-if="w.heaviness">({{ heavyLabel(w) }} la médiane de son type)</template>
@@ -1875,7 +2091,7 @@ onUnmounted(() => {
                    rien n'expliquait pourquoi. Chaque bouton ne se bloque plus
                    que sur SA propre action. -->
               <button class="small" :disabled="busy === 'trash'" @click="trashDuplicates(w)">
-                {{ busy === 'trash' ? 'Déplacement…' : 'Mettre en corbeille' }}
+                {{ busy === 'trash' ? 'Mise en corbeille…' : 'Mettre en corbeille' }}
               </button>
               <ConfirmAction
                 label="Supprimer selon la stratégie"
@@ -1955,11 +2171,17 @@ onUnmounted(() => {
 .badge.devine { background: var(--surface-2); color: var(--text-faint); }
 /* Un filtre a zero reste lisible : le griser sans l'effacer dit « mesuré, et
    il n'y en a pas », la ou son absence ne dit rien du tout. */
-.filters button.muet { opacity: .55; cursor: default; }
+/* L'opacite diluait le texte a 2,31:1 — sous le seuil AA de 4,5:1 et meme
+   sous les 3:1 des grands caracteres. Le `button:disabled` global donne
+   --text-faint, soit 4,75:1, et la distinction avec un filtre actif reste
+   nette : 13,07:1 plus une bordure d'accent. */
+.filters button.muet { cursor: default; }
 .hint-index {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  margin: 2px 0 0; font-size: 12px; color: var(--text-dim);
+  margin: 2px 0 0; font-size: var(--t-xs); color: var(--text-dim);
 }
+.filtres-vides { margin: 2px 0 0; font-size: var(--t-xs); color: var(--text-faint); }
+.empty .incomplet { display: block; margin-top: 4px; color: var(--warn); }
 .sous-vues { display: flex; gap: 6px; }
 .sous-vues button {
   font-size: 12.5px; padding: 6px 13px; border-radius: 7px;
@@ -1986,20 +2208,14 @@ onUnmounted(() => {
 }
 .tiroir button:hover:not(:disabled) { background: var(--surface-2); }
 .tiroir button .quoi { font-size: 11px; color: var(--text-faint); }
-.tiroir button.danger { color: var(--warn); }
+/* Meme raison : l'orange disait « attention », la regle globale dit
+   « detruit ». Un seul signal pour un seul sens. */
 /* --- Les trois etats de la page ---------------------------------------- */
 .attente, .panne {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 12px; min-height: 40vh; text-align: center; padding: 40px 20px;
 }
 .attente { color: var(--text-dim); font-size: 13px; }
-.pulsation {
-  width: 26px; height: 26px; border-radius: 50%;
-  border: 2px solid var(--border); border-top-color: var(--accent);
-  animation: tourne 1s linear infinite;
-}
-@keyframes tourne { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .pulsation { animation: none; } }
 .panne h2 { margin: 0; font-size: 17px; }
 .panne p { margin: 0; font-size: 13px; color: var(--text-dim); max-width: 46em; }
 .panne .quoi-faire { color: var(--text-faint); font-size: 12.5px; }
@@ -2150,8 +2366,7 @@ button.small.danger:hover:not(:disabled) {
   color: var(--text); text-align: left; cursor: pointer;
 }
 .failures .head:hover .label { color: var(--text); }
-.failures .chev { font-size: 10px; color: var(--text-faint); transition: transform .15s; }
-.failures .chev.closed { transform: rotate(-90deg); }
+/* `.chev` couvre deja ces deux regles, aux memes valeurs. */
 .failures .voir { margin-left: auto; font-size: 11px; color: var(--text-faint); }
 
 .fautifs { list-style: none; margin: 9px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; max-height: 340px; overflow-y: auto; }
@@ -2174,8 +2389,10 @@ button.small.danger:hover:not(:disabled) {
 .pourquoi p { margin: 5px 0 0; font-size: 12px; color: var(--text-faint); line-height: 1.65; }
 .failures .actions { display: flex; gap: 8px; margin: 9px 0 0; flex-wrap: wrap; }
 .failures .act { font-size: 12px; padding: 4px 12px; }
-.failures .act.danger { color: var(--text-faint); }
-.failures .act.danger:hover:not(:disabled) { color: var(--err); border-color: color-mix(in srgb, var(--err) 35%, transparent); }
+/* Ces deux regles rendaient au gris le bouton qui supprime sans corbeille :
+   il etait donc plus discret que son voisin qui ne detruit rien, et muet pour
+   qui navigue au doigt ou au clavier, ou le survol n'existe pas. Le `.danger`
+   global reprend la main. */
 .failures .act:hover:not(:disabled) { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 35%, transparent); }
 .failures .sample { display: block; margin: 6px 0 0; font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
 .evac { margin: 10px 0 0; max-width: 680px; }
@@ -2208,6 +2425,10 @@ button.small.danger:hover:not(:disabled) {
 .row {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; padding: 0;
   border: none; background: none; text-align: left; cursor: pointer;
+  /* La rangee fait 61 px — la hauteur de la jaquette — et c'est elle qui
+     porte le survol. Sans cet etirement, le bouton ne mesurait que 21 px en
+     son centre : le survol promettait une cible que le clic ne tenait pas. */
+  align-self: stretch;
 }
 /* Le liseré rentre à l'intérieur : la carte est en `overflow: hidden` et un
    `outline-offset` positif serait rogné sur ses bords — la ligne au clavier
@@ -2229,17 +2450,22 @@ button.small.danger:hover:not(:disabled) {
 .kind { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--text-faint); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; }
 
 .badges { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; flex: none; }
-.badge { font-size: 10.5px; padding: 1px 7px; border-radius: 3px; background: var(--surface-2); color: var(--text-faint); white-space: nowrap; }
+/* Ces pastilles etaient a 10,5 px, et celle de la TAILLE a 10 px : le chiffre
+   qui fait l'objet de l'outil — les gigaoctets — etait le plus petit texte de
+   l'ecran, pendant que le drapeau rouge d'a cote criait. Tout passe au
+   plancher de 12 px, que l'onglet Ranger obtenait deja par une exception
+   devenue inutile.
+
+   Un seul taux de teinte, 16 % : entre 12 et 18 %, l'ecart est de 14 unites
+   de rouge sur le fond — invisible. C'est la couleur du TEXTE qui portait le
+   signal, et elle ne change pas. */
+.badge { font-size: var(--t-xs); padding: 1px 7px; border-radius: 3px; background: var(--surface-2); color: var(--text-faint); white-space: nowrap; }
 .badge.ready { background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok); }
 .badge.review { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
-.badge.gap { background: color-mix(in srgb, var(--warn) 12%, transparent); color: var(--warn); }
-.badge.dupe { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); }
-.badge.size { font-family: var(--mono); font-size: 10px; }
-.badge.heavy { background: color-mix(in srgb, var(--err) 18%, transparent); color: var(--err); }
-/* Ranger : lisible sans plisser les yeux, sans toucher aux badges de la
-   médiathèque. */
-.badges.source .badge,
-.badges.source .badge.size { font-size: var(--t-xs); }
+.badge.gap { background: color-mix(in srgb, var(--warn) 16%, transparent); color: var(--warn); }
+.badge.dupe { background: color-mix(in srgb, var(--err) 16%, transparent); color: var(--err); }
+.badge.size { font-family: var(--mono); }
+.badge.heavy { background: color-mix(in srgb, var(--err) 16%, transparent); color: var(--err); }
 .deja-la { font-size: var(--t-xs); color: var(--text-faint); }
 .files li.refus {
   display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px;
@@ -2357,8 +2583,11 @@ button.small.play { color: var(--text-faint); }
   .tiroir { min-width: 0; width: min(280px, calc(100vw - 40px)); }
 
   /* Un chemin monospace ne se coupe nulle part : sans cela il impose sa
-     largeur à la carte entière. */
-  .fautifs .chemin, .refus code, 
-    .detail { padding: 4px 10px 12px; }
+     largeur à la carte entière, et la page défile latéralement. Une virgule
+     de trop avait fait glisser ces deux sélecteurs dans la règle suivante :
+     ils recevaient son rembourrage, et la coupure décrite ici n'existait
+     plus. */
+  .fautifs .chemin, .refus code { overflow-wrap: anywhere; }
+  .detail { padding: 4px 10px 12px; }
 }
 </style>

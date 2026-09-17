@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onUnmounted } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 
 /**
  * Agrandissement d'une image, en surimpression.
@@ -12,12 +12,42 @@ import { onMounted, onUnmounted } from 'vue'
  * issue évidente est un piège. Échap est le réflexe, le clic à côté est le
  * geste naturel, et le bouton reste pour qui ne connaît ni l'un ni l'autre.
  */
-defineProps({
+const props = defineProps({
   src: { type: String, required: true },
+  // Description fournie par l'appelant quand il en a une. Aucun appelant n'en
+  // passe aujourd'hui : la prop existe pour que celui qui saura decrire son
+  // image puisse le dire, sans que les autres aient a changer.
   alt: { type: String, default: '' },
   legende: { type: String, default: '' },
 })
 const emit = defineEmits(['close'])
+
+/**
+ * Nom accessible de la surimpression.
+ *
+ * `aria-modal="true"` sans nom s'annonce « dialogue » et rien d'autre : on
+ * apprend qu'on est entre quelque part sans apprendre ou, ce qui est
+ * exactement l'information qui manque quand on ne voit pas l'ecran.
+ */
+const nom = computed(() =>
+  props.legende ? `Image agrandie — ${props.legende}` : 'Image agrandie',
+)
+
+/**
+ * Texte de remplacement de l'image.
+ *
+ * Un `alt` vide declare une image DECORATIVE. C'etait faux ici : l'image est le
+ * seul contenu de la surimpression, on l'ouvre precisement pour la regarder.
+ * A defaut de description fournie, la legende nomme au moins l'oeuvre ; a
+ * defaut des deux, on dit ce que c'est sans pretendre decrire. Un repli qui
+ * repete la legende vaut mieux qu'un repli qui pretend qu'il n'y a rien.
+ */
+const texteAlt = computed(() => props.alt || props.legende || 'Image agrandie')
+
+// Le focus doit entrer dans la surimpression : sinon il reste sur la vignette
+// d'ou l'on vient, derriere le voile, et le Tab suivant parcourt une page qu'on
+// ne voit plus.
+const boutonFermer = ref(null)
 
 function surTouche(e) {
   if (e.key === 'Escape') emit('close')
@@ -28,6 +58,10 @@ onMounted(() => {
   // Le fond ne doit pas défiler derrière la surimpression : on croit agir sur
   // l'image et c'est la liste qui bouge.
   document.body.style.overflow = 'hidden'
+  // « Fermer » plutot que l'image : c'est la sortie, et la lire annonce du meme
+  // coup comment sortir. Pas de piege a focus complet en revanche — Echap et le
+  // clic sur le fond ferment deja, le cout ne se justifie pas ici.
+  boutonFermer.value?.focus()
 })
 onUnmounted(() => {
   window.removeEventListener('keydown', surTouche)
@@ -37,12 +71,12 @@ onUnmounted(() => {
 
 <template>
   <!-- Le clic sur le fond ferme ; celui sur l'image ne le traverse pas. -->
-  <div class="fond" role="dialog" aria-modal="true" @click="$emit('close')">
+  <div class="fond" role="dialog" aria-modal="true" :aria-label="nom" @click="$emit('close')">
     <figure class="cadre" @click.stop>
-      <img :src="src" :alt="alt" />
+      <img :src="src" :alt="texteAlt" />
       <figcaption v-if="legende">{{ legende }}</figcaption>
     </figure>
-    <button class="fermer" title="Fermer (Échap)" @click.stop="$emit('close')">
+    <button ref="boutonFermer" class="fermer" title="Fermer (Échap)" @click.stop="$emit('close')">
       Fermer ✕
     </button>
   </div>

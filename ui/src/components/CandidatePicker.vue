@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import ImageZoom from './ImageZoom.vue'
+import { pluriel } from '../lib/langue.js'
 
 const props = defineProps({
   candidates: { type: Array, required: true },
@@ -74,6 +75,35 @@ async function chercher() {
 // identification en croyant regarder l'affiche.
 const zoom = ref(null)
 
+function agrandir(c) {
+  zoom.value = {
+    src: c.poster_url,
+    legende: `${c.title}${c.year ? ` (${c.year})` : ''}`,
+  }
+}
+
+/**
+ * Relais clavier de la loupe.
+ *
+ * Un `<span role="button" tabindex="0">` recoit le focus mais n'a aucune
+ * activation native : sans ce relais, on l'atteint au clavier sans jamais
+ * pouvoir l'ouvrir — pire qu'un element inatteignable, qui au moins ne promet
+ * rien. Espace demande le `preventDefault` : c'est le raccourci de defilement
+ * de la page.
+ *
+ * Le `stopPropagation` est propre a cet endroit : la loupe vit DANS le bouton
+ * de la carte, qui choisit l'oeuvre. Laisser la touche remonter validerait une
+ * identification au moment ou on demandait seulement a regarder l'affiche.
+ *
+ * Meme forme que `agrandirTouche` de la vue de rangement.
+ */
+function agrandirTouche(e, c) {
+  if (e.key !== 'Enter' && e.key !== ' ') return
+  e.preventDefault()
+  e.stopPropagation()
+  agrandir(c)
+}
+
 function revenir() {
   trouves.value = null
   requete.value = ''
@@ -117,7 +147,7 @@ function revenir() {
     </div>
     <p v-if="erreur" class="err">{{ erreur }}</p>
     <p v-if="trouves && trouves.length" class="source">
-      {{ trouves.length }} résultat(s) pour « {{ requete.trim() }} »
+      {{ pluriel(trouves.length, 'résultat') }} pour « {{ requete.trim() }} »
     </p>
 
     <ul class="grid">
@@ -126,16 +156,19 @@ function revenir() {
           <div class="poster">
             <img v-if="c.poster_url" :src="c.poster_url" :alt="c.title" loading="lazy" />
             <span v-else class="noposter">sans affiche</span>
-            <!-- Bouton distinct : cliquer la carte CHOISIT, la loupe agrandit. -->
+            <!-- Bouton distinct : cliquer la carte CHOISIT, la loupe agrandit.
+                 `tabindex` et le relais clavier ne sont pas du zele : l'affiche
+                 agrandie est le seul moyen de trancher entre deux saisons, et
+                 elle n'etait atteignable qu'a la souris. -->
             <span
               v-if="c.poster_url"
               class="loupe"
               role="button"
+              tabindex="0"
+              :aria-label="`Agrandir l'affiche de ${c.title}`"
               title="Agrandir l'affiche"
-              @click.stop.prevent="zoom = {
-                src: c.poster_url,
-                legende: `${c.title}${c.year ? ` (${c.year})` : ''}`,
-              }"
+              @click.stop.prevent="agrandir(c)"
+              @keydown="agrandirTouche($event, c)"
             >⌕</span>
           </div>
           <div class="label">
@@ -166,7 +199,7 @@ function revenir() {
 }
 
 .head { display: flex; align-items: flex-start; gap: 12px; margin-bottom: 11px; }
-.hint { font-size: 12px; color: var(--text-faint); line-height: 1.5; flex: 1; }
+.hint { font-size: var(--t-xs); color: var(--text-faint); line-height: 1.5; flex: 1; }
 .close { font-size: 11.5px; padding: 3px 9px; flex: none; }
 
 .recherche { display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
@@ -177,7 +210,7 @@ function revenir() {
 }
 .recherche button { font-size: 11.5px; padding: 3px 11px; flex: none; }
 .recherche .retour { color: var(--text-faint); }
-.err { margin: 0 0 9px; font-size: 12px; color: var(--err); }
+.err { margin: 0 0 9px; font-size: var(--t-xs); color: var(--err); }
 .source { margin: 0 0 9px; font-size: 11.5px; color: var(--text-faint); }
 
 .grid {
@@ -191,27 +224,55 @@ function revenir() {
   display: flex; flex-direction: column; text-align: left;
 }
 .card:hover:not(:disabled) { border-color: var(--accent); }
-.card:disabled { opacity: .5; }
+
+/* Une carte indisponible doit se lire, pas s'effacer. `opacity: .5` portait sur
+   le groupe entier — affiche, titre, metadonnees, bordure — et le compositait a
+   moitie sur --bg : le titre tombait de 14,33:1 a 4,38:1, les metadonnees de
+   5,21:1 a 2,19:1 et le « sans affiche » de 4,75:1 a 2,11:1. Trois valeurs sous
+   le seuil AA de 4,5:1, dont deux sous les 3:1 tolerees pour les grands
+   caracteres, alors que c'est justement pendant une identification en cours
+   qu'on veut relire ce qu'on avait sous les yeux.
+
+   Des couleurs explicites disent la meme chose sans rien diluer :
+     .title    --text-faint sur --surface   -> 5,21:1
+     .meta     --text-faint sur --surface   -> 5,21:1 (deja sa couleur)
+     .noposter --text-faint sur --surface-2 -> 4,75:1
+   Ce qui distingue la carte indisponible de la carte active n'est donc plus un
+   voile mais le ton du titre (14,33:1 -> 5,21:1, ecart franc) et une bordure
+   attenuee : 1,19:1 contre --bg, la ou la bordure active fait 1,39:1. */
+.card:disabled {
+  cursor: not-allowed;
+  border-color: color-mix(in srgb, var(--border) 60%, var(--bg));
+}
+.card:disabled .title { color: var(--text-faint); }
 
 .poster {
   position: relative;
   aspect-ratio: 2 / 3; background: var(--surface-2);
   display: grid; place-items: center; overflow: hidden;
 }
+/* 24px : cible minimale atteignable au doigt. Elle en faisait 22. */
 .loupe {
   position: absolute; top: 4px; right: 4px;
-  width: 22px; height: 22px; display: grid; place-items: center;
-  font-size: 15px; line-height: 1; cursor: zoom-in;
+  width: 24px; height: 24px; display: grid; place-items: center;
+  font-size: var(--t-md); line-height: 1; cursor: zoom-in;
   background: color-mix(in srgb, #000 62%, transparent); color: #fff;
   border-radius: 4px; opacity: 0; transition: opacity .12s;
 }
-.card:hover .loupe, .loupe:hover { opacity: 1; }
+.card:hover .loupe, .loupe:hover, .loupe:focus-visible { opacity: 1; }
+.loupe:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* Sans survol, pas de loupe : sur un telephone elle n'apparaissait jamais, donc
+   l'affiche ne s'agrandissait jamais. Elle reste visible en permanence la. */
+@media (hover: none) {
+  .loupe { opacity: 1; }
+}
 .poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .noposter { font-size: 10px; color: var(--text-faint); }
 
 .label { padding: 6px 8px 8px; display: flex; flex-direction: column; gap: 3px; }
 .title {
-  font-size: 12px; line-height: 1.3; color: var(--text);
+  font-size: var(--t-xs); line-height: 1.3; color: var(--text);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
 .meta { display: flex; gap: 6px; font-size: 10px; color: var(--text-faint); }

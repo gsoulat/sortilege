@@ -53,7 +53,7 @@ onMounted(() => go(props.start))
       <li v-for="e in node.entries" :key="e.path">
         <button class="nav" @click="go(e.path)">
           <span class="chev">▸</span> {{ e.name }}
-          <span v-if="e.is_library" class="tag">bibliothèque</span>
+          <span v-if="e.is_library" class="tag">médiathèque</span>
         </button>
         <button class="pick" @click="emit('pick', e.path)">Choisir</button>
       </li>

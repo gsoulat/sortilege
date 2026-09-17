@@ -762,7 +762,9 @@ def blockers() -> list[dict[str, str]]:
     # L'adresse cite les deux endroits : la cle se saisit desormais dans
     # l'interface, mais une installation ancienne la porte dans son .env et
     # c'est peut-etre celle-la qui manque.
-    ou = "Réglages → Métadonnées (ou TMDB_API_KEY dans le .env)"
+    # « Réglages → Métadonnées » ne menait nulle part : l'onglet s'appelle
+    # « Identification ». Une adresse fausse coute plus qu'une adresse absente.
+    ou = "Réglages → Identification (ou TMDB_API_KEY dans le .env)"
 
     if not tmdb_key():
         found.append(
@@ -813,7 +815,9 @@ def blockers() -> list[dict[str, str]]:
                 "code": "no_scan",
                 "message": "Aucun scan effectué : la liste se remplit à partir des "
                 "fichiers trouvés par un scan.",
-                "where": "Médiathèque → Analyser les sources",
+                # L'ecran s'appelle « Ranger » ; « Mediatheque » designait
+                # l'autre onglet, ou ce bouton n'existe pas.
+                "where": "Ranger → Analyser les sources",
             }
         )
 

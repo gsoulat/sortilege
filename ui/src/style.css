@@ -110,6 +110,25 @@ button {
 }
 button:hover:not(:disabled) { border-color: var(--accent-dim); }
 
+/* L'action principale d'un ecran doit se distinguer de ses voisines. La regle
+   n'existait que dans les styles scopes de Reglages et de la connexion : sur
+   l'ecran principal, « Ranger 320 prets » portait la classe `primary` sans
+   qu'aucune regle ne la definisse, et retombait donc sur le bouton neutre.
+   L'action la plus consequente de l'application etait la moins visible.
+
+   Desactive, il revient au fond neutre : le gris du feuillet global pose sur
+   ce violet ne ferait que 3,73:1, contre 4,75:1 sur --surface-2. */
+button.primary {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+button.primary:disabled {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text-faint);
+}
+
 /* Un bouton indisponible doit se lire, pas s'effacer. `opacity: .4` ramenait
    son texte à 3,23:1 sur --surface et 3,28:1 sur --surface-2 — sous le seuil
    AA de 4,5:1, et même sous les 3:1 tolérés pour les grands caractères — sur
@@ -167,6 +186,55 @@ textarea:focus-visible,
 select:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ *
+ * Le rond qui tourne pendant une lecture.
+ *
+ * La regle etait recopiee a l'octet dans quatre vues (rangement, reglages,
+ * journal, reencodage) : keyframes et garde de mouvement comprises. Quatre
+ * copies d'une meme chose, ce sont quatre endroits ou la corriger et trois
+ * ou on oubliera.
+ *
+ * Note pour la suite de la migration : les styles scopes d'un composant
+ * l'emportent en specificite (`[data-v-…]`), et le compilateur renomme les
+ * `@keyframes` d'un style scope. Une copie locale qui reste continue donc de
+ * fonctionner seule — on peut la retirer composant par composant sans rien
+ * casser entre-temps.
+ * ------------------------------------------------------------------ */
+.pulsation {
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 2px solid var(--border); border-top-color: var(--accent);
+  animation: tourne 1s linear infinite;
+}
+@keyframes tourne { to { transform: rotate(360deg); } }
+/* Un mouvement perpetuel dans le champ de vision est exactement ce que ce
+   reglage systeme demande de faire cesser. */
+@media (prefers-reduced-motion: reduce) { .pulsation { animation: none; } }
+
+/* ------------------------------------------------------------------ *
+ * La panne cadree la ou elle s'est produite.
+ *
+ * Douze copies sous quatre noms (`panne-inline`, `bandeau-erreur`, `err`,
+ * `refus`), toutes d'accord sur la meme boite : 9px 12px de marge interne,
+ * 8px de rayon, un fond de --err a 8 %, une bordure a 28 %, le texte en
+ * --err et un interligne de 1,6. Seules la marge externe, la largeur
+ * maximale et la mise en ligne interne variaient vraiment — elles restent
+ * dans les composants.
+ *
+ * Le fond etant --err a 8 % sur du transparent, il prend la teinte de ce
+ * qu'il y a derriere. --err (#f87171) par-dessus mesure 6,34:1 sur --bg,
+ * 5,73:1 sur --surface et 5,19:1 sur --surface-2 : conforme AA sur les trois
+ * fonds ou la boite se pose, le dernier etant le cas defavorable.
+ * ------------------------------------------------------------------ */
+.panne-inline {
+  padding: 9px 12px;
+  border-radius: 8px;
+  font-size: var(--t-sm);
+  line-height: 1.6;
+  color: var(--err);
+  background: color-mix(in srgb, var(--err) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--err) 28%, transparent);
 }
 
 ::selection { background: var(--accent-dim); color: #fff; }

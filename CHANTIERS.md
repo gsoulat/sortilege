@@ -33,6 +33,25 @@ audits, deux contrôleurs et un recontrôle des derniers correctifs.
 - [x] Conseil de permission : PUID/PGID n'est proposé que si l'autre bout du
       déplacement reste inscriptible sous cette identité ; sinon, réattribuer le
       dossier bloqué et régler le client de téléchargement
+- [x] `PUID=auto` : l'entrypoint lit les dossiers montés et choisit l'identité —
+      celle demandée si elle écrit partout, sinon la seule qui convienne, sinon
+      root, avec le motif dans `docker logs`. C'est la seule réponse quand
+      téléchargements (999), vignettes Jellyfin (0) et bibliothèque (1000)
+      appartiennent à trois comptes sans écriture au groupe
+- [x] En root, tout fichier ou dossier déposé prend l'identité du dossier qui
+      l'accueille : la bibliothèque ne devient pas propriété de root, et reste
+      administrable depuis un partage réseau
+- [x] Fiches, affiches et sous-titres déposés en 0644 et non plus en 0600 :
+      `NamedTemporaryFile` les rendait illisibles par un serveur multimédia
+      tournant sous un autre compte
+- [x] Les refus du nettoyage des annexes sont regroupés par cause : un dossier
+      root bloquant 3 887 fichiers affichait 3 887 fois le même conseil
+- [x] Ma médiathèque : « Supprimer les doublons selon la stratégie » (et la
+      mise en corbeille) depuis « Ce que je possède », avec les stratégies
+      nommées ; l'index oublie ce qui vient d'être retiré, y compris quand une
+      lecture de bibliothèque tournait au même moment
+- [x] Ce qu'on possède d'une saison est recalculé après un retrait : vider un
+      emplacement laissait la saison se dire complète
 - [x] Réencodage nocturne différé, **sur sa propre page**, avec vérification de
       durée avant remplacement
 - [x] Livres EPUB et PDF, lecteur intégré (HTML nettoyé, cadre bac à sable)
@@ -189,6 +208,63 @@ une dépendance nouvelle.
 - [ ] **Aperçu en arbre avant de valider.** Une série qui partirait dans deux
       dossiers se voit d'un coup d'œil sur un arbre ; en liste de chemins, elle
       est invisible.
+
+### Passe UX/UI du 17 septembre (cinq analyses, puis correctifs)
+
+- [x] **Une action était impossible** : le tiroir Entretien se refermait au clic
+      d'armement et démontait son propre bouton, donc « Tout effacer » ne
+      pouvait jamais être confirmé
+- [x] Tout échec d'appel parle : `call()` n'attrapait ni la perte de contact ni
+      une réponse illisible, et le serveur continuait pendant que l'écran se
+      taisait. Le message renvoie au Journal, qui sait ce qui a bougé
+- [x] Ranger ne prétend plus « la source est vide, c'est l'état recherché »
+      quand rien n'a été mesuré, et dit ce que le dernier scan a sauté
+- [x] Les deux renvois qui nommaient des écrans inexistants (« Réglages →
+      Métadonnées », « Médiathèque → Analyser les sources ») sont justes, et un
+      test refuse la prochaine adresse fausse
+- [x] `button.primary` existait dans deux styles scopés mais nulle part pour
+      l'écran principal : « Ranger N prêts » était rendu comme un bouton
+      ordinaire
+- [x] Plus aucun débordement horizontal sur 375 px, sur les cinq écrans et les
+      quatre onglets de réglages : navigation qui se replie, chemins qui se
+      coupent, sélecteur CSS cassé par une virgule rétabli
+- [x] Contrastes : filtres à zéro (2,31:1 → 4,75:1), cartes candidates
+      (2,12:1 → 4,75:1), et le rouge au repos rendu aux boutons qui détruisent
+- [x] La bande cliquable d'une ligne faisait 21 px au centre d'un survol de
+      61 px
+- [x] Les pastilles de la médiathèque remontées au plancher de 12 px : le
+      chiffre des gigaoctets était le plus petit texte de l'application
+- [x] La recherche et le filtre de type ne survivent plus au changement
+      d'onglet ni de sous-vue — l'écran pouvait rester vide sans un mot
+- [x] État des filtres annoncé (`aria-pressed`), retours d'action annoncés
+      (`role="alert"` / `role="status"`), loupe des candidats atteignable au
+      clavier, lecteur de livre et image agrandie nommés
+- [x] Un mot par concept : « médiathèque » en façade, « ranger » pour le geste,
+      « refusé » pour un fichier non rangé ; pluriels justes (« 1 entrée
+      validée » et non « 1 entrée(s) validées »), erreurs qui disent quoi faire
+- [x] Fiches de réglages : sept titres sur dix-huit étaient plus ternes que le
+      texte qu'ils coiffent ; trois blocs CSS dupliqués sortis en commun
+
+### À faire, repéré le 17 septembre
+
+- [ ] Le nettoyage des annexes annonce « 3 887 fichiers, 2,7 Go » sans vérifier
+      les droits au préalable, alors que le rangement les teste pendant l'essai
+      à blanc. L'inventaire devrait dire combien de fichiers sont dans des
+      dossiers où l'écriture est refusée
+- [ ] `send_to_trash` entre deux volumes copie puis supprime : en root, la copie
+      posée en corbeille appartient à root
+- [ ] `Journal.append` crée le dossier de données sans adoption d'identité —
+      sans conséquence connue, l'entrypoint le chown déjà
+- [ ] « Ranger » est l'opération la plus longue et la seule sans avancement :
+      l'évacuation a barre, compteur et fichier courant, le rangement n'a rien
+- [ ] La liste se réordonne toutes les deux secondes pendant qu'on arbitre, et
+      les réponses de `load()` peuvent se chevaucher
+- [ ] Le rapport « Ce qui a été refusé » et ses boutons vivent dans la page :
+      changer d'écran les perd, alors que `plan.apply_failure` est côté serveur
+- [ ] « Récupérer de la place » promet des gigaoctets dont la moitié ne se
+      récupère que par l'écran Réencodage, que la médiathèque ne nomme jamais
+- [ ] `ExtrasCleanup` pèse 562 mots au-dessus des filtres : à replier dans un
+      `<details>` titré avec son total
 
 ### Reliquats (chiffres mesurés le 11 septembre)
 

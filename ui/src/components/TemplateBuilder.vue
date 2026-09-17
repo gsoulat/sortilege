@@ -284,17 +284,17 @@ onMounted(loadCatalog)
   color: var(--accent);
 }
 .presets { display: flex; align-items: center; gap: 6px; }
-.presets button { text-transform: capitalize; font-size: 13px; padding: 5px 10px; }
+.presets button { text-transform: capitalize; font-size: var(--t-sm); padding: 5px 10px; }
 
 .grid { display: grid; grid-template-columns: 260px 1fr; gap: 20px; align-items: start; }
 @media (max-width: 860px) { .grid { grid-template-columns: 1fr; } }
 
 h3 {
-  margin: 0 0 4px; font-size: 12px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim);
+  margin: 0 0 4px; font-size: var(--t-xs); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .07em; color: var(--text-title);
 }
 
-.hint { margin: 0 0 12px; font-size: 12px; color: var(--text-faint); }
+.hint { margin: 0 0 12px; font-size: var(--t-xs); color: var(--text-faint); }
 .hint.inline { margin: 0; }
 .hint code {
   font-family: var(--mono); font-size: 11px;
@@ -312,7 +312,7 @@ h3 {
 }
 .chips { display: flex; flex-wrap: wrap; gap: 5px; }
 .chip {
-  font-size: 12px; padding: 4px 9px; border-radius: 5px;
+  font-size: var(--t-xs); padding: 4px 9px; border-radius: 5px;
   background: var(--surface-2); cursor: grab;
 }
 .chip:active { cursor: grabbing; }
@@ -322,7 +322,7 @@ h3 {
   border-radius: 10px; padding: 16px;
 }
 textarea {
-  width: 100%; font-family: var(--mono); font-size: 13px;
+  width: 100%; font-family: var(--mono); font-size: var(--t-sm);
   line-height: 1.7; resize: vertical;
 }
 textarea.invalid { border-color: var(--err); }
@@ -331,7 +331,7 @@ textarea.drag-over {
   background: color-mix(in srgb, var(--accent) 6%, var(--bg));
 }
 
-.error { margin: 8px 0 0; font-size: 12px; color: var(--err); }
+.error { margin: 8px 0 0; font-size: var(--t-xs); color: var(--err); }
 
 .preview-title { margin-top: 20px; display: flex; align-items: center; gap: 8px; }
 .preview { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -344,7 +344,7 @@ textarea.drag-over {
   font-family: var(--mono); font-size: 12.5px; color: var(--ok);
   word-break: break-all;
 }
-.preview .empty { color: var(--text-faint); font-size: 13px; border-style: dashed; }
+.preview .empty { color: var(--text-faint); font-size: var(--t-sm); border-style: dashed; }
 
 .spinner {
   width: 9px; height: 9px; border-radius: 50%;
@@ -352,4 +352,13 @@ textarea.drag-over {
   animation: spin .6s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+
+/* Seule animation perpetuelle de cet ecran, et elle repart a chaque frappe
+   dans le gabarit — donc presque en continu pendant qu'on compose. Un
+   mouvement sans fin dans le champ de vision est exactement ce que ce reglage
+   systeme demande de faire cesser ; le point reste visible, il ne tourne
+   plus. Meme garde que les `.pulsation` du projet. */
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation: none; }
+}
 </style>

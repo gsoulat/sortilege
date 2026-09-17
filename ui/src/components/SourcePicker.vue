@@ -127,8 +127,12 @@ function openBrowser() {
 .picker { display: flex; flex-direction: column; gap: 11px; }
 
 .sources { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
-.sources li { display: flex; align-items: center; gap: 9px; }
-.sources label { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+/* Un chemin de source n'a aucune occasion de coupure : « /volume1/Download/
+   JDownloader2/... » impose sa largeur a la carte, et la PAGE defile
+   lateralement. Il se replie ici, et la case a cocher reste en haut. */
+.sources li { display: flex; align-items: flex-start; gap: 9px; min-width: 0; }
+.sources label { display: flex; align-items: flex-start; gap: 8px; cursor: pointer; min-width: 0; }
+.sources label code { overflow-wrap: anywhere; }
 .sources input { width: auto; }
 
 code {

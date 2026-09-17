@@ -279,11 +279,12 @@ def read_workspace(
     pending = [] if scan is None else review.awaiting_identification(scan.files, plans)
     sizes = {} if scan is None else {str(f.path): f.size_bytes for f in scan.files}
 
+    reglages = get_store().load().quality
     entries = build(
         collection.current_works(),
         plans,
         pending,
-        get_store().load().quality,
+        reglages,
     )
     counts = summarize(entries)
     lignes = [e for e in entries if in_space(e, espace)]
@@ -292,6 +293,14 @@ def read_workspace(
 
     return {
         "counts": counts,
+        # La strategie de chaque type, en clair : « supprimer les doublons
+        # selon la strategie » sans dire laquelle demande une confiance
+        # aveugle avant une suppression.
+        "strategies": {
+            kind: quality.strategy(getattr(reglages, kind)).label
+            for kind in ("movie", "episode", "anime")
+            if any(e.owned and e.owned.kind == kind for e in entries)
+        },
         "espace": espace,
         "tab": tab_counts(lignes),
         # Fichiers ranges que l'index ne montre pas encore. Sans ce compte, ce

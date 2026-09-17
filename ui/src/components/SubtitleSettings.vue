@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import ConfirmAction from './ConfirmAction.vue'
+import { accord, pluriel } from '../lib/langue.js'
 
 const props = defineProps({
   subtitles: { type: Object, required: true },
@@ -224,7 +225,7 @@ const languesAbsentes = computed(() => {
   return resultat.value.demandees.filter((l) => !rendues.includes(l.toLowerCase()))
 })
 
-// --- Compléter la bibliothèque déjà rangée ------------------------------------
+// --- Compléter la médiathèque déjà rangée ------------------------------------
 
 /** Taille d'un lot. Le serveur plafonne à 500 ; à 200, un lot rend la main en
  *  quelques minutes même quand chaque vidéo coûte un appel au service, et le
@@ -234,7 +235,7 @@ const LOT = 200
 const lotEnCours = ref(false)
 /** Compte rendu du dernier lot, tel que le serveur l'a rendu. */
 const lot = ref(null)
-/** Totaux de la série commencée par « Compléter la bibliothèque ». */
+/** Totaux de la série commencée par « Compléter la médiathèque ». */
 const serie = ref(null)
 const panneLot = ref(null)
 /** Où reprendre après une panne, ou un refus en cours de série : le lot qui
@@ -296,7 +297,7 @@ async function completerBibliotheque(offset = 0) {
 const raisonLot = computed(() =>
   props.subtitles.enabled
     ? ''
-    : "Active d'abord la recherche ci-dessus : le serveur refuse de parcourir la bibliothèque " +
+    : "Active d'abord la recherche ci-dessus : le serveur refuse de parcourir la médiathèque " +
       "tant qu'elle est coupée.",
 )
 
@@ -310,8 +311,6 @@ const detailLot = computed(
       : "Un sous-titre déjà présent n'est pas remplacé."),
 )
 
-const pluriel = (n, mot) => `${n} ${mot}${n > 1 ? 's' : ''}`
-const accord = (n, nom, participe) => `${pluriel(n, nom)} ${participe}${n > 1 ? 's' : ''}`
 </script>
 
 <template>
@@ -321,7 +320,7 @@ const accord = (n, nom, participe) => `${pluriel(n, nom)} ${participe}${n > 1 ? 
       Après un rangement, Sortilège peut aller chercher chez OpenSubtitles les sous-titres
       que la vidéo n'a pas, et les déposer à côté d'elle.
       <strong>Désactivé par défaut :</strong> cela ajoute des appels vers un service tiers
-      et écrit des fichiers dans la bibliothèque — les deux se demandent.
+      et écrit des fichiers dans la médiathèque — les deux se demandent.
     </p>
 
     <label class="switch" :class="{ bloque: Boolean(blocageActivation) }">
@@ -424,7 +423,7 @@ const accord = (n, nom, participe) => `${pluriel(n, nom)} ${participe}${n > 1 ? 
         Il ne sert qu'à <strong>relever le quota quotidien</strong> d'un compte VIP, et
         <strong>ne remplace pas la clé</strong> : un jeton seul ne permet ni d'activer la
         recherche ni de la tester. Sans jeton, la recherche fonctionne avec le quota gratuit —
-        ce qui suffit largement à une bibliothèque qui ne bouge plus.
+        ce qui suffit largement à une médiathèque qui ne bouge plus.
       </p>
       <p v-if="!jetonBrouillon.trim()" class="hint">
         « Enregistrer » attend un jeton : un champ vide ne change rien<template
@@ -590,17 +589,17 @@ const accord = (n, nom, participe) => `${pluriel(n, nom)} ${participe}${n > 1 ? 
       </p>
     </template>
 
-    <h3 class="sous-titre">Compléter la bibliothèque déjà rangée</h3>
+    <h3 class="sous-titre">Compléter la médiathèque déjà rangée</h3>
     <p class="note">
       La recherche ci-dessus n'agit qu'<strong>au rangement</strong>. Ce passage reprend les
       vidéos déjà rangées et va chercher les sous-titres qui leur manquent, par lots de
-      {{ LOT }} : une grande bibliothèque ne se parcourt pas d'un seul appel, et le quota
+      {{ LOT }} : une grande médiathèque ne se parcourt pas d'un seul appel, et le quota
       quotidien d'OpenSubtitles non plus.
     </p>
 
     <ConfirmAction
-      label="Compléter la bibliothèque"
-      confirm-label="Confirmer — chercher sur toute la bibliothèque"
+      label="Compléter la médiathèque"
+      confirm-label="Confirmer — chercher sur toute la médiathèque"
       :detail="detailLot"
       :busy="lotEnCours"
       :disabled="Boolean(raisonLot)"
@@ -640,10 +639,10 @@ const accord = (n, nom, participe) => `${pluriel(n, nom)} ${participe}${n > 1 ? 
         {{ accord(serie.examined, 'vidéo', 'examinée') }}.
       </p>
       <p v-if="!lot.total" class="hint">
-        Aucune vidéo rangée dans la bibliothèque : il n'y avait rien à compléter.
+        Aucune vidéo rangée dans la médiathèque : il n'y avait rien à compléter.
       </p>
       <p v-else-if="lot.next_offset === null" class="hint">
-        Bibliothèque parcourue jusqu'au bout ({{ pluriel(lot.total, 'vidéo') }}) : il ne reste
+        Médiathèque parcourue jusqu'au bout ({{ pluriel(lot.total, 'vidéo') }}) : il ne reste
         rien à examiner.
       </p>
       <div v-else class="suite">
@@ -654,7 +653,7 @@ const accord = (n, nom, participe) => `${pluriel(n, nom)} ${participe}${n > 1 ? 
         >
           <template v-if="lot.refused || lot.unavailable">Réessayer à partir d'ici</template>
           <template v-else>
-            Continuer ({{ pluriel(lot.remaining, 'vidéo') }} restante{{ lot.remaining > 1 ? 's' : '' }})
+            Continuer ({{ accord(lot.remaining, 'vidéo', 'restante') }})
           </template>
         </button>
         <span v-if="raisonLot" class="raison">{{ raisonLot }}</span>

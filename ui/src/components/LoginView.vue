@@ -84,12 +84,7 @@ h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
 label { font-size: 12px; color: var(--text-dim); }
 input { width: 100%; }
 
-button.primary {
-  margin-top: 6px;
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
-  border-color: var(--accent-dim); color: var(--accent);
-  padding: 8px 12px;
-}
+button.primary { margin-top: 6px; padding: 8px 12px; }
 
 .err {
   margin: 4px 0 0; font-size: 12.5px; color: var(--err);

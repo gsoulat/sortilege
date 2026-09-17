@@ -19,6 +19,20 @@ services:
       # ni les supprimer, et echouera en « Permission denied ».
       #
       #   Sur le NAS : ls -ln /volume1/Download   (la 3e colonne est l'UID)
+      #
+      # PUID=auto (et PGID=auto) : Sortilege lit lui-meme le proprietaire et le
+      # mode de chaque racine au demarrage, et retient l'identite qui ecrit
+      # PARTOUT. Quand les telechargements arrivent en 999:999 drwxr-xr-x et que
+      # la bibliotheque appartient a 1000:1000, cette identite est ROOT et rien
+      # d'autre — ecrire dans un dossier est un droit sur le DOSSIER, aucune
+      # astuce logicielle ne le contourne. Le compromis est assume pour un NAS
+      # en reseau local, et le choix est explique dans les journaux :
+      #
+      #   docker logs sortilege | head -20
+      #
+      # Sans PUID, rien ne change : 1000:1000 comme avant. Le diagnostic, lui,
+      # s'affiche dans tous les cas. Voir la section « Quand aucune identite ne
+      # passe » du README.
       - PUID=${PUID:-1000}
       - PGID=${PGID:-1000}
     volumes:

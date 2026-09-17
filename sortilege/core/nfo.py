@@ -61,6 +61,11 @@ import httpx
 
 from .companions import send_to_trash
 from .probe import FileProbe, parse_nfo, read_nfo_file
+from .proprietaire import (
+    adopte_identite_du_dossier,
+    cree_dossier_d_accueil,
+    rend_lisible_avant_publication,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - uniquement pour le typage
     from .planner import Plan
@@ -315,8 +320,23 @@ def _write_atomic(
     disque, juste avant le renommage : c'est la qu'on met l'ancien fichier de
     cote. Plus tot, un echec d'ecriture laisserait la bibliotheque sans aucune
     des deux versions.
+
+    Le fichier est aussi REMIS a l'endroit (voir ``core/proprietaire``). Deux
+    defauts s'y corrigent d'un coup, et aucun des deux ne se voit d'ici :
+
+    - le temporaire nait en 0600, parce qu'un temporaire est cense rester
+      prive ; publie tel quel, il devient une fiche que le serveur multimedia,
+      sous un autre compte, ne peut pas lire. Ce defaut-la frappe TOUTES les
+      installations, root ou non. Les droits sont donc poses sur le DESCRIPTEUR
+      du temporaire, avant le renommage : apres, le nom definitif peut avoir
+      ete echange contre un lien symbolique, et c'est un fichier d'ailleurs qui
+      deviendrait lisible par tous ;
+    - en root, la fiche et le dossier qui l'accueille naitraient root:root dans
+      une bibliotheque qui appartient a l'utilisateur. Ce ``chown``, lui, reste
+      apres le renommage : il se protege d'un lien symbolique avec
+      ``follow_symlinks=False``, ce qu'un ``chmod`` ne sait pas faire.
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
+    cree_dossier_d_accueil(path.parent)
     handle = tempfile.NamedTemporaryFile(
         dir=path.parent, prefix=".sortilege-", suffix=".tmp", delete=False
     )
@@ -325,6 +345,7 @@ def _write_atomic(
         with handle:
             handle.write(payload)
             handle.flush()
+            rend_lisible_avant_publication(handle.fileno(), path)
             os.fsync(handle.fileno())
         if avant_publication is not None:
             avant_publication()
@@ -332,6 +353,7 @@ def _write_atomic(
     except BaseException:
         temporaire.unlink(missing_ok=True)
         raise
+    adopte_identite_du_dossier(path, path.parent)
 
 
 @dataclass(frozen=True, slots=True)

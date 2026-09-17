@@ -1,4 +1,5 @@
 <script setup>
+import { refusSansMotif } from '../lib/langue.js'
 import { ref } from 'vue'
 
 const props = defineProps({
@@ -47,7 +48,7 @@ async function test() {
     const body = await res.json()
     result.value = res.ok
       ? { ok: true, text: 'Message envoyé. Regarde ton canal Discord.' }
-      : { ok: false, text: body.detail ?? 'Échec.' }
+      : { ok: false, text: body.detail ?? refusSansMotif(res.status) }
   } catch {
     result.value = { ok: false, text: 'Serveur injoignable.' }
   } finally {
@@ -129,8 +130,8 @@ section {
   border-radius: 10px; padding: 16px 18px;
 }
 h3 {
-  margin: 0 0 10px; font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim);
+  margin: 0 0 10px; font-size: var(--t-xs); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .07em; color: var(--text-title);
 }
 .note { margin: 0 0 14px; font-size: 12px; color: var(--text-faint); line-height: 1.6; max-width: 660px; }
 

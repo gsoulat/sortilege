@@ -17,6 +17,7 @@ import SubtitleSettings from './SubtitleSettings.vue'
 import VpnSettings from './VpnSettings.vue'
 import IntegrationSettings from './IntegrationSettings.vue'
 import BackupSettings from './BackupSettings.vue'
+import { constatServeur } from '../lib/langue.js'
 
 // Deux listes, et pas une seule : un livre se range et se nomme comme le reste,
 // mais il n'a ni résolution, ni débit, ni stratégie de qualité. L'ajouter à la
@@ -151,7 +152,7 @@ function onPick(kind, absolute) {
     relative = absolute.slice(root.length + 1)
   } else {
     saveError.value =
-      `« ${absolute} » est hors de la racine de bibliothèque (${root}). ` +
+      `« ${absolute} » est hors de la racine de la médiathèque (${root}). ` +
       'Choisis un dossier situé dessous.'
     return
   }
@@ -168,10 +169,15 @@ function onPick(kind, absolute) {
 }
 
 async function lire(url) {
-  const res = await fetch(url)
+  // `.catch` sur le `fetch` : son message est en anglais quand le contact est
+  // perdu, et « Serveur injoignable (Failed to fetch) » n'apprenait rien à
+  // personne. L'écran de panne ci-dessous dit déjà quoi faire ; ces phrases
+  // n'ont donc qu'à dire ce qui s'est passé.
+  const res = await fetch(url).catch(() => null)
+  if (!res) throw new Error(constatServeur())
   // Une réponse 502 arrive en HTML : `res.json()` lèverait, la promesse
   // remonterait sans être attrapée, et l'écran resterait blanc sans un mot.
-  if (!res.ok) throw new Error(`réponse ${res.status}`)
+  if (!res.ok) throw new Error(constatServeur(res.status))
   return res.json()
 }
 
@@ -191,7 +197,7 @@ async function load() {
     prefs.value = preferences
     loadError.value = null
   } catch (e) {
-    loadError.value = `Serveur injoignable (${e.message ?? 'sans réponse'}).`
+    loadError.value = e.message || 'Réponse illisible du serveur.'
   } finally {
     chargement.value = false
   }
@@ -303,7 +309,7 @@ onMounted(load)
 // identifie », « l'etat du deploiement ». Un reglage se cherche par son
 // intention.
 const ONGLETS = [
-  { id: 'bibliotheque', label: 'Bibliothèque' },
+  { id: 'bibliotheque', label: 'Médiathèque' },
   { id: 'automatisation', label: 'Automatisation' },
   { id: 'identification', label: 'Identification' },
   { id: 'systeme', label: 'Système' },
@@ -355,7 +361,7 @@ function origine(source) {
       >{{ o.label }}</button>
     </nav>
 
-    <!-- Sous la barre d'onglets, et non dans l'onglet Bibliothèque : la plupart
+    <!-- Sous la barre d'onglets, et non dans l'onglet Médiathèque : la plupart
          des réglages s'enregistrent au changement, depuis n'importe quel
          onglet. Un refus rendu ailleurs que là où on a cliqué est un refus que
          personne ne voit. -->
@@ -364,7 +370,7 @@ function origine(source) {
       <button type="button" @click="saveError = null">Fermer</button>
     </div>
 
-    <!-- ===== Bibliothèque : d'où viennent les fichiers, où ils vont ===== -->
+    <!-- ===== Médiathèque : d'où viennent les fichiers, où ils vont ===== -->
     <template v-if="onglet === 'bibliotheque'">
     <section>
       <h3>Sources à scanner</h3>
@@ -388,7 +394,7 @@ function origine(source) {
     <section>
       <h3>Destination par type</h3>
       <p class="note top">
-        Chemin relatif à la racine de bibliothèque
+        Chemin relatif à la racine de la médiathèque
         (<code>{{ prefs.library_root }}</code>). Une destination doit rester sous cette
         racine : c'est ce qui empêche l'interface d'écrire ailleurs sur le NAS.
       </p>
@@ -694,13 +700,6 @@ input.budget {
   gap: 12px; min-height: 40vh; text-align: center; padding: 40px 20px;
 }
 .attente { color: var(--text-dim); font-size: 13px; }
-.pulsation {
-  width: 26px; height: 26px; border-radius: 50%;
-  border: 2px solid var(--border); border-top-color: var(--accent);
-  animation: tourne 1s linear infinite;
-}
-@keyframes tourne { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .pulsation { animation: none; } }
 .panne h2 { margin: 0; font-size: 17px; }
 .panne p { margin: 0; font-size: 13px; color: var(--text-dim); max-width: 46em; }
 .panne .quoi-faire { color: var(--text-faint); font-size: 12.5px; }
@@ -752,12 +751,14 @@ code {
 .dest-block .resolved { margin-left: 101px; }
 .dest-row label { font-size: 13px; color: var(--text-dim); }
 .dest-row input { font-family: var(--mono); font-size: 12.5px; padding: 6px 10px; }
-.resolved { font-size: var(--t-xs); color: var(--text-faint); }
+/* Le chemin resolu d'une destination n'offre aucune coupure : il imposait sa
+   largeur a la carte, et la page defilait lateralement sur un telephone. */
+.resolved { font-size: var(--t-xs); color: var(--text-faint); overflow-wrap: anywhere; }
 @media (max-width: 700px) {
   .dest-row { grid-template-columns: 1fr; gap: 4px; }
 }
 
-.dest-block { display: flex; flex-direction: column; gap: 5px; }
+.dest-block { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
 .dest-block + .dest-block { margin-top: 4px; }
 .browse { font-size: var(--t-xs); padding: 4px 10px; white-space: nowrap; }
 
@@ -771,19 +772,6 @@ code {
 .switch input { width: auto; }
 
 .actions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
-button.primary {
-  background: color-mix(in srgb, var(--accent) 20%, transparent);
-  border-color: var(--accent-dim); color: var(--accent);
-}
-/* Ce style scopé a plus de spécificité que le `button:disabled` global : sans
-   cette règle, « Enregistrer » désactivé garderait sa couleur d'accent, et le
-   gris du feuillet global posé sur ce violet ne ferait que 3,73:1. Désactivé,
-   le bouton retombe sur le fond neutre, où --text-faint mesure 4,75:1. */
-button.primary:disabled {
-  background: var(--surface-2);
-  border-color: var(--border);
-  color: var(--text-faint);
-}
 .ok-msg { font-size: 12px; color: var(--ok); }
 .err-msg { font-size: 12px; color: var(--err); }
 .attente-msg { font-size: 12px; color: var(--text-faint); }

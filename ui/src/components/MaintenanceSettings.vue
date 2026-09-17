@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, onMounted } from 'vue'
 import ConfirmAction from './ConfirmAction.vue'
+import { accord, nombre, pluriel, refusSansMotif } from '../lib/langue.js'
 
 const props = defineProps({
   mediaServer: { type: Object, required: true },
@@ -44,7 +45,7 @@ async function testServer() {
     const body = await res.json()
     testResult.value = res.ok
       ? { ok: true, text: 'Le serveur a bien reçu la demande.' }
-      : { ok: false, text: body.detail ?? 'Échec.' }
+      : { ok: false, text: body.detail ?? refusSansMotif(res.status) }
   } catch {
     testResult.value = { ok: false, text: 'Serveur injoignable.' }
   } finally {
@@ -88,8 +89,12 @@ const purgeMessage = ref(null)
 
 async function loadTrash() {
   trashErreur.value = null
+  // Le message de `fetch` est en anglais quand le contact est perdu : entre
+  // parenthèses au milieu d'une phrase française, « Failed to fetch » ne dit
+  // rien à personne.
+  const res = await fetch('/api/collection/trash').catch(() => null)
   try {
-    const res = await fetch('/api/collection/trash')
+    if (!res) throw new Error('Sortilège ne répond pas')
     // Le code avant le corps. Une 500 renvoie du JSON qu'on affectait tel
     // quel, et `trash.batches.length` levait sur `undefined` au rendu suivant ;
     // une 502 arrive en HTML et fait lever `json()`.
@@ -97,7 +102,7 @@ async function loadTrash() {
     trash.value = await res.json()
   } catch (e) {
     trash.value = null
-    trashErreur.value = e.message ?? 'sans réponse'
+    trashErreur.value = e.message || 'réponse illisible'
   }
 }
 
@@ -129,7 +134,9 @@ async function purge({ all = false } = {}) {
       trashErreur.value = null
       purgeMessage.value = {
         ok: true,
-        texte: `${body.removed_files} fichier(s) supprimé(s) définitivement, ${gb(body.freed_bytes)} Go libérés.`,
+        texte:
+          `${accord(body.removed_files, 'fichier', 'supprimé')} définitivement, ` +
+          `${gb(body.freed_bytes)} Go libérés.`,
       }
     } else {
       purgeMessage.value = { ok: false, texte: body.detail ?? `Échec du vidage (réponse ${res.status}).` }
@@ -145,7 +152,6 @@ async function purge({ all = false } = {}) {
 }
 
 const gb = (bytes) => (bytes / 1024 ** 3).toFixed(1)
-const pluriel = (n, mot) => `${n} ${mot}${n > 1 ? 's' : ''}`
 
 /**
  * Ce que « Vider » emporte VRAIMENT, au jour près. Annoncer le total de la
@@ -185,7 +191,8 @@ async function chercherVides() {
   videMessage.value = null
   videErreur.value = null
   try {
-    const res = await fetch('/api/library/empty-dirs')
+    const res = await fetch('/api/library/empty-dirs').catch(() => null)
+    if (!res) throw new Error('Sortilège ne répond pas')
     if (!res.ok) throw new Error(`réponse ${res.status}`)
     vides.value = await res.json()
   } catch (e) {
@@ -194,7 +201,7 @@ async function chercherVides() {
     // « Supprimer ». Un inventaire périmé est pire qu'aucun inventaire quand
     // le bouton d'à côté efface.
     vides.value = null
-    videErreur.value = e.message ?? 'sans réponse'
+    videErreur.value = e.message || 'réponse illisible'
   } finally {
     cherchantVides.value = false
   }
@@ -214,8 +221,8 @@ async function nettoyerVides() {
       videMessage.value = {
         ok: true,
         texte:
-          `${body.removed} dossier(s) supprimé(s)` +
-          (body.failed?.length ? `, ${body.failed.length} en échec.` : '.'),
+          accord(body.removed, 'dossier', 'supprimé') +
+          (body.failed?.length ? `, ${nombre(body.failed.length)} en échec.` : '.'),
       }
     } else {
       videMessage.value = { ok: false, texte: body.detail ?? `Échec (réponse ${res.status}).` }
@@ -252,14 +259,15 @@ async function chercherCoquilles() {
   coquilleMessage.value = null
   coquilleErreur.value = null
   try {
-    const res = await fetch('/api/library/orphan-dirs')
+    const res = await fetch('/api/library/orphan-dirs').catch(() => null)
+    if (!res) throw new Error('Sortilège ne répond pas')
     if (!res.ok) throw new Error(`réponse ${res.status}`)
     coquilles.value = await res.json()
   } catch (e) {
     // Même règle que pour les dossiers vides : pas de liste périmée sous un
     // bouton qui supprime.
     coquilles.value = null
-    coquilleErreur.value = e.message ?? 'sans réponse'
+    coquilleErreur.value = e.message || 'réponse illisible'
   } finally {
     cherchantCoquilles.value = false
   }
@@ -281,9 +289,11 @@ async function nettoyerCoquilles(mode) {
       coquilleMessage.value = {
         ok: true,
         texte:
-          `${body.removed_dirs} dossier(s) supprimé(s), ${body.handled_files} fichier(s) ` +
-          (mode === 'delete' ? 'supprimé(s)' : 'mis en corbeille') +
-          (body.failed?.length ? `, ${body.failed.length} en échec.` : '.'),
+          `${accord(body.removed_dirs, 'dossier', 'supprimé')}, ` +
+          (mode === 'delete'
+            ? accord(body.handled_files, 'fichier', 'supprimé')
+            : `${accord(body.handled_files, 'fichier', 'mis')} en corbeille`) +
+          (body.failed?.length ? `, ${nombre(body.failed.length)} en échec.` : '.'),
       }
     } else {
       coquilleMessage.value = { ok: false, texte: body.detail ?? `Échec (réponse ${res.status}).` }
@@ -315,7 +325,12 @@ async function purgeThumbs() {
     const res = await fetch('/api/media/thumbs/purge', { method: 'POST' })
     const body = await res.json().catch(() => ({}))
     thumbMessage.value = res.ok
-      ? { ok: true, texte: `${body.removed} aperçu(s) supprimé(s). Ils se reconstruiront à la demande.` }
+      ? {
+          ok: true,
+          texte:
+            `${accord(body.removed, 'aperçu', 'supprimé')}. ` +
+            'Les aperçus se reconstruisent à la demande.',
+        }
       : { ok: false, texte: body.detail ?? `Échec (réponse ${res.status}).` }
   } catch {
     thumbMessage.value = { ok: false, texte: 'Serveur injoignable — le cache est intact.' }
@@ -343,7 +358,8 @@ async function renameLibrary() {
       ? {
           ok: true,
           texte: body.proposed
-            ? `${body.proposed} fichier(s) à renommer sur ${body.works} œuvre(s). ` +
+            ? `${pluriel(body.proposed, 'fichier')} à renommer sur ` +
+              `${pluriel(body.works, 'œuvre')}. ` +
               'Ils attendent ta validation dans « File de revue ».'
             : 'Tout est déjà conforme au gabarit courant.',
         }
@@ -360,7 +376,7 @@ async function renameLibrary() {
 
 const raisonRenommage = computed(() =>
   renaming.value
-    ? 'Analyse en cours — chaque fichier de la bibliothèque est comparé au gabarit.'
+    ? 'Analyse en cours — chaque fichier de la médiathèque est comparé au gabarit.'
     : '',
 )
 
@@ -454,8 +470,8 @@ onMounted(loadTrash)
 
     <template v-else>
       <p class="summary">
-        <strong>{{ gb(trash.total_bytes) }} Go</strong> sur {{ trash.total_files }} fichier(s),
-        en {{ trash.batches.length }} lot(s).
+        <strong>{{ gb(trash.total_bytes) }} Go</strong> sur
+        {{ pluriel(trash.total_files, 'fichier') }}, en {{ pluriel(trash.batches.length, 'lot') }}.
       </p>
       <ul class="batches">
         <li v-for="b in trash.batches" :key="b.day">
@@ -537,7 +553,7 @@ onMounted(loadTrash)
       </button>
       <ConfirmAction
         v-if="vides?.count"
-        :label="`Supprimer ces ${vides.count} dossiers`"
+        :label="`Supprimer ${pluriel(vides.count, 'dossier')}`"
         :confirm-label="`Confirmer — supprimer ${pluriel(vides.count, 'dossier')}`"
         :detail="`Supprime ${pluriel(vides.count, 'dossier')} vides, définitivement. Aucun fichier n'est concerné : ils ne contiennent rien.`"
         :busy="nettoyant"
@@ -587,7 +603,7 @@ onMounted(loadTrash)
         </button>
         <ConfirmAction
           label="Supprimer"
-          :confirm-label="`Confirmer — supprimer ces ${coquilles.count} dossiers`"
+          :confirm-label="`Confirmer — supprimer ${pluriel(coquilles.count, 'dossier')}`"
           :detail="`Supprime ${pluriel(coquilles.count, 'dossier')} et leur contenu, ${gb(coquilles.bytes)} Go, définitivement. La mise en corbeille, elle, se rattrape.`"
           :busy="nettoyantCoquilles"
           :disabled="nettoyantCoquilles"
@@ -608,7 +624,7 @@ onMounted(loadTrash)
     <ul v-else-if="coquilles" class="vides">
       <li v-for="d in coquilles.dirs" :key="d.path">
         <code>{{ d.path }}</code>
-        <span class="detail">{{ d.file_count }} fichier(s) : {{ d.files.join(', ') }}</span>
+        <span class="detail">{{ pluriel(d.file_count, 'fichier') }} : {{ d.files.join(', ') }}</span>
       </li>
       <li v-if="coquilles.count > coquilles.dirs.length" class="more">
         … et {{ coquilles.count - coquilles.dirs.length }} autres
@@ -620,20 +636,20 @@ onMounted(loadTrash)
   </section>
 
   <section v-if="montre('renommage')">
-    <h3>Remettre la bibliothèque en conformité</h3>
+    <h3>Remettre la médiathèque en conformité</h3>
     <p class="note">
       Quand un gabarit change, ce qui est déjà rangé garde des noms produits par une
-      règle qui n'a plus cours. Ce passage compare chaque fichier de la bibliothèque au
+      règle qui n'a plus cours. Ce passage compare chaque fichier de la médiathèque au
       gabarit courant et propose ceux qui différeraient.
     </p>
     <p class="note">
       <strong>Rien n'est déplacé ici.</strong> Les propositions rejoignent la file de
       revue, où elles se valident comme les autres — un renommage de masse sur une
-      bibliothèque constituée ne doit pas partir d'un seul clic. Aucune identification
+      médiathèque constituée ne doit pas partir d'un seul clic. Aucune identification
       n'est refaite : on repart de ce que le fichier dit déjà de lui-même.
     </p>
     <button :disabled="renaming" @click="renameLibrary">
-      {{ renaming ? 'Analyse…' : 'Analyser la bibliothèque' }}
+      {{ renaming ? 'Analyse…' : 'Analyser la médiathèque' }}
     </button>
     <p v-if="raisonRenommage" class="indispo" role="status">{{ raisonRenommage }}</p>
     <p v-if="renameResult" :class="renameResult.ok ? 'ok-text' : 'err-text'">

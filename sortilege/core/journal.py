@@ -41,9 +41,18 @@ from .companions import (
 )
 from .nfo import LocalMetadataSettings, OnExisting, Outcome, deposit, info_from_plan
 from .planner import Plan
+from .proprietaire import adopte_identite_du_dossier, cree_dossier_d_accueil
 from .renaming import RENAME_MARKER
 
 logger = logging.getLogger(__name__)
+
+# Anciens noms prives des helpers partis dans « core/proprietaire » : ce module
+# n'etait plus le seul a en avoir besoin, et « core/nfo » — qu'il importe — ne
+# pouvait pas les lui emprunter sans fermer un cycle. Les alias restent parce
+# que la regle qu'ils portent est NEE ici, dans le deplacement, et que les
+# appelants comme les tests la cherchent d'abord a cet endroit.
+_adopte_identite_du_dossier = adopte_identite_du_dossier
+_cree_dossier_d_accueil = cree_dossier_d_accueil
 
 # Dossier de saison tel que NOS gabarits l'ecrivent — « Season 01 », « Saison 2 ».
 # Volontairement distinct du motif du parseur, qui lit des noms de release : ici
@@ -173,14 +182,19 @@ def _move(source: Path, destination: Path) -> str:
 
     Un garde-fou dans la primitive protege aussi les appelants a venir, ce
     qu'une convention ne fait jamais.
+
+    C'est aussi le passage unique de tout ce qui entre en bibliotheque : en
+    root, fichier et dossiers crees y prennent l'identite du dossier qui les
+    accueille (voir ``core/proprietaire``). Le renommage la reprend comme la
+    copie — un fichier deplace garde sinon celle des telechargements, ce qui est
+    le defaut meme qu'on vient corriger.
     """
     if destination.exists():
         raise FileExistsError(f"la destination existe deja : {destination}")
 
-    destination.parent.mkdir(parents=True, exist_ok=True)
+    cree_dossier_d_accueil(destination.parent)
     try:
         os.rename(source, destination)
-        return "rename"
     except OSError:
         # EXDEV : les deux chemins sont sur des systemes de fichiers
         # differents. C'est le cas quand les telechargements et la
@@ -188,6 +202,9 @@ def _move(source: Path, destination: Path) -> str:
         # nettement plus lent. Sous Docker, deux montages distincts suffisent,
         # meme sur un seul disque.
         pass
+    else:
+        adopte_identite_du_dossier(destination, destination.parent)
+        return "rename"
 
     try:
         shutil.move(str(source), str(destination))
@@ -206,6 +223,7 @@ def _move(source: Path, destination: Path) -> str:
             except OSError as exc:
                 logger.warning("copie orpheline non retiree (%s) : %s", destination, exc)
         raise
+    adopte_identite_du_dossier(destination, destination.parent)
     return "copy"
 
 

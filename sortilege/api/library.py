@@ -473,6 +473,28 @@ def prune_extras(body: ExtrasPruneRequest) -> dict[str, object]:
         _nettoyage_annexes.release()
 
 
+def _cause(exc: OSError, fichier: Path) -> tuple[str, str]:
+    """Le motif d'un refus, et la CLE qui regroupe les refus identiques.
+
+    Trois mille huit cents fichiers bloques par un seul dossier root
+    produisaient trois mille huit cents fois le meme conseil, chacun long de
+    quatre lignes. On ne lit pas ce mur : la cause est unique, elle doit
+    s'afficher une fois.
+
+    La cle vient de l'identite et du mode du dossier, pas du texte : celui-ci
+    nomme un dossier different a chaque fichier.
+    """
+    motif = exc.strerror or str(exc)
+    if not isinstance(exc, PermissionError):
+        return motif, displayable(motif)
+    try:
+        info = fichier.parent.stat()
+        cle = f"permission:{info.st_uid}:{info.st_gid}:{info.st_mode}"
+    except OSError:
+        cle = "permission"
+    return cle, displayable(motif + _permission_hint(fichier))
+
+
 def _prune_extras(racine: Path, demandees: set[str], mode: str) -> dict[str, object]:
     # Bornes calculees AVANT le geste : c'est la destination telle qu'elle est
     # reglee maintenant qui doit survivre.
@@ -483,7 +505,17 @@ def _prune_extras(racine: Path, demandees: set[str], mode: str) -> dict[str, obj
 
     retires, octets, dossiers = 0, 0, 0
     echecs: list[str] = []
+    # Cle de cause -> ce qui s'affiche : le conseil une fois, le nombre de
+    # fichiers qu'il concerne, et quelques exemples pour aller verifier.
+    causes: dict[str, dict[str, object]] = {}
     parents: set[Path] = set()
+
+    def noter(cle: str, texte: str, relatif: str) -> None:
+        groupe = causes.setdefault(cle, {"message": texte, "count": 0, "examples": []})
+        groupe["count"] = int(groupe["count"]) + 1
+        exemples = groupe["examples"]
+        if isinstance(exemples, list) and len(exemples) < 3:
+            exemples.append(displayable(relatif))
 
     for cle in EXTRA_CATEGORIES:
         if cle not in demandees:
@@ -493,12 +525,16 @@ def _prune_extras(racine: Path, demandees: set[str], mode: str) -> dict[str, obj
             try:
                 info = fichier.lstat()
                 if not stat.S_ISREG(info.st_mode):
-                    echecs.append(f"{relatif} : n'est plus un fichier ordinaire, laissé en place")
+                    motif = "n'est plus un fichier ordinaire, laissé en place"
+                    noter(motif, motif, relatif)
+                    echecs.append(f"{relatif} : {motif}")
                     continue
                 # Un dossier remplace par un lien entre l'inventaire et l'action
                 # ferait sortir de la bibliotheque : on verifie au dernier moment.
                 if not fichier.resolve().is_relative_to(borne):
-                    echecs.append(f"{relatif} : hors de la bibliothèque, laissé en place")
+                    motif = "hors de la bibliothèque, laissé en place"
+                    noter(motif, motif, relatif)
+                    echecs.append(f"{relatif} : {motif}")
                     continue
                 if corbeille is None:
                     fichier.unlink()
@@ -506,19 +542,20 @@ def _prune_extras(racine: Path, demandees: set[str], mode: str) -> dict[str, obj
                     # Nom LIBRE, et repli par copie seulement entre deux volumes.
                     send_to_trash(fichier, corbeille)
             except OSError as exc:
-                motif = exc.strerror or str(exc)
-                if isinstance(exc, PermissionError):
-                    motif += _permission_hint(fichier)
-                echecs.append(f"{relatif} : {displayable(motif)}")
+                cle, texte = _cause(exc, fichier)
+                noter(cle, texte, relatif)
+                echecs.append(f"{relatif} : {texte}")
                 continue
             except UnicodeError:
                 # Nom non UTF-8 (latin-1 d'un NAS) : le nom aplati de la
                 # corbeille ne s'encode pas. Ce fichier reste, les autres
                 # continuent — une exception ici interrompait toute la passe.
-                echecs.append(
-                    f"{relatif} : nom de fichier qui n'est pas de l'UTF-8, "
+                motif = (
+                    "nom de fichier qui n'est pas de l'UTF-8, "
                     "impossible à mettre en corbeille — laissé en place"
                 )
+                noter(motif, motif, relatif)
+                echecs.append(f"{relatif} : {motif}")
                 continue
             retires += 1
             octets += info.st_size
@@ -545,6 +582,8 @@ def _prune_extras(racine: Path, demandees: set[str], mode: str) -> dict[str, obj
         "bytes": octets,
         "failed": echecs[:20],
         "failed_count": len(echecs),
+        # Les memes refus regroupes : une cause, son nombre, ses exemples.
+        "causes": sorted(causes.values(), key=lambda c: -int(c["count"])),
         "trash_path": displayable(str(corbeille)) if corbeille is not None else None,
         "removed_dirs": dossiers,
     }

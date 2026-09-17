@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, onBeforeUnmount, ref, watch } from 'vue'
 import ConfirmAction from './ConfirmAction.vue'
+import { accord, nombre, pluriel, refusSansMotif, verbe } from '../lib/langue.js'
 
 /**
  * Le journal : ce qui a RÉELLEMENT bougé sur le disque, du plus récent au plus
@@ -74,15 +75,17 @@ async function validerDefinitivement() {
     })
     const lu = await res.json().catch(() => ({}))
     if (!res.ok) {
-      echecs.value = [lu.detail ?? `Échec (${res.status}).`]
+      echecs.value = [{ message: lu.detail ?? refusSansMotif(res.status) }]
       return
     }
-    message.value = `${lu.purged} entrée(s) validées. Les rangements sont définitifs.`
+    message.value = `${accord(lu.purged, 'entrée', 'validée')}. Les rangements sont définitifs.`
     echecs.value = []
     page.value = 1
     await charger()
   } catch {
-    echecs.value = ['Serveur injoignable.']
+    echecs.value = [
+      { message: "Serveur injoignable : le journal est intact, rien n'a été validé." },
+    ]
   } finally {
     purge.value = false
   }
@@ -95,7 +98,11 @@ async function charger() {
     if (operation.value) params.set('operation', operation.value)
     if (requete.value) params.set('q', requete.value)
 
-    const res = await fetch(`/api/review/journal/entries?${params}`)
+    // `.catch` sur le `fetch` lui-même : quand le contact est perdu, son
+    // message est en anglais (« Failed to fetch ») et il finissait entre
+    // parenthèses au milieu d'une phrase française.
+    const res = await fetch(`/api/review/journal/entries?${params}`).catch(() => null)
+    if (!res) throw new Error('Sortilège ne répond pas')
     // Une réponse 502 arrive en HTML : `res.json()` lèverait, la promesse
     // remonterait sans être attrapée, et l'écran resterait figé sans un mot.
     if (!res.ok) throw new Error(`réponse ${res.status}`)
@@ -114,7 +121,7 @@ async function charger() {
   } catch (e) {
     // `data` est CONSERVÉ : une liste qui date vaut mieux qu'un écran vide, à
     // condition de dire qu'elle date. Le bandeau s'en charge.
-    panne.value = e.message ?? 'sans réponse'
+    panne.value = e.message || 'réponse illisible'
   } finally {
     chargement.value = false
   }
@@ -308,7 +315,10 @@ async function annuler(cle, corps, reussite) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(corps),
-    })
+    }).catch(() => null)
+    // Contact perdu : le message de `fetch` est en anglais, et il n'a rien à
+    // dire de plus que « le serveur n'a pas répondu ».
+    if (!res) throw new Error('Sortilège ne répond pas')
     if (!res.ok) {
       // Un 400 porte un motif utile dans son JSON ; un 502 arrive en HTML et
       // ferait lever `json()`. On tente le motif, on retombe sur le code.
@@ -323,7 +333,7 @@ async function annuler(cle, corps, reussite) {
   } catch (e) {
     // Une annulation ratée ne se range pas avec une lecture ratée : la liste
     // affichée reste juste, c'est le geste qui n'a pas abouti.
-    echecs.value = [{ message: `L'annulation n'a pas abouti (${e.message ?? 'sans réponse'}).` }]
+    echecs.value = [{ message: `L'annulation n'a pas abouti (${e.message || 'réponse illisible'}).` }]
   } finally {
     enCours.value = null
   }
@@ -336,7 +346,8 @@ function annulerEntree(e) {
     { plan_ids: [e.plan_id] },
     (out) =>
       out.undone
-        ? `Défait : ${out.undone} fichier(s) de « ${e.title} » sont revenus dans ${revenu}.`
+        ? `Défait : ${pluriel(out.undone, 'fichier')} de « ${e.title} » ` +
+          `${verbe(out.undone, 'est revenu', 'sont revenus')} dans ${revenu}.`
         : `Rien n'a pu être défait pour « ${e.title} ».`,
   )
 }
@@ -345,7 +356,9 @@ function annulerOeuvre(e) {
   return annuler(
     `oeuvre:${e.work_key}`,
     { work: e.work_key },
-    (out) => `« ${e.title} » : ${out.undone} opération(s) défaites, l'œuvre est revenue à sa source.`,
+    (out) =>
+      `« ${e.title} » : ${accord(out.undone, 'opération', 'défaite')}, ` +
+      "l'œuvre est revenue à sa source.",
   )
 }
 
@@ -364,7 +377,7 @@ const motifDuVide = computed(() => {
   if (!data.value.journal_size) {
     return "Le journal est vide : aucun fichier n'a encore été déplacé par Sortilège. Il se remplira au premier rangement, et chaque ligne y restera annulable."
   }
-  return `Aucune entrée ne correspond à ce filtre. Le journal en compte ${data.value.journal_size} au total.`
+  return `Aucune entrée ne correspond à ce filtre. Le journal en compte ${nombre(data.value.journal_size)} au total.`
 })
 
 /**
@@ -428,7 +441,7 @@ onMounted(charger)
       <!-- Rechargement raté alors qu'une liste est déjà affichée : elle reste,
            mais on dit qu'elle date. Une liste périmée passée pour fraîche ferait
            cliquer « Annuler » sur une entrée qui n'existe plus. -->
-      <p v-if="panne" class="panne-inline">
+      <p v-if="panne" class="avertissement-inline">
         Cette liste date de la dernière lecture réussie : le rechargement a échoué
         ({{ panne }}).
         <button class="petit" :disabled="chargement" @click="charger">Réessayer</button>
@@ -437,7 +450,7 @@ onMounted(charger)
       <div class="outils">
         <div class="natures" role="group" aria-label="Filtrer par nature d'opération">
           <button :class="{ actif: !operation }" @click="filtrer('')">
-            Tout <span class="compte">{{ data.journal_size }}</span>
+            Tout <span class="compte">{{ nombre(data.journal_size) }}</span>
           </button>
           <button
             v-for="op in data.operations"
@@ -471,9 +484,9 @@ onMounted(charger)
         <ConfirmAction
           label="Valider définitivement"
           confirm-label="Confirmer : vider le journal"
-          :detail="`Les ${data.journal_size} entrée(s) disparaissent et plus rien ne pourra `
-            + `être annulé. Aucun fichier n'est touché : ce qui est rangé reste exactement `
-            + `où il est — c'est le chemin du retour qu'on perd.`"
+          :detail="`${pluriel(data.journal_size, 'entrée')} ${verbe(data.journal_size, 'disparaît', 'disparaissent')} `
+            + `et plus rien ne pourra être annulé. Aucun fichier n'est touché : ce qui est `
+            + `rangé reste exactement où il est — c'est le chemin du retour qu'on perd.`"
           :busy="purge"
           :disabled="!data.journal_size || purge || chargement"
           :disabled-reason="data.journal_size
@@ -518,7 +531,7 @@ onMounted(charger)
         <section v-for="jour in jours" :key="jour.cle" class="jour">
           <h3>
             {{ jour.libelle }}
-            <span class="combien">{{ jour.entrees.length }} entrée(s)</span>
+            <span class="combien">{{ pluriel(jour.entrees.length, 'entrée') }}</span>
           </h3>
 
           <ul class="entrees">
@@ -584,8 +597,11 @@ onMounted(charger)
             ← Plus récent
           </button>
           <span class="position">
-            Page {{ data.page }} sur {{ data.pages }} — {{ data.total }} entrée(s)
-            <template v-if="filtreActif"> filtrée(s) sur {{ data.journal_size }}</template>
+            Page {{ data.page }} sur {{ data.pages }} —
+            <template v-if="filtreActif">
+              {{ accord(data.total, 'entrée', 'filtrée') }} sur {{ nombre(data.journal_size) }}
+            </template>
+            <template v-else>{{ pluriel(data.total, 'entrée') }}</template>
           </span>
           <button
             :disabled="data.page >= data.pages || chargement"
@@ -616,13 +632,6 @@ onMounted(charger)
   gap: 12px; min-height: 34vh; text-align: center; padding: 36px 20px;
 }
 .attente { color: var(--text-dim); font-size: var(--t-sm); }
-.pulsation {
-  width: 26px; height: 26px; border-radius: 50%;
-  border: 2px solid var(--border); border-top-color: var(--accent);
-  animation: tourne 1s linear infinite;
-}
-@keyframes tourne { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .pulsation { animation: none; } }
 
 .panne h3 { margin: 0; font-size: var(--t-md); color: var(--text-title); }
 .panne p { margin: 0; font-size: var(--t-sm); color: var(--text-dim); max-width: 52ch; line-height: 1.6; }
@@ -630,7 +639,7 @@ onMounted(charger)
 .panne code, .racines code { font-family: var(--mono); font-size: var(--t-xs); }
 .panne .primary { border-color: var(--accent-dim); color: var(--text); }
 
-.panne-inline {
+.avertissement-inline {
   margin: 0; padding: 9px 12px; border-radius: 8px;
   font-size: var(--t-xs); line-height: 1.6; color: var(--warn);
   border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);

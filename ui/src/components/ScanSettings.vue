@@ -76,7 +76,7 @@ function setSeuil(brut) {
         téléchargement avorté : le retenir remplirait la file de revue de choses qu'on ne
         veut pas ranger. <strong>Mais « presque » a un coût</strong> — un court-métrage, un
         bonus, un épisode en 480p passe sous le plancher et disparaît sans laisser de trace.
-        Descends-le si ta bibliothèque en contient.
+        Descends-le si ta médiathèque en contient.
       </p>
       <p v-if="scan.min_size_mb === 0" class="hint attention">
         À 0, plus aucun plancher : tout fichier vidéo est retenu, échantillons et fragments
@@ -100,7 +100,7 @@ function setSeuil(brut) {
       </p>
       <p class="hint livres">
         Toujours ignorés, sans avoir à les saisir :
-        <code v-for="d in DOSSIERS_LIVRES" :key="d">{{ d }}</code>
+        <span class="jetons"><code v-for="d in DOSSIERS_LIVRES" :key="d">{{ d }}</code></span>
         et tout dossier commençant par un point. Ce que tu ajoutes ici <strong>s'ajoute</strong>
         à cette liste, ne la remplace pas.
       </p>
@@ -121,7 +121,7 @@ function setSeuil(brut) {
       </p>
       <p class="hint livres">
         Toujours ignorés :
-        <code v-for="m in MOTIFS_LIVRES" :key="m">{{ m }}</code>
+        <span class="jetons"><code v-for="m in MOTIFS_LIVRES" :key="m">{{ m }}</code></span>
         Ce que tu ajoutes ici s'y ajoute.
       </p>
     </div>
@@ -134,8 +134,8 @@ section {
   border-radius: 10px; padding: 16px 18px;
 }
 h3 {
-  margin: 0 0 10px; font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim);
+  margin: 0 0 10px; font-size: var(--t-xs); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .07em; color: var(--text-title);
 }
 .note { margin: 0 0 12px; font-size: 12px; color: var(--text-faint); line-height: 1.6; max-width: 660px; }
 .note strong { color: var(--text-dim); }
@@ -154,7 +154,11 @@ h3 {
 .hint { margin: 8px 0 0; font-size: 11.5px; color: var(--text-faint); line-height: 1.6; max-width: 660px; }
 .hint strong { color: var(--text-dim); }
 .hint.refus, .hint.attention { color: var(--warn); opacity: .9; }
-.hint.livres code { margin-right: 5px; }
+/* Ces `code` se suivaient sans espace : le navigateur n'y voyait donc AUCUNE
+   occasion de couper, et la sequence entiere debordait — sur un telephone,
+   c'est toute la page qui defilait lateralement. Un conteneur qui enveloppe
+   rend la coupure possible sans toucher a la prose autour. */
+.hint.livres .jetons { display: inline-flex; flex-wrap: wrap; gap: 4px; vertical-align: baseline; }
 code {
   font-family: var(--mono); font-size: 11px;
   background: var(--surface-2); padding: 1.5px 6px; border-radius: 4px; color: var(--text-dim);

@@ -47,6 +47,7 @@ from typing import Protocol
 from .companions import SUBTITLE_EXTENSIONS
 from .filehash import compute as _empreinte_du_fichier
 from .probe import FileProbe
+from .proprietaire import adopte_identite_du_dossier, rend_lisible_avant_publication
 
 logger = logging.getLogger(__name__)
 
@@ -710,17 +711,30 @@ def _ecrire_atomiquement(cible: Path, contenu: bytes) -> None:
     traverserait un systeme de fichiers et cesserait d'etre atomique. Son nom
     commence par un point : les fichiers caches sont ignores par le balayage des
     dossiers vides, un residu ne ferait donc pas passer un dossier pour occupe.
+
+    Le fichier est aussi remis a l'endroit (voir ``core/proprietaire``) : un
+    sous-titre n'est ecrit que pour etre relu par un serveur multimedia qui
+    tourne sous un AUTRE compte, et il le serait mal deux fois — avec les droits
+    herites d'un umask restrictif, et avec l'identite root quand Sortilege
+    tourne en root pour traverser des montages aux proprietaires differents.
+
+    Les droits sont poses sur le DESCRIPTEUR du temporaire, avant le renommage :
+    apres, le nom definitif peut avoir ete echange contre un lien symbolique, et
+    c'est un fichier d'ailleurs qui deviendrait lisible par tous. L'identite,
+    elle, se pose ensuite sans risque : un ``chown`` refuse de suivre un lien.
     """
     temporaire = cible.with_name(f".{cible.name}.{os.getpid()}.partiel")
     try:
         with temporaire.open("wb") as sortie:
             sortie.write(contenu)
             sortie.flush()
+            rend_lisible_avant_publication(sortie.fileno(), cible)
             os.fsync(sortie.fileno())
         os.replace(temporaire, cible)
     except OSError:
         temporaire.unlink(missing_ok=True)
         raise
+    adopte_identite_du_dossier(cible, cible.parent)
 
 
 # --- Orchestration ----------------------------------------------------------

@@ -158,7 +158,10 @@ header {
 h1 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
 .version { font-family: var(--mono); font-size: 10.5px; color: var(--text-faint); }
 
-nav { display: flex; gap: 2px; margin-right: auto; }
+/* `flex-wrap` : les cinq onglets font 444 px a eux seuls, et sans repli
+   c'est la PAGE ENTIERE qui defilait lateralement sur un telephone — la
+   navigation debordait, et tout le reste avec elle. */
+nav { display: flex; flex-wrap: wrap; gap: 2px; margin-right: auto; }
 nav button {
   border: none; background: none; color: var(--text-dim);
   padding: 6px 11px; border-radius: 6px; font-size: 13px;

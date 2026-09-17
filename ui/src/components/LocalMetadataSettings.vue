@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, useId } from 'vue'
 import ConfirmAction from './ConfirmAction.vue'
+import { accord, pluriel } from '../lib/langue.js'
 
 /**
  * Métadonnées locales : ce que Sortilège dépose DANS la bibliothèque.
@@ -127,7 +128,7 @@ const sortDesExistants = computed(() => {
   return "Cette conduite est inconnue de cet écran : rien ici ne dit ce qu'elle fait des fichiers déjà présents."
 })
 
-// --- Écriture sur toute la bibliothèque ------------------------------------
+// --- Écriture sur toute la médiathèque -------------------------------------
 
 const enCours = ref(false)
 const rapport = ref(null)
@@ -178,7 +179,7 @@ const raisonBouton = computed(() =>
   peutEcrire.value
     ? ''
     : "Coche d'abord les fiches .nfo ou « metadata.opf » ci-dessus : ces cases sont le " +
-      "consentement à écrire dans la bibliothèque, et le serveur refuse sans l'une d'elles.",
+      "consentement à écrire dans la médiathèque, et le serveur refuse sans l'une d'elles.",
 )
 
 const detailBibliotheque = computed(() => {
@@ -218,12 +219,6 @@ const explicationZero = computed(() => {
   return ''
 })
 
-const pluriel = (n, mot) => `${n} ${mot}${n > 1 ? 's' : ''}`
-/** « 1 198 fiches écrites », pas « 1198 fiche(s) écrite(s) » : un compte rendu
- *  se lit à voix haute, et les parenthèses d'accord obligent à faire le tri
- *  soi-même là où la machine connaît déjà le nombre. */
-const accord = (n, nom, participe) =>
-  `${pluriel(n, nom)} ${participe}${n > 1 ? 's' : ''}`
 </script>
 
 <template>
@@ -231,12 +226,12 @@ const accord = (n, nom, participe) =>
     <h3>Métadonnées locales</h3>
     <p class="note">
       « Local metadata » est le vocabulaire de Jellyfin, et il dit exactement de quoi il
-      s'agit : des données qui vivent <strong>dans</strong> la bibliothèque, à côté des
+      s'agit : des données qui vivent <strong>dans</strong> la médiathèque, à côté des
       fichiers, et non dans la base de Sortilège.
     </p>
     <p class="note capital">
       <strong>Tout est désactivé par défaut, et ce n'est pas décoratif.</strong>
-      Écrire des fichiers dans la bibliothèque de quelqu'un est un geste qui se demande :
+      Écrire des fichiers dans la médiathèque de quelqu'un est un geste qui se demande :
       qui met à jour son image ne s'attend pas à trouver deux cents fichiers nouveaux le
       lendemain. Rien de ce qui suit ne s'active tout seul.
     </p>
@@ -286,7 +281,7 @@ const accord = (n, nom, participe) =>
         Ces deux noms sont lus par Jellyfin <em>comme</em> par Plex : un seul dépôt sert les
         deux serveurs, au lieu de deux jeux de fichiers. Les images viennent de
         l'identification, donc elles se déposent <strong>au moment du rangement</strong> —
-        l'écriture sur toute la bibliothèque, plus bas, n'en télécharge aucune : un fichier
+        l'écriture sur toute la médiathèque, plus bas, n'en télécharge aucune : un fichier
         déjà rangé ne porte plus d'adresse d'affiche.
       </p>
     </div>
@@ -309,7 +304,7 @@ const accord = (n, nom, participe) =>
         <strong>Jellyfin ne lit aucun <code>.nfo</code> pour les livres</strong>, il attend le
         format de Calibre. Les confondre ferait croire qu'activer les fiches suffit — et rien
         n'apparaîtrait sur les livres. Le format retenu est celui de Calibre justement parce
-        qu'il est déjà établi : une bibliothèque rangée par Sortilège s'importe dans Calibre
+        qu'il est déjà établi : une médiathèque rangée par Sortilège s'importe dans Calibre
         sans conversion, et l'inverse.
       </p>
       <p class="hint">
@@ -350,10 +345,10 @@ const accord = (n, nom, participe) =>
       </p>
     </div>
 
-    <h3 class="sous-titre">Écrire les fiches de toute la bibliothèque</h3>
+    <h3 class="sous-titre">Écrire les fiches de toute la médiathèque</h3>
     <p class="note">
       Les réglages ci-dessus n'agissent qu'<strong>au rangement suivant</strong>. Ce passage
-      est ce qui fait apparaître les fiches sur ce qui était déjà rangé : la bibliothèque est
+      est ce qui fait apparaître les fiches sur ce qui était déjà rangé : la médiathèque est
       relue, et une fiche est écrite à côté de chaque vidéo.
     </p>
     <p class="note">
@@ -362,7 +357,7 @@ const accord = (n, nom, participe) =>
       numérotation, les identifiants qu'une fiche antérieure portait — et c'est précisément ce
       qu'il faut. Elle épingle l'identité et laisse le serveur compléter. Réinterroger un
       fournisseur ferait courir le risque qu'une mauvaise réponse écrase,
-      <strong>avec autorité</strong>, une bibliothèque correcte.
+      <strong>avec autorité</strong>, une médiathèque correcte.
     </p>
     <p class="note">
       Aucune affiche n'est téléchargée.
@@ -387,8 +382,8 @@ const accord = (n, nom, participe) =>
     </p>
 
     <ConfirmAction
-      label="Écrire les fiches de toute la bibliothèque"
-      confirm-label="Confirmer — écrire dans toute la bibliothèque"
+      label="Écrire les fiches de toute la médiathèque"
+      confirm-label="Confirmer — écrire dans toute la médiathèque"
       :detail="detailBibliotheque"
       :busy="enCours"
       :disabled="enCours || !peutEcrire"
@@ -401,8 +396,8 @@ const accord = (n, nom, participe) =>
          attente » jusqu'à la fin des temps. -->
     <p v-if="panne" class="panne-inline" role="alert">{{ panne }}</p>
     <p v-else-if="enCours" class="indispo" role="status">
-      Écriture en cours — la bibliothèque est parcourue fichier par fichier, puis chaque fiche
-      est écrite. Sur une grande bibliothèque, cela prend plusieurs minutes ; le bouton reprend
+      Écriture en cours — la médiathèque est parcourue fichier par fichier, puis chaque fiche
+      est écrite. Sur une grande médiathèque, cela prend plusieurs minutes ; le bouton reprend
       dès que le serveur rend son compte.
     </p>
     <template v-else-if="rapport">

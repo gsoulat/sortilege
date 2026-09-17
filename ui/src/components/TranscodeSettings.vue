@@ -89,7 +89,7 @@ const HEURES = Array.from({ length: 24 }, (_, h) => h)
     </div>
     <p class="hint">
       H.264 gagne moins de place que le HEVC mais se lit partout, y compris sur les téléviseurs
-      et boîtiers anciens — une bibliothèque qu'on ne peut plus lire n'a pas gagné de place,
+      et boîtiers anciens — une médiathèque qu'on ne peut plus lire n'a pas gagné de place,
       elle a perdu des films. CRF plus bas = meilleure image et fichier plus gros ; 21 est le
       compromis courant pour un réencodage qu'on ne veut pas voir.
     </p>
@@ -102,8 +102,8 @@ section {
   border-radius: 10px; padding: 16px 18px;
 }
 h3 {
-  margin: 0 0 10px; font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim);
+  margin: 0 0 10px; font-size: var(--t-xs); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .07em; color: var(--text-title);
 }
 .note { margin: 0 0 12px; font-size: 12px; color: var(--text-faint); line-height: 1.6; max-width: 660px; }
 .note.attention { color: var(--warn); opacity: .85; }

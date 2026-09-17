@@ -73,15 +73,33 @@ function auClavier(e) {
   else if (e.key === 'ArrowRight') suivant()
 }
 
+/**
+ * Nom accessible de la liseuse. Une surimpression `aria-modal` sans nom
+ * s'annonce « dialogue » et rien d'autre : on apprend qu'on est entre quelque
+ * part sans apprendre ou. Le titre du livre n'arrive qu'apres le chargement,
+ * d'ou le repli.
+ */
+const nom = computed(() => (info.value?.title ? `Liseuse — ${info.value.title}` : 'Liseuse'))
+
 onMounted(() => {
   charger()
   window.addEventListener('keydown', auClavier)
+  // Le fond ne doit pas défiler derrière la liseuse : on croit tourner les
+  // pages et c'est la médiathèque qui bouge dessous. Même verrou que
+  // l'agrandissement d'image.
+  document.body.style.overflow = 'hidden'
 })
-onUnmounted(() => window.removeEventListener('keydown', auClavier))
+onUnmounted(() => {
+  window.removeEventListener('keydown', auClavier)
+  document.body.style.overflow = ''
+})
 </script>
 
 <template>
-  <div class="voile" @click.self="emit('close')">
+  <!-- `role` et `aria-modal` alignés sur l'agrandissement d'image : la liseuse
+       couvre tout l'écran et rien derrière elle n'est utilisable, il faut que
+       ça s'entende aussi. -->
+  <div class="voile" role="dialog" aria-modal="true" :aria-label="nom" @click.self="emit('close')">
     <div class="liseuse">
       <header>
         <div class="identite">
@@ -155,7 +173,7 @@ footer {
   padding: 9px 14px; border-top: 1px solid var(--border);
 }
 footer select {
-  flex: 1; min-width: 0; font-size: 12px; padding: 4px 8px;
+  flex: 1; min-width: 0; font-size: var(--t-xs); padding: 4px 8px;
   background: var(--surface-2); border: 1px solid var(--border);
   border-radius: 6px; color: var(--text);
 }

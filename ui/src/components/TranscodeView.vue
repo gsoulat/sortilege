@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import ConfirmAction from './ConfirmAction.vue'
+import { pluriel, refusSansMotif } from '../lib/langue.js'
 
 /**
  * Réencodage différé, sur son propre écran.
@@ -59,7 +60,7 @@ async function appel(url, corps = null) {
     })
     const lu = await res.json().catch(() => ({}))
     if (!res.ok) {
-      message.value = { ok: false, texte: lu.detail ?? `Échec (${res.status}).` }
+      message.value = { ok: false, texte: lu.detail ?? refusSansMotif(res.status) }
       return null
     }
     return lu
@@ -78,8 +79,8 @@ async function enfiler() {
       message.value = {
         ok: true,
         texte:
-          `${out.queued} fichier(s) en file.` +
-          (out.rejected?.length ? ` ${out.rejected.length} ignoré(s).` : ''),
+          `${pluriel(out.queued, 'fichier')} en file.` +
+          (out.rejected?.length ? ` ${pluriel(out.rejected.length, 'ignoré')}.` : ''),
       }
     }
   } finally {
@@ -211,7 +212,7 @@ onUnmounted(() => clearInterval(minuteur))
 
     <div v-if="candidats?.count" class="lot">
       <span class="warn-text">
-        {{ candidats.count }} fichier(s) ne respectent pas ta stratégie —
+        {{ pluriel(candidats.count, 'fichier') }} hors de ta stratégie —
         environ {{ gb(candidats.recoverable_bytes) }} Go récupérables.
       </span>
       <button class="small" :disabled="!!raisonEnfiler" @click="enfiler">
@@ -238,7 +239,7 @@ onUnmounted(() => clearInterval(minuteur))
       <p class="hint">
         Une stratégie « Qualité maximale » ne propose jamais de réduire quoi que ce soit —
         c'est sa définition. Pour que des fichiers apparaissent ici : change la stratégie du
-        type dans <em>Réglages → Bibliothèque</em>, ou fixe-lui un poids maximal.
+        type dans <em>Réglages → Médiathèque</em>, ou fixe-lui un poids maximal.
       </p>
     </div>
 
@@ -313,13 +314,8 @@ onUnmounted(() => clearInterval(minuteur))
   gap: 12px; min-height: 40vh; text-align: center; padding: 40px 20px;
 }
 .attente { color: var(--text-dim); font-size: var(--t-sm); }
-.pulsation {
-  width: 26px; height: 26px; border-radius: 50%;
-  border: 2px solid var(--border); border-top-color: var(--accent);
-  animation: tourne 1s linear infinite;
-}
-@keyframes tourne { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .pulsation { animation: none; } }
+/* `.pulsation` — keyframes et garde de mouvement comprises — vit maintenant
+   dans style.css : la regle etait identique a l'octet dans quatre vues. */
 .panne h2 { margin: 0; font-size: var(--t-md); }
 .panne p { margin: 0; font-size: var(--t-sm); color: var(--text-dim); max-width: 46em; }
 .panne .quoi-faire { color: var(--text-faint); }
@@ -329,12 +325,13 @@ header h2 { margin: 0 0 6px; font-size: var(--t-lg); letter-spacing: -.01em; }
 .note { margin: 0 0 8px; font-size: var(--t-sm); color: var(--text-faint); line-height: 1.65; max-width: 68ch; }
 .note.attention { color: var(--warn); opacity: .9; }
 
+/* La boite elle-meme (fond, bordure, couleur, marge interne, interligne, taille
+   de texte) vient de `.panne-inline` dans style.css. Ne reste ici que ce qui
+   est propre a cet emplacement : pas de marge externe, et la mise en ligne du
+   bouton « Actualiser » a cote du texte. */
 .panne-inline {
   display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  margin: 0; padding: 9px 12px; border-radius: 8px; font-size: var(--t-sm);
-  background: color-mix(in srgb, var(--err) 8%, transparent);
-  border: 1px solid color-mix(in srgb, var(--err) 30%, transparent);
-  color: var(--err);
+  margin: 0;
 }
 
 .etat { display: flex; gap: 7px; flex-wrap: wrap; }

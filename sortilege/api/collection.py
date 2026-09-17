@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
 from ..config import get_settings
-from ..core.collection import Work, fill_known_episodes, group
+from ..core.collection import Work, fill_known_episodes, forget_files, group
 from ..core.companions import TRASH_DIRNAME, trash_destination
 from ..core.journal import MoveRecord, _move
 from ..core.matching import title_similarity
@@ -41,6 +41,16 @@ class IndexJob:
     built_at: float = 0.0
     error: str | None = None
     works: list[Work] = field(default_factory=list)
+
+    retires_pendant_lecture: set[str] = field(default_factory=set)
+    """Chemins retires du disque PENDANT une lecture de la bibliotheque.
+
+    La lecture rend la main le temps d'interroger le fournisseur — une a deux
+    requetes par oeuvre, donc des minutes. Une suppression faite dans cet
+    intervalle mutait l'ancien index, que la lecture ecrasait ensuite avec sa
+    photo d'AVANT : le doublon supprime reapparaissait, et le clic suivant
+    repondait « fichier introuvable ». Ces chemins sont donc retires une
+    seconde fois, de la photo neuve."""
 
     ranged_since: int = 0
     """Fichiers ranges depuis le debut de la derniere lecture reussie.
@@ -84,8 +94,24 @@ def forget_index() -> None:
     """Oublie l'index de bibliotheque. « Relire la bibliotheque » le refait."""
     _job.works = []
     _job.built_at = 0.0
+    _job.retires_pendant_lecture.clear()
     # Plus d'index, plus rien a lui reprocher : l'ecran dit deja de le relire.
     _job.ranged_since = 0
+
+
+def _oublie_fichiers(chemins: list[str]) -> None:
+    """Met l'index au niveau du disque apres des retraits reussis.
+
+    L'index etait fige jusqu'a la prochaine lecture complete : l'ecran
+    continuait d'annoncer les fichiers qu'on venait de supprimer, et le meme
+    bouton proposait de les supprimer encore.
+    """
+    if not chemins:
+        return
+    _job.works = forget_files(_job.works, chemins)
+    # Si une lecture tourne, sa photo date d'avant ce retrait.
+    if _job.running:
+        _job.retires_pendant_lecture.update(chemins)
 
 
 def note_ranged(count: int) -> None:
@@ -160,6 +186,9 @@ async def _build() -> None:
     # peut lui avoir echappe, il doit rester signale.
     deja_comptes = _job.ranged_since
 
+    # Ce qui sera retire A PARTIR DE MAINTENANT concerne la photo qu'on prend.
+    _job.retires_pendant_lecture.clear()
+
     roots = [conf.library_root]
     result = scan(roots, deep=False, library_root=conf.library_root, rules=scan_rules())
 
@@ -175,7 +204,8 @@ async def _build() -> None:
         if tmdb is not None:
             await tmdb.aclose()
 
-    _job.works = works
+    _job.works = forget_files(works, _job.retires_pendant_lecture)
+    _job.retires_pendant_lecture.clear()
     _job.built_at = time.time()
     _job.ranged_since = max(0, _job.ranged_since - deja_comptes)
     logger.info("index construit : %s oeuvres", len(works))
@@ -300,6 +330,7 @@ def trash_duplicates(body: TrashRequest) -> dict[str, object]:
         )
         moved.append({"path": relative, "ok": True, "message": "mis en corbeille"})
 
+    _oublie_fichiers([str(m["path"]) for m in moved if m["ok"]])
     return {
         "trashed": sum(1 for m in moved if m["ok"]),
         "failed": sum(1 for m in moved if not m["ok"]),
@@ -373,6 +404,7 @@ def delete_duplicates(body: DeleteDuplicatesRequest) -> dict[str, object]:
             logger.info("doublon supprime : %s (%s octets)", cible, taille)
             resultats.append({"path": relative, "ok": True, "message": "supprime"})
 
+    _oublie_fichiers([str(r["path"]) for r in resultats if r["ok"]])
     return {
         "deleted": sum(1 for r in resultats if r["ok"]),
         "failed": sum(1 for r in resultats if not r["ok"]),
@@ -425,8 +457,41 @@ def prune_duplicates(body: PruneDuplicatesRequest) -> dict[str, object]:
     )
 
     if body.trash:
-        sortie = trash_duplicates(TrashRequest(paths=[p for g in groupes for p in g.paths]))
-        return {**sortie, "deleted": sortie["trashed"], "freed_bytes": 0}
+        # La meme condition que pour la suppression : on ne retire un
+        # exemplaire que si celui qu'on garde est REELLEMENT sur le disque.
+        # L'index peut dater, et un exemplaire efface entre-temps par un autre
+        # outil ferait evacuer le dernier restant, en silence.
+        racine = get_settings().library_root
+        refuses: list[dict[str, object]] = []
+        gardables: list[DuplicateGroupIn] = []
+        for groupe in groupes:
+            try:
+                garde = _resolve_in_library(groupe.keep, racine)
+            except ValueError as exc:
+                refuses.append({"path": groupe.keep, "ok": False, "message": str(exc)})
+                continue
+            if garde.is_file():
+                gardables.append(groupe)
+            else:
+                refuses.append(
+                    {
+                        "path": groupe.keep,
+                        "ok": False,
+                        "message": "l'exemplaire a garder est introuvable — rien n'a ete retire",
+                    }
+                )
+
+        sortie = trash_duplicates(TrashRequest(paths=[p for g in gardables for p in g.paths]))
+        resultats = (
+            [*sortie["results"], *refuses] if isinstance(sortie["results"], list) else refuses
+        )
+        return {
+            **sortie,
+            "deleted": sortie["trashed"],
+            "failed": int(sortie["failed"]) + len(refuses),
+            "freed_bytes": 0,
+            "results": resultats,
+        }
     return delete_duplicates(DeleteDuplicatesRequest(groups=groupes, confirm=True))
 
 

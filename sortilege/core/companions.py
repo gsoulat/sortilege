@@ -29,6 +29,7 @@ from pathlib import Path
 
 from .ebook import BOOK_EXTENSIONS
 from .parser import VIDEO_EXTENSIONS
+from .proprietaire import cree_dossier_d_accueil
 
 logger = logging.getLogger(__name__)
 
@@ -289,9 +290,16 @@ def send_to_trash(path: Path, trash_root: Path) -> Path:
     Ne remplace JAMAIS un fichier deja en corbeille (voir
     ``free_trash_destination``). Leve ``OSError`` si le deplacement echoue :
     l'appelant sait s'il doit renoncer a ecrire par-dessus.
+
+    Le lot du jour est cree comme un dossier d'accueil (voir
+    ``core/proprietaire``) : la corbeille est le seul endroit ou l'utilisateur
+    ira vraiment a la main, pour recuperer ou pour vider. Un dossier de lot cree
+    par root sous une corbeille qui lui appartient lui retirerait le droit d'en
+    sortir quoi que ce soit, alors meme que les fichiers deplaces dedans, eux,
+    gardent leur proprietaire d'origine.
     """
     cible = free_trash_destination(trash_root, path)
-    cible.parent.mkdir(parents=True, exist_ok=True)
+    cree_dossier_d_accueil(cible.parent)
     try:
         os.rename(path, cible)
     except OSError as exc:

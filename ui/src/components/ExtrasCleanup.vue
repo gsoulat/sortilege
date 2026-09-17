@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, useId } from 'vue'
 import ConfirmAction from './ConfirmAction.vue'
+import { accord, motif, nombre, pluriel } from '../lib/langue.js'
 
 /**
  * Fichiers annexes RECONNUS de la médiathèque : vignettes Jellyfin, affiches,
@@ -47,33 +48,6 @@ const idBase = useId()
 const analyse = ref(null)
 const analysant = ref(false)
 const panneAnalyse = ref(null)
-
-/** Une erreur de validation FastAPI (`{loc, msg}`) en une ligne lisible. */
-function erreurDeChamp(e) {
-  if (!e || typeof e !== 'object') return ''
-  const champ = Array.isArray(e.loc) ? e.loc.filter((x) => x !== 'body').join('.') : ''
-  const msg = typeof e.msg === 'string' ? e.msg : ''
-  if (champ && msg) return `champ « ${champ} » : ${msg}`
-  return msg || (champ ? `champ « ${champ} »` : '')
-}
-
-/**
- * Le motif d'un refus, tel que le serveur l'a écrit. Un `detail` en liste — la
- * validation de FastAPI, réponse 422 — est aplati champ par champ plutôt
- * qu'affiché brut ; illisible, il laisse place au code, qui reste vrai.
- */
-function motif(corps, statut, defaut) {
-  const detail = corps?.detail
-  if (typeof detail === 'string' && detail) return detail
-  const lignes = Array.isArray(detail) ? detail.map(erreurDeChamp).filter(Boolean) : []
-  if (statut === 422) {
-    return lignes.length
-      ? `Requête mal formée (réponse 422), rien n'a été touché : ${lignes.join(' ; ')}.`
-      : "Requête mal formée (réponse 422) : le serveur l'a refusée sans rien toucher."
-  }
-  if (lignes.length) return `Refus du serveur (réponse ${statut}) : ${lignes.join(' ; ')}.`
-  return defaut ?? `Refus du serveur (réponse ${statut}).`
-}
 
 /**
  * Parcourt la médiathèque. Jamais au montage : sur un NAS, le parcours prend
@@ -190,7 +164,7 @@ const redepots = computed(() => {
       cle: 'fiches',
       texte:
         "L'écriture des fiches est toujours active : les prochains rangements en redéposeront, " +
-        "tout comme le bouton « Écrire les fiches de toute la bibliothèque ».",
+        "tout comme le bouton « Écrire les fiches de toute la médiathèque ».",
       cases,
     })
   }
@@ -256,6 +230,19 @@ async function nettoyer(mode) {
 }
 
 const failed = computed(() => compteRendu.value?.failed ?? [])
+/** Le serveur a rendu tantôt une liste de dossiers, tantôt leur nombre : la
+ *  phrase du compte rendu n'a pas à connaître les deux formes. */
+const dossiersRetires = computed(() => {
+  const rendu = compteRendu.value?.removed_dirs
+  return Array.isArray(rendu) ? rendu.length : (Number(rendu) || 0)
+})
+/**
+ * Les refus REGROUPÉS par cause. Un seul dossier appartenant à root bloquait
+ * 3 887 fichiers, et l'écran répétait 3 887 fois le même conseil de quatre
+ * lignes : personne ne lit ce mur, alors que la cause est unique.
+ * La liste détaillée reste le repli pour un serveur plus ancien.
+ */
+const causes = computed(() => compteRendu.value?.causes ?? [])
 /** Le serveur peut borner sa liste d'échecs ; le compte, lui, est complet.
  *  Afficher l'un sans l'autre laisserait croire que la liste résume tout. */
 const echecsNonDetailles = computed(() =>
@@ -285,10 +272,6 @@ const raisonGestes = computed(() => {
     return "Les catégories cochées sont vides : rien à retirer. Coche une catégorie qui contient des fichiers."
   return "Rien n'est coché : choisis au moins une catégorie ci-dessus."
 })
-
-const nombre = (n) => (Number(n) || 0).toLocaleString('fr-FR')
-const pluriel = (n, mot) => `${nombre(n)} ${mot}${n > 1 ? 's' : ''}`
-const accord = (n, nom, participe) => `${pluriel(n, nom)} ${participe}${n > 1 ? 's' : ''}`
 
 /** Octets vers Ko, Mo, Go, To — en base 1024, comme les « Go » du reste de
  *  l'application : deux écrans qui annoncent deux poids pour le même dossier
@@ -337,11 +320,19 @@ const libelleAnalyse = computed(() => {
     <h3 :id="idTitre">Fichiers annexes</h3>
     <p class="note">
       Ce sont les fichiers de la médiathèque que Sortilège <strong>sait reconnaître comme
-      annexes</strong> : vignettes de Jellyfin (dossiers <code>.trickplay</code>), affiches
-      déposées au rangement (<code>poster.jpg</code>, <code>fanart.jpg</code>,
-      <code>cover.jpg</code>), fiches <code>.nfo</code> et <code>.opf</code>, sous-titres, et
-      quelques restes de release identifiés un par un. Tout le reste reste en place.
+      annexes</strong>. Tout le reste reste en place.
     </p>
+    <!-- L'énumération se lit une fois, et les catégories ci-dessous la
+         redisent, chacune avec son compte. Elle se replie donc. -->
+    <details class="replie">
+      <summary>Les cinq familles reconnues</summary>
+      <p class="note">
+        Vignettes de Jellyfin (dossiers <code>.trickplay</code>), affiches déposées au
+        rangement (<code>poster.jpg</code>, <code>fanart.jpg</code>, <code>cover.jpg</code>),
+        fiches <code>.nfo</code> et <code>.opf</code>, sous-titres, et quelques restes de
+        release identifiés un par un.
+      </p>
+    </details>
 
     <div class="analyse">
       <button type="button" :disabled="analysant || Boolean(nettoyant)" @click="analyser()">
@@ -363,11 +354,7 @@ const libelleAnalyse = computed(() => {
       peut prendre plusieurs minutes ; le reste de l'écran fonctionne pendant ce temps, et le
       relevé s'affichera ici.
     </p>
-    <p v-else-if="!analyse" class="hint">
-      Rien n'a encore été analysé. Le parcours lit toute la médiathèque : il ne part qu'à la
-      demande, jamais à l'ouverture de l'écran, pour ne pas occuper les disques pour rien. Les
-      catégories à cocher et les gestes de nettoyage apparaissent avec le relevé.
-    </p>
+    <p v-else-if="!analyse" class="hint">Rien n'a encore été analysé.</p>
 
     <template v-else>
       <p class="summary">
@@ -451,77 +438,99 @@ const libelleAnalyse = computed(() => {
             vidéo en version originale peut se retrouver sans. Ceux d'OpenSubtitles se
             recherchent de nouveau dans Réglages → Automatisation → Sous-titres manquants.
           </p>
-          <p
+          <div
             v-if="c.key === 'trickplay' && c.count"
             class="avertissement"
             :class="{ discret: !retenue('trickplay') }"
             role="note"
           >
             Vignettes d'aperçu que Jellyfin génère pour la barre de lecture : rien n'est perdu, il
-            sait les refaire. Mais il les <strong>recrée à sa prochaine tâche planifiée</strong> tant
-            que ses bibliothèques enregistrent le trickplay à côté des médias : la place gagnée se
-            reperdra. Pour l'éviter, désactive dans Jellyfin cet enregistrement à côté des médias,
-            ou l'extraction trickplay elle-même.
-          </p>
+            sait les refaire.
+            <details class="replie">
+              <summary>Elles reviendront d'elles-mêmes</summary>
+              <p>
+                Jellyfin les <strong>recrée à sa prochaine tâche planifiée</strong> tant que ses
+                bibliothèques enregistrent le trickplay à côté des médias : la place gagnée se
+                reperdra. Pour l'éviter, désactive dans Jellyfin cet enregistrement à côté des
+                médias, ou l'extraction trickplay elle-même.
+              </p>
+            </details>
+          </div>
           <p v-if="c.key === 'autres' && c.count" class="avertissement discret" role="note">
-            Uniquement des déchets reconnus, dont la liste figure plus bas : sommes de contrôle,
+            Uniquement des déchets reconnus, listés sous « Ce qui n'est jamais touché » : sommes de contrôle,
             raccourcis, fichiers de parité et d'index de release. Un fichier d'un type inconnu
             n'y entre jamais.
           </p>
         </li>
       </ul>
 
+      <!-- Les comptes restent sous les yeux : « 4 812 vidéos, 311 livres » dit
+           d'un coup d'œil l'étendue de ce qui ne bougera pas. L'énumération des
+           familles protégées et la liste des déchets, elles, se lisent une
+           fois. -->
       <p class="jamais">
-        <strong>Jamais proposés :</strong> les vidéos, les pistes audio et les livres (ici
-        {{ pluriel(proteges.videos ?? 0, 'vidéo') }}<template v-if="proteges.audio">,
-          {{ nombre(proteges.audio) }} {{ proteges.audio > 1 ? 'pistes audio' : 'piste audio' }}</template>
-        et {{ pluriel(proteges.books ?? 0, 'livre') }}), les structures de disque
-        (<code>VIDEO_TS</code>, <code>BDMV</code>, <code>HVDVD_TS</code>, fichiers
-        <code>.ifo</code>, <code>.bup</code>, <code>.mpls</code>…), et les
-        <strong>fichiers d'un type que Sortilège ne reconnaît pas</strong>
-        (<template v-if="inconnus">ici {{ pluriel(inconnus, 'fichier') }}</template><template v-else>aucun ici</template>)
-        : ils ne figurent dans aucune catégorie et restent en place quoi qu'on coche. La
-        corbeille de Sortilège<template v-if="analyse.trash_path">
-          (<code>{{ analyse.trash_path }}</code>)</template> n'est pas parcourue non plus.
+        <strong>Jamais proposés :</strong> {{ pluriel(proteges.videos ?? 0, 'vidéo') }}<template v-if="proteges.audio">,
+          {{ nombre(proteges.audio) }} {{ proteges.audio > 1 ? 'pistes audio' : 'piste audio' }}</template>,
+        {{ pluriel(proteges.books ?? 0, 'livre') }} et
+        <template v-if="inconnus">{{ pluriel(inconnus, 'fichier') }} d'un type que Sortilège ne
+          reconnaît pas</template><template v-else>aucun fichier d'un type inconnu</template>.
       </p>
-      <template v-if="inconnus">
-        <button
-          v-if="exemplesInconnus.length"
-          type="button"
-          class="depliant depliant-jamais"
-          :aria-expanded="inconnusOuverts"
-          :aria-controls="`${idBase}-inconnus`"
-          @click="inconnusOuverts = !inconnusOuverts"
-        >
-          {{ inconnusOuverts ? 'Masquer les fichiers non reconnus' : 'Voir des fichiers non reconnus' }}
-        </button>
-        <p v-else class="indispo">Le serveur n'a transmis aucun exemple de fichier non reconnu.</p>
-        <div v-show="inconnusOuverts" :id="`${idBase}-inconnus`" class="exemples exemples-jamais">
-          <p class="exemples-titre">
-            <template v-if="inconnus > exemplesInconnus.length">
-              Premiers exemples : {{ nombre(exemplesInconnus.length) }} sur {{ nombre(inconnus) }},
-              laissés en place
-            </template>
-            <template v-else>Liste complète, laissée en place</template>
-          </p>
-          <ul>
-            <li v-for="s in exemplesInconnus" :key="s"><code>{{ s }}</code></li>
-          </ul>
-        </div>
-      </template>
-      <p class="jamais">
-        « Autres restes reconnus » ne retient que ces déchets : les extensions
-        <template v-for="(e, i) in DECHETS_EXTENSIONS" :key="e"><template v-if="i > 0">, </template><code>{{ e }}</code></template>,
-        et les fichiers
-        <template v-for="(n, i) in DECHETS_NOMS" :key="n"><template v-if="i > 0">, </template><code>{{ n }}</code></template>.
-      </p>
+      <details class="replie">
+        <summary>Ce qui n'est jamais touché</summary>
+        <p class="jamais">
+          Les vidéos, les pistes audio et les livres, les structures de disque
+          (<code>VIDEO_TS</code>, <code>BDMV</code>, <code>HVDVD_TS</code>, fichiers
+          <code>.ifo</code>, <code>.bup</code>, <code>.mpls</code>…), et les
+          <strong>fichiers d'un type que Sortilège ne reconnaît pas</strong> : ils ne figurent
+          dans aucune catégorie et restent en place quoi qu'on coche. La corbeille de
+          Sortilège<template v-if="analyse.trash_path">
+            (<code>{{ analyse.trash_path }}</code>)</template> n'est pas parcourue non plus.
+        </p>
+        <template v-if="inconnus">
+          <button
+            v-if="exemplesInconnus.length"
+            type="button"
+            class="depliant depliant-jamais"
+            :aria-expanded="inconnusOuverts"
+            :aria-controls="`${idBase}-inconnus`"
+            @click="inconnusOuverts = !inconnusOuverts"
+          >
+            {{ inconnusOuverts ? 'Masquer les fichiers non reconnus' : 'Voir des fichiers non reconnus' }}
+          </button>
+          <p v-else class="indispo">Le serveur n'a transmis aucun exemple de fichier non reconnu.</p>
+          <div v-show="inconnusOuverts" :id="`${idBase}-inconnus`" class="exemples exemples-jamais">
+            <p class="exemples-titre">
+              <template v-if="inconnus > exemplesInconnus.length">
+                Premiers exemples : {{ nombre(exemplesInconnus.length) }} sur {{ nombre(inconnus) }},
+                laissés en place
+              </template>
+              <template v-else>Liste complète, laissée en place</template>
+            </p>
+            <ul>
+              <li v-for="s in exemplesInconnus" :key="s"><code>{{ s }}</code></li>
+            </ul>
+          </div>
+        </template>
+        <p class="jamais">
+          « Autres restes reconnus » ne retient que ces déchets : les extensions
+          <template v-for="(e, i) in DECHETS_EXTENSIONS" :key="e"><template v-if="i > 0">, </template><code>{{ e }}</code></template>,
+          et les fichiers
+          <template v-for="(n, i) in DECHETS_NOMS" :key="n"><template v-if="i > 0">, </template><code>{{ n }}</code></template>.
+        </p>
+      </details>
 
       <div v-for="a in redepots" :key="a.cle" class="redepot" role="note">
-        {{ a.texte }} Pour l'éviter, décoche
-        <template v-for="(cas, i) in a.cases" :key="cas">
-          <template v-if="i > 0"> et </template><em>{{ cas }}</em>
-        </template>
-        dans <strong>Réglages → Bibliothèque → Métadonnées locales</strong>.
+        {{ a.texte }}
+        <details class="replie">
+          <summary>Comment l'éviter</summary>
+          <p>
+            Décoche
+            <template v-for="(cas, i) in a.cases" :key="cas">
+              <template v-if="i > 0"> et </template><em>{{ cas }}</em>
+            </template>
+            dans <strong>Réglages → Médiathèque → Métadonnées locales</strong>.
+          </p>
+        </details>
       </div>
 
       <p class="selection" aria-live="polite">
@@ -581,8 +590,8 @@ const libelleAnalyse = computed(() => {
           {{ poids(compteRendu.bytes) }}.
         </template>
       </p>
-      <p v-if="(Array.isArray(compteRendu.removed_dirs) ? compteRendu.removed_dirs.length : (compteRendu.removed_dirs ?? 0)) > 0" class="hint">
-        {{ (Array.isArray(compteRendu.removed_dirs) ? compteRendu.removed_dirs.length : (compteRendu.removed_dirs ?? 0)) }} {{ (Array.isArray(compteRendu.removed_dirs) ? compteRendu.removed_dirs.length : (compteRendu.removed_dirs ?? 0)) > 1 ? 'dossiers devenus vides retirés' : 'dossier devenu vide retiré' }}.
+      <p v-if="dossiersRetires > 0" class="hint">
+        {{ accord(dossiersRetires, 'dossier devenu vide', 'retiré', 'dossiers devenus vides') }}.
       </p>
       <p v-if="compteRendu.mode !== 'delete' && compteRendu.removed" class="hint">
         <template v-if="compteRendu.trash_path">
@@ -600,7 +609,16 @@ const libelleAnalyse = computed(() => {
           {{ accord(compteRendu.failed_count, 'fichier', 'resté') }} en place, faute d'avoir pu
           être {{ compteRendu.failed_count > 1 ? 'retirés' : 'retiré' }} :
         </p>
-        <ul class="echecs">
+        <ul v-if="causes.length" class="causes">
+          <li v-for="(c, i) in causes" :key="i">
+            <p class="combien">{{ accord(c.count, 'fichier', 'concerné') }}</p>
+            <p class="motif">{{ c.message }}</p>
+            <p v-if="c.examples?.length" class="exemples">
+              Par exemple : {{ c.examples.join(' · ') }}
+            </p>
+          </li>
+        </ul>
+        <ul v-else class="echecs">
           <li v-for="(f, i) in failed" :key="i">{{ f }}</li>
           <li v-if="echecsNonDetailles" class="more">
             … et {{ accord(echecsNonDetailles, 'autre', `que le serveur n'a pas détaillé`) }}.
@@ -693,6 +711,20 @@ code {
 .jamais { margin: 12px 0 0; font-size: var(--t-sm); color: var(--text-faint); line-height: 1.6; max-width: 680px; }
 .jamais strong { color: var(--ok); }
 
+/* Le pli natif : un `<details>` s'ouvre au clavier, retient son état et n'a
+   besoin d'aucun script. Seul le résumé demande à se voir cliquable ; ce qui
+   se replie garde la taille et la couleur qu'il avait au grand jour. */
+.replie { margin: 6px 0 0; max-width: 680px; }
+.replie summary {
+  width: fit-content; padding: 2px 0; cursor: pointer;
+  font-size: var(--t-xs); color: var(--text-faint);
+}
+.replie summary:hover { color: var(--text-dim); }
+.replie summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.replie > p:first-of-type { margin-top: 6px; }
+.avertissement .replie summary, .redepot .replie summary { color: inherit; }
+.avertissement .replie > p, .redepot .replie > p { margin: 6px 0 0; }
+
 .redepot {
   margin: 12px 0 0; padding: 9px 12px; border-radius: 8px; max-width: 680px;
   font-size: var(--t-xs); line-height: 1.6; color: var(--warn);
@@ -724,6 +756,12 @@ button.small { font-size: var(--t-xs); padding: 3px 10px; }
 .compte-rendu { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
 .compte-rendu .summary { margin-top: 0; }
 .compte-rendu .summary strong { color: var(--ok); }
+.causes { list-style: none; display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; }
+.causes li { border-left: 2px solid var(--err); padding-left: 10px; }
+.causes .combien { margin: 0; font-size: var(--t-xs); color: var(--err); font-weight: 600; }
+.causes .motif { margin: 2px 0 0; font-size: var(--t-sm); line-height: 1.55; color: var(--text-dim); }
+.causes .exemples { margin: 2px 0 0; font-size: var(--t-xs); color: var(--text-faint); font-family: var(--mono); overflow-wrap: anywhere; }
+
 .echecs {
   list-style: none; margin: 8px 0 0; padding: 0;
   display: flex; flex-direction: column; gap: 3px;

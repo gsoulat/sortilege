@@ -37,6 +37,7 @@ from pathlib import Path
 
 from .journal import Journal, MoveRecord, _move
 from .probe import probe_media
+from .proprietaire import cree_dossier_d_accueil
 
 logger = logging.getLogger(__name__)
 
@@ -268,9 +269,14 @@ def output_path(job: Job, library_root: Path) -> Path:
     Toujours en Matroska : c'est le seul conteneur courant qui accepte
     l'ensemble des pistes qu'on recopie — plusieurs audios, sous-titres,
     polices. Ecrire un AVI reencode dans un AVI perdrait tout le reste.
+
+    Le dossier de reencodage est cree comme un dossier d'accueil (voir
+    ``core/proprietaire``) : il vit DANS la bibliotheque, et un reencodage
+    interrompu y laisse un fichier a demi ecrit que l'utilisateur doit pouvoir
+    retirer lui-meme. Cree par root, il l'en empecherait.
     """
     dossier = staging_root(library_root)
-    dossier.mkdir(parents=True, exist_ok=True)
+    cree_dossier_d_accueil(dossier)
     return dossier / f"{job.id}-{job.target_height}p.mkv"
 
 
@@ -452,7 +458,9 @@ def replace(job: Job, journal: Journal, trash_root: Path | None) -> tuple[bool, 
         return False, "aucun fichier reencode"
     lot = datetime.now(UTC).strftime("%Y-%m-%d")
     ecarte = trash_root / lot / job.source.name
-    ecarte.parent.mkdir(parents=True, exist_ok=True)
+    # Le lot du jour comme ailleurs : cree a l'identite de la corbeille, faute
+    # de quoi l'utilisateur ne pourrait plus la vider (voir core/proprietaire).
+    cree_dossier_d_accueil(ecarte.parent)
     if ecarte.exists():
         ecarte = ecarte.with_name(f"{job.id}-{job.source.name}")
 

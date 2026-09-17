@@ -1,5 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue'
+import { pluriel } from '../lib/langue.js'
 
 const props = defineProps({
   automation: { type: Object, required: true },
@@ -133,7 +134,7 @@ onUnmounted(() => clearInterval(poller))
           <span class="time">{{ when(h.at) }}</span>
           <span v-if="h.failed" class="statut-echec">Échec</span>
           <span class="msg">{{ h.message }}</span>
-          <span v-if="h.detected" class="counts">{{ h.detected }} détecté(s)</span>
+          <span v-if="h.detected" class="counts">{{ pluriel(h.detected, 'détecté') }}</span>
         </li>
       </ul>
       <p v-else class="history-vide">Aucun passage depuis le démarrage du serveur.</p>

@@ -107,6 +107,9 @@ Deux garde-fous non négociables :
   Sortilège ne pourra ni déplacer ni supprimer ce que ton client a écrit.
 
       ls -ln /volume1/Download   # la 3e colonne est l'UID à reprendre
+
+  Si aucune identité ne convient à tous tes dossiers, voir
+  [`PUID=auto`](#quand-aucune-identité-ne-passe--puidauto).
 - **Rien ne bouge sans un clic.** Deux boutons distincts : « Simuler » vérifie
   tout le trajet sans toucher au disque, « Exécuter » applique la sélection.
   Un plan est un objet, pas une action.
@@ -128,6 +131,44 @@ Deux garde-fous non négociables :
   depuis le navigateur et c'est le serveur qui va la chercher : sans cette
   restriction, le champ ferait du conteneur un relais capable d'émettre vers
   n'importe quelle adresse du réseau domestique.
+
+### Quand aucune identité ne passe : `PUID=auto`
+
+Déplacer ou supprimer un fichier n'exige aucun droit sur le fichier : cela exige
+le droit d'écrire sur le **dossier qui le contient**. C'est une règle du noyau,
+et aucune astuce logicielle ne la contourne. Sur un NAS, JDownloader crée ses
+dossiers en `999:999 drwxr-xr-x` pendant que la bibliothèque appartient à
+`1000:1000` : **aucune identité non-root n'écrit dans les deux**, et Sortilège
+échoue en « Permission denied » quel que soit le `PUID` choisi.
+
+`PUID=auto` (et `PGID=auto`) délègue le choix à Sortilège. Au démarrage, il lit
+le propriétaire et le mode de chaque racine — bibliothèque, sources montées,
+sources ajoutées depuis l'interface — puis :
+
+1. si `1000:1000` écrit partout, cette identité est gardée : rien ne change ;
+2. si une seule des identités **déjà propriétaires** de ces dossiers écrit
+   partout, il la retient — elle existe sur ton NAS, tu la reconnaîtras ;
+3. sinon **root**, en nommant le dossier qui l'y a forcé.
+
+Sans `PUID`, rien ne change non plus : `1000:1000`, comme avant. **Le diagnostic
+s'affiche dans tous les cas** — chaque racine, son propriétaire, son mode, et
+« accessible en écriture » ou non pour l'identité retenue :
+
+```bash
+docker logs sortilege | head -20
+```
+
+**Le compromis root est assumé, et autant le dire franchement** : le conteneur a
+alors tous les droits sur ce qui lui est monté. C'est le prix à payer pour une
+application de NAS, en réseau local, dont le travail consiste précisément à
+déplacer des fichiers appartenant à plusieurs comptes. Le reste du durcissement
+tient : `no-new-privileges`, système de fichiers en lecture seule, et seuls les
+volumes déclarés sont visibles. Les fichiers rangés, eux, prennent l'identité du
+dossier qui les accueille — la bibliothèque ne se remplit pas de fichiers root.
+
+Si ce compromis ne te convient pas, la solution est côté NAS et non côté image :
+donne l'écriture au groupe sur le dossier de téléchargement (`chmod g+w`) et fixe
+`PGID` sur ce groupe. Le diagnostic le confirmera au redémarrage suivant.
 
 ## Démarrage
 

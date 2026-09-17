@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+import stat
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -17,7 +18,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__
+from . import __version__, identite
 from .api import (
     auth,
     automation,
@@ -34,7 +35,7 @@ from .api import (
     workspace,
 )
 from .api.deps import get_store
-from .config import get_settings
+from .config import Settings, get_settings
 from .core import apikey
 from .core import transcode as reencodage
 from .core.auth import SESSION_COOKIE, verify_session
@@ -55,6 +56,58 @@ logger = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "web" / "static"
 
 
+def _diagnostic_des_droits(conf: Settings) -> None:
+    """Sous quelle identite on tourne, et ce que les racines en pensent.
+
+    C'est exactement ce qu'on redemande a l'utilisateur des qu'un rangement
+    echoue en « Permission denied », et qu'il faut sinon aller chercher avec un
+    shell dans le conteneur. L'ecrire au demarrage le met dans le journal AVANT
+    que la question se pose, sur la meme page que l'erreur.
+
+    Trois lignes, pas un tableau : l'identite, puis une ligne par racine. Un
+    diagnostic qu'on ne lit pas ne diagnostique rien.
+
+    Rien ici ne doit empecher de demarrer — une racine absente, illisible ou
+    muette se signale et on passe a la suivante. Un volume pas encore monte est
+    une situation normale au demarrage d'un NAS, pas une raison de refuser de
+    servir l'interface qui permettrait de le corriger. Les racines sont lues par
+    ``identite.lire_racine``, qui borne son ``stat`` : un montage NFS fige y
+    rend la main au lieu d'y rester, et le verdict est rendu dans les MEMES
+    mots que celui publie par l'entrypoint avant le demarrage.
+    """
+    if os.geteuid() == 0:
+        logger.info(
+            "identite effective : 0:0 (root) — ce qui est range adopte "
+            "l'identite de son dossier d'accueil"
+        )
+    else:
+        logger.info("identite effective : %s:%s", os.getuid(), os.getgid())
+
+    # La MEME liste que celle examinee avant le demarrage, sources ajoutees
+    # depuis l'interface comprises : ce sont elles qui peuvent faire basculer le
+    # conteneur en root, les passer sous silence ici donnerait deux diagnostics
+    # contradictoires du meme etat. Dedoublonnee, aussi : la bibliotheque
+    # figure souvent dans les sources, et la ligne sortait deux fois.
+    for racine in identite.chemins_declares(conf):
+        lue = identite.lire_racine(racine)
+        if lue.ecartee:
+            logger.warning("racine %s : %s", racine, lue.ecartee)
+            continue
+        # ``os.access`` et non ``identite.peut_ecrire`` : ici on tourne DEJA sous
+        # l'identite definitive, et le noyau repond en tenant compte des groupes
+        # secondaires, que l'entrypoint ne pouvait que deviner. Il n'est pas
+        # borne, lui : la racine vient pourtant de repondre a un ``stat``, un
+        # montage qui se figerait entre les deux est une malchance, pas le cas
+        # courant qu'on ferme ici.
+        logger.info(
+            "%s : %s en %s, %s",
+            racine,
+            lue.proprietaire,
+            stat.filemode(lue.mode),
+            identite.ECRITURE_OK if os.access(racine, os.W_OK) else identite.ECRITURE_KO,
+        )
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Refuse de demarrer sur une configuration incomplete.
@@ -69,6 +122,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         for p in problems:
             logger.error("configuration invalide : %s", p)
         raise RuntimeError("configuration invalide — voir les erreurs ci-dessus")
+
+    # Apres le controle bloquant, avant tout le reste : les lignes qui suivent
+    # parlent de fichiers, et savoir qui les ecrit se lit mieux avant elles
+    # qu'apres.
+    _diagnostic_des_droits(conf)
 
     if not ffprobe_available():
         logger.warning("ffprobe absent : duree et tags des conteneurs non lisibles")

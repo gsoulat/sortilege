@@ -153,7 +153,7 @@ async function test() {
       </select>
       <p class="hint">
         Langue des titres et des résumés récupérés. Ce n'est pas un choix cosmétique : le
-        titre renvoyé est celui qui est comparé au nom du fichier. Une bibliothèque nommée
+        titre renvoyé est celui qui est comparé au nom du fichier. Une médiathèque nommée
         en anglais mais interrogée en français fait chuter la similarité, donc le score, et
         remplit la file de revue d'identifications pourtant justes.
       </p>
@@ -182,8 +182,8 @@ section {
   border-radius: 10px; padding: 16px 18px;
 }
 h3 {
-  margin: 0 0 10px; font-size: 11px; font-weight: 600;
-  text-transform: uppercase; letter-spacing: .07em; color: var(--text-dim);
+  margin: 0 0 10px; font-size: var(--t-xs); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .07em; color: var(--text-title);
 }
 .note { margin: 0 0 12px; font-size: 12px; color: var(--text-faint); line-height: 1.6; max-width: 660px; }
 .note strong { color: var(--text-dim); }

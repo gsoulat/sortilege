@@ -17,6 +17,8 @@ pouvoir inspecter.
 from __future__ import annotations
 
 import logging
+import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from . import quality
@@ -214,6 +216,87 @@ def group(files: list[ScannedFile], reglages: quality.QualitySettings | None = N
         ]
 
     return sorted(works.values(), key=lambda w: (w.kind, w.title.casefold()))
+
+
+_SLOT_EPISODE = re.compile(r"^S(\d+)E(\d+)(?:-E(\d+))?$")
+_SLOT_ABSOLU = re.compile(r"^ep (\d+)$")
+
+
+def _recalcule_saisons(work: Work) -> None:
+    """Refait ce qu'on possede d'une serie a partir des emplacements restants.
+
+    Sans cela, retirer le seul fichier d'un episode laissait la saison se dire
+    complete : l'episode avait disparu du disque, et l'ecran continuait de
+    l'annoncer possede. Les emplacements portent le numero — « S01E02 »,
+    « S01E01-E03 » pour un fichier double, « ep 12 » en numerotation absolue —,
+    donc ce qui reste se relit sans toucher au disque.
+
+    Ce que le fournisseur CONNAIT est conserve : il ne depend pas de nos
+    fichiers. Une saison dont aucun fichier ne porte de numero est gardee telle
+    quelle — rien dans les emplacements ne permettrait de la reconstruire, et
+    la faire disparaitre serait pire que de la laisser.
+    """
+    if work.kind == "movie":
+        return
+
+    saisons = {numero: s for numero, s in work.seasons.items() if not s.owned}
+    for label in work.slots:
+        if trouve := _SLOT_EPISODE.match(label):
+            numero, debut = int(trouve[1]), int(trouve[2])
+            fin = int(trouve[3]) if trouve[3] else debut
+        elif trouve := _SLOT_ABSOLU.match(label):
+            numero = 0
+            debut = fin = int(trouve[1])
+        else:
+            continue
+        saison = saisons.get(numero)
+        if saison is None:
+            ancienne = work.seasons.get(numero)
+            saison = SeasonHolding(number=numero, known=ancienne.known if ancienne else {})
+            saisons[numero] = saison
+        saison.owned.update(range(debut, fin + 1))
+    work.seasons = saisons
+
+
+def forget_files(works: list[Work], chemins: Iterable[str]) -> list[Work]:
+    """Retire de l'index des fichiers qui viennent de quitter le disque.
+
+    Sans cela, supprimer un doublon laissait l'ecran affirmer « 2 fichiers,
+    1 doublon » jusqu'a la prochaine lecture complete de la bibliotheque : le
+    geste avait bien eu lieu, mais rien ne le montrait, et le meme bouton
+    reproposait de supprimer un fichier deja parti.
+
+    Relire toute la bibliotheque apres chaque suppression serait exact mais
+    couteux — plusieurs minutes sur un NAS. Ce qui est derivable des fichiers
+    restants est donc recalcule ici : nombre, poids, doublons, et ce qu'on
+    possede de chaque saison. Ce dernier point n'est pas theorique : les routes
+    acceptent des chemins quelconques, pas seulement des doublons, et vider un
+    emplacement laissait la saison se dire complete sans son episode.
+    """
+    partis = set(chemins)
+    if not partis:
+        return works
+
+    restants: list[Work] = []
+    for work in works:
+        slots = {
+            label: [f for f in refs if f.relative_path not in partis]
+            for label, refs in work.slots.items()
+        }
+        work.slots = {label: refs for label, refs in slots.items() if refs}
+        fichiers = [f for refs in work.slots.values() for f in refs]
+        if not fichiers:
+            continue
+        work.file_count = len(fichiers)
+        work.total_bytes = sum(f.size_bytes for f in fichiers)
+        work.duplicates = [
+            DuplicateGroup(label=label, files=refs)
+            for label, refs in sorted(work.slots.items())
+            if len(refs) > 1
+        ]
+        _recalcule_saisons(work)
+        restants.append(work)
+    return restants
 
 
 def fill_known_episodes(season: SeasonHolding, episodes: dict[int, object] | None) -> None:
