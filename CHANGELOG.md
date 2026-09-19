@@ -1,6 +1,98 @@
 # CHANGELOG
 
 
+## v0.54.0 (2026-09-19)
+
+### Bug Fixes
+
+- L'apercu converti ecarte les images a horodatage deja pris
+  ([`f982e22`](https://github.com/gsoulat/sortilege/commit/f982e223ff8f62b80792b91402527837798533ee))
+
+Sous le ffmpeg 7.1 de l'image, la conversion HDR vers SDR (zscale + tonemap, absents du ffmpeg de
+  macOS donc jamais executes jusqu'ici) produisait des temps de decodage en double. -fps_mode vfr
+  garde le passage tel quel des horodatages mais ecarte une image dont le temps est deja pris. Le
+  test de fumee affiche, en cas d'echec, les horodatages de la source, du premier segment et de
+  l'assemblage.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+- Pas d'images B dans l'apercu converti, base de temps fine des segments
+  ([`c0e086e`](https://github.com/gsoulat/sortilege/commit/c0e086e9e44f43058349431e193d7abb2bd59ce9))
+
+Trouve par le test de fumee lance DANS l'image : sous le ffmpeg 7.1 de Debian, l'apercu converti
+  d'un film HDR produisait des temps de decodage en double (« 219 >= 219 », une image sur deux). Le
+  reordonnancement des images B, combine aux horodatages d'origine gardes tels quels, entrait en
+  collision avec une base de temps calquee sur la cadence. Le ffmpeg 9 de macOS ne le montrait pas.
+
+Un apercu n'a pas besoin d'images B : sans elles, l'ordre de decodage est celui de l'affichage. Et
+  les segments s'ecrivent en 1/90 000 s.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+- **image**: Construire l'interface sans emulation
+  ([`3867a17`](https://github.com/gsoulat/sortilege/commit/3867a17e21a453b4fde9e306ed854e1d3e1a50f8))
+
+L'interface ne produit que des fichiers statiques, identiques pour amd64 et arm64. Construite sous
+  QEMU pour arm64, `npm ci` a tourne plus d'une heure sans finir lors de la publication de la v0.54
+  (ajout de hls.js) : la publication a ete annulee avant d'avoir pousse quoi que ce soit.
+  --platform=$BUILDPLATFORM la construit nativement.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+### Features
+
+- Copie vers un disque externe, lecteur HLS fiable et reencodage HEVC 10 bits
+  ([`725fea0`](https://github.com/gsoulat/sortilege/commit/725fea01f13bcc3d24a702631ccfca1ee9656d22))
+
+Demandes de l'utilisateur : copier des films et series vers un disque USB choisi, un fichier a la
+  fois, avec une barre et un debit par fichier, pause et reprise ; un lecteur plus stable ; une
+  pause du reencodage ; « le meilleur gain de place, sans perte de qualite, et une lecture fluide
+  via wifi ».
+
+**Copie vers un disque externe.** Nouvelle page : la mediatheque a gauche (recherche a la frappe
+  dans films et series, selection qui survit a la recherche), les disques a droite. Seul ce qui
+  manque est copie : ce que le disque contient deja est reconnu, meme sous un autre nom, et ses
+  dossiers sont reutilises (« Saison 1 »). Un fichier a la fois, debit plafonnable, pause, arret
+  reprenable ; la reprise repart du dernier point de controle apres verification (identite de la
+  source, dernier segment relu en entier, echantillons ailleurs). Un fichier n'apparait sous son nom
+  qu'une fois complet, force sur le disque et verifie.
+
+Surete du NAS, eprouvee par deux controles independants sur de vrais volumes : seuls les disques
+  reellement montes A L'INTERIEUR d'un dossier partage sont proposes — un disque debranche laisse un
+  dossier vide sur la partition systeme, et y ecrire la remplirait. Tout s'ecrit par descripteur
+  depuis la racine du disque ouverte une fois, sans suivre de lien ; le disque est reconnu par un
+  fichier d'identite qu'il porte, meme rebranche ailleurs.
+
+**Lecteur.** « Fichier corrompu » etait un faux diagnostic : le lecteur recopiait un H.264 10 bits
+  qu'aucun navigateur ne decode. Il sert maintenant du HLS (lecture directe, reemballage, ou apercu
+  converti selon ce que le navigateur declare decoder), affiche la position reelle apres un saut, et
+  quand une lecture echoue, fait decoder le fichier par le serveur en 5 points pour dire si c'est le
+  navigateur ou le fichier. Avant « Remplacer », une fiche ORIGINAL | REENCODE avertit d'un H.264 10
+  bits, d'un HDR perdu, d'une piste perdue.
+
+**Reencodage en HEVC 10 bits.** Le reencodage produisait du H.264 10 bits (aucun -pix_fmt), que ni
+  la TV, ni l'iPad, ni Firefox ne decodent : Jellyfin convertissait tout a la volee. Il sort
+  maintenant en HEVC 10 bits pour tout, HDR10/HLG conserves avec leurs metadonnees, Dolby Vision 5
+  refuse, debit plafonne pour le wifi, audio copie (option E-AC3). Corrige en chemin : les films
+  larges etaient deformes (2,39:1 sortait en 2592x1080), l'entrelace n'etait pas desentrelace, la
+  couverture jointe et les sous-titres MP4 etaient perdus, et un encodage pouvait se bloquer a vie
+  sur une source abimee (sortie d'erreur jamais lue). Pause et reprise : ffmpeg suspendu sur place,
+  la pause survit au redemarrage.
+
+**Verifie dans l'image.** Un test de fumee lance DANS l'image Docker, en CI et avant toute
+  publication, un vrai reencodage HDR, un reemballage et une conversion HLS et un controle de
+  decodage avec le ffmpeg de l'image : tout le reste n'avait ete teste qu'avec celui de macOS.
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+### Testing
+
+- Verrouiller l'absence d'images B et la base de temps des segments
+  ([`e518340`](https://github.com/gsoulat/sortilege/commit/e5183406620fe43d0068a7ecfa506a0b6e4746d2))
+
+Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
+
+
 ## v0.53.0 (2026-09-17)
 
 ### Features
