@@ -965,7 +965,8 @@ def test_la_conversion_part_de_l_image_cle_qui_precede() -> None:
     argv = lecture.commande_hls("ffmpeg", Path("/f.mkv"), Path("/s"), a, lecture.decider(a), 90)
 
     assert argv.index("-noaccurate_seek") < argv.index("-i")
-    assert argv[argv.index("-fps_mode") + 1] == "passthrough"
+    # « vfr » : les horodatages d'origine, sans jamais deux images au meme.
+    assert argv[argv.index("-fps_mode") + 1] == "vfr"
     assert "prev_forced_t" in argv[argv.index("-force_key_frames") + 1]
 
 

@@ -852,6 +852,60 @@ def verifier_reencodage(
 # --- 4. Le lecteur --------------------------------------------------------------------
 
 
+def _horodatages(*fichiers: tuple[str, Path]) -> str:
+    """Les 16 premieres images video de chaque fichier : pts, dts, duree, base."""
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe is None:
+        return "ffprobe absent : pas d'horodatages"
+    lignes = []
+    for nom, chemin in fichiers:
+        flux = subprocess.run(  # noqa: S603 - argv fixe
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-select_streams",
+                "v:0",
+                "-show_entries",
+                "stream=time_base,r_frame_rate,avg_frame_rate,has_b_frames",
+                "-of",
+                "compact",
+                str(chemin),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        ).stdout.strip()
+        paquets = (
+            subprocess.run(  # noqa: S603 - argv fixe
+                [
+                    ffprobe,
+                    "-v",
+                    "error",
+                    "-select_streams",
+                    "v:0",
+                    "-read_intervals",
+                    "%+#16",
+                    "-show_entries",
+                    "packet=pts,dts,duration,flags",
+                    "-of",
+                    "compact=p=0:nk=1",
+                    str(chemin),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            .stdout.strip()
+            .splitlines()
+        )
+        lignes.append(f"--- {nom} ({chemin.name}) : {flux}")
+        lignes.append("    pts|dts|duree|drapeaux : " + "  ".join(paquets[:16]))
+    return "\n".join(lignes)
+
+
 def _segments(dossier: Path) -> list[Path]:
     return sorted(dossier.glob("seg_*.m4s"))
 
@@ -932,6 +986,19 @@ def _session(
         video = _video(sonde)
         audio = [f.get("codec_name") for f in _flux(sonde, "audio")]
         decode, detail_decodage = outils.decoder(assemblage)
+        if not decode:
+            # D'ou viennent des horodatages en double : de la source, de la
+            # conversion ou de l'assemblage ? Les premieres images de chacun le
+            # disent, et c'est ce qu'on ne peut pas reproduire hors de l'image.
+            detail_decodage = (
+                (detail_decodage or "")
+                + "\n"
+                + _horodatages(
+                    ("source", source),
+                    ("assemblage", assemblage),
+                    ("premier segment", segments[0]) if segments else ("assemblage", assemblage),
+                )
+            )
         attendu_etiquette = etiquette is None or video.get("codec_tag_string") == etiquette
         t.verifier(
             decode and video.get("codec_name") == codec and attendu_etiquette and audio == ["aac"],
