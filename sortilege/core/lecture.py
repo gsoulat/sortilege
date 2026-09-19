@@ -1285,6 +1285,14 @@ def commande_hls(
             "high",
             "-pix_fmt",
             "yuv420p",
+            # Pas d'images B dans un apercu. Leur reordonnancement, combine aux
+            # horodatages d'origine gardes tels quels, donnait sous le ffmpeg
+            # 7.1 de l'image Docker des temps de decodage EN DOUBLE (« 219 >=
+            # 219 », une image sur deux) : de quoi faire saccader ou refuser
+            # un segment. Sans images B, l'ordre de decodage est celui de
+            # l'affichage. Un apercu n'y perd rien qui se voie.
+            "-bf",
+            "0",
             # Les images gardent leurs horodatages : en cadence fixe, ffmpeg
             # jetterait celles d'avant le point demande — toutes, quand le
             # fichier s'arrete avant.
@@ -1317,7 +1325,10 @@ def commande_hls(
         "-f",
         "hls",
         "-hls_segment_options",
-        "movflags=+frag_discont",
+        # Une base de temps fine (1/90 000 s, celle de la video numerique) :
+        # la base par defaut suivait la cadence, trop grossiere pour ecrire
+        # sans collision des horodatages d'origine decales.
+        "movflags=+frag_discont:video_track_timescale=90000",
         "-hls_time",
         str(SEGMENT_SECONDES),
         "-hls_list_size",
