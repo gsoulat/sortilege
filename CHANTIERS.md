@@ -1,7 +1,7 @@
 # Chantiers
 
-État au 17 septembre 2026. Dernière version publiée : **v0.52.2** ; le lot
-en cours deviendra la **v0.52.3**.
+État au 19 septembre 2026. Dernière version publiée : **v0.53.0** ; le lot
+en cours deviendra la **v0.54.0**.
 
 Convention : `[ ]` à faire, `[~]` en cours, `[x]` fait **et vérifié dans le code**
 — pas seulement annoncé. Un audit a montré qu'un chantier se coche tout seul
@@ -208,6 +208,45 @@ une dépendance nouvelle.
 - [ ] **Aperçu en arbre avant de valider.** Une série qui partirait dans deux
       dossiers se voit d'un coup d'œil sur un arbre ; en liste de chemins, elle
       est invisible.
+
+### Copie vers un disque externe (19 septembre)
+
+- [x] Page « Copie » : la médiathèque à gauche (recherche à la frappe dans films
+      et séries, sélection qui survit à la recherche), les disques à droite ;
+      ne copie que ce qui manque, en reconnaissant ce qui est déjà sur le disque
+      même sous un autre nom, et en réutilisant ses dossiers (« Saison 1 »)
+- [x] Un fichier à la fois, une barre et un débit en Mo/s par fichier, plafond
+      de débit optionnel, pause, arrêt reprenable, reprise au dernier point de
+      contrôle après vérification (identité de la source, dernier segment relu
+      en entier, échantillons ailleurs)
+- [x] Sûreté du NAS : seuls les disques réellement montés À L'INTÉRIEUR d'un
+      dossier partagé sont proposés (un disque débranché ne laisse plus un
+      dossier vide où écrire sur la partition système) ; tout s'écrit par
+      descripteur depuis la racine du disque ouverte une fois, sans suivre de
+      lien ; le disque est reconnu par un fichier d'identité qu'il porte
+- [x] Vérifié sur un vrai volume exFAT monté : 8/8 fichiers identiques par
+      SHA-256 après copie, arrêt et reprise depuis l'interface
+
+### Lecteur et réencodage (19 septembre)
+
+- [x] Lecteur HLS : lecture directe, réemballage (image intacte) ou aperçu
+      converti selon ce que le navigateur déclare décoder (HEVC, VP9, AV1) ;
+      position réelle affichée après un saut ; « le fichier s'arrête vers
+      1:12 » quand il ment sur sa durée
+- [x] Un échec de lecture fait décoder le fichier par le serveur en 5 points :
+      « aucune erreur aux 5 points testés », ou l'endroit exact de l'erreur —
+      plus de faux « fichier corrompu » du navigateur
+- [x] Fiche ORIGINAL | RÉENCODÉ avant « Remplacer » : profil, profondeur, HDR,
+      définition, durée, pistes ; avertissement grave pour un H.264 10 bits,
+      un HDR perdu, une piste perdue
+- [x] Réencodage en HEVC 10 bits pour tout, HDR10/HLG conservés avec leurs
+      métadonnées, Dolby Vision 5 refusé, débit plafonné pour le wifi, audio
+      copié (option E-AC3), désentrelacement, couverture et sous-titres MP4
+      conservés, films larges non déformés (2,39:1 → 1920×800)
+- [x] Pause et reprise du réencodage : ffmpeg suspendu sur place (SIGSTOP),
+      la pause survit au redémarrage
+- [x] Un encodage ne peut plus se bloquer à vie sur une source abîmée
+- [x] Test de fumée ffmpeg exécuté DANS l'image en CI
 
 ### Passe UX/UI du 17 septembre (cinq analyses, puis correctifs)
 

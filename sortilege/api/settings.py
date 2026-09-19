@@ -51,6 +51,7 @@ from ..core.preferences import (
 )
 from ..core.probe import ffprobe_available
 from ..core.quality import STRATEGIES as QUALITY_STRATEGIES
+from ..core.transcode import CRF_MAX, CRF_MIN, LIBELLE_FORMAT, PRESETS, crf_pour
 from ..core.vpn import POLICIES as VPN_POLICIES
 from ..core.vpn import check as check_vpn
 from ..core.vpn import egress_allowed
@@ -133,12 +134,16 @@ class OversizeIn(BaseModel):
 
 
 class TranscodeIn(BaseModel):
+    """Plus de ``codec`` : tout reencodage est en HEVC 10 bits. Un ancien
+    client qui l'envoie encore est ignore sur ce champ (pydantic ecarte les
+    champs inconnus), pas refuse."""
+
     enabled: bool | None = None
     start_hour: int | None = None
     end_hour: int | None = None
-    codec: str | None = None
     crf: int | None = None
     preset: str | None = None
+    compress_audio: bool | None = None
 
 
 class LocalMetadataIn(BaseModel):
@@ -316,9 +321,14 @@ def read_preferences() -> dict[str, object]:
             "enabled": prefs.transcode.enabled,
             "start_hour": prefs.transcode.start_hour,
             "end_hour": prefs.transcode.end_hour,
-            "codec": prefs.transcode.codec,
+            # Le format n'est plus un choix : il est dit, pas propose.
+            "format": LIBELLE_FORMAT,
             "crf": prefs.transcode.crf,
+            "crf_uhd": crf_pour(2160, prefs.transcode.crf),
+            "crf_min": CRF_MIN,
+            "crf_max": CRF_MAX,
             "preset": prefs.transcode.preset,
+            "compress_audio": prefs.transcode.compress_audio,
         },
         "notifications": {
             "enabled": prefs.notifications.enabled,
@@ -427,12 +437,10 @@ def write_preferences(body: PreferencesIn) -> dict[str, object]:
             if champ in patch:
                 patch[champ] = max(0, min(23, int(patch[champ])))
         if "crf" in patch:
-            # Hors de cette plage, x264 produit soit un fichier enorme, soit une
-            # image inutilisable.
-            patch["crf"] = max(14, min(30, int(patch["crf"])))
-        if patch.get("codec") not in (None, "libx264", "libx265"):
-            patch.pop("codec")
-        if patch.get("preset") not in (None, "veryfast", "fast", "medium", "slow"):
+            # Hors de cette plage, x265 produit soit un fichier qui approche le
+            # poids de la source, soit une image visiblement degradee.
+            patch["crf"] = max(CRF_MIN, min(CRF_MAX, int(patch["crf"])))
+        if patch.get("preset") not in (None, *PRESETS):
             patch.pop("preset")
         trans = TranscodeSettings(**{**asdict(current.transcode), **patch})
 

@@ -143,7 +143,12 @@ def find_companions(video: Path, *, artwork: bool = True) -> list[Companion]:
     videos_in_dir = 0
 
     try:
-        siblings = sorted(video.parent.iterdir())
+        # « ._Film.mkv » est la fiche AppleDouble qu'un Mac depose a cote de
+        # chaque fichier sur un volume non-Apple (partage SMB, exFAT) : 4 Ko de
+        # metadonnees, pas une video. Comptee comme telle, elle faisait croire a
+        # deux videos dans le dossier, et « poster.jpg » etait ecarte — au
+        # rangement comme a la copie vers un disque externe.
+        siblings = sorted(p for p in video.parent.iterdir() if not p.name.startswith("._"))
     except OSError as exc:
         logger.warning("lecture du dossier impossible (%s)", exc)
         return []

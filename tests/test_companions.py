@@ -75,6 +75,22 @@ def test_jaquette_ignoree_si_plusieurs_videos(tmp_path: Path) -> None:
     assert companions == []
 
 
+def test_une_fiche_appledouble_n_est_pas_une_seconde_video(tmp_path: Path) -> None:
+    """« ._Film.mkv », deposee par un Mac sur un partage SMB ou un exFAT, n'est
+    pas une video : la compter ecartait « poster.jpg » comme si le dossier en
+    avait deux. Ni elle ni « ._poster.jpg » ne sont des compagnons."""
+    folder = tmp_path / "Dune (2021)"
+    folder.mkdir()
+    (folder / "Dune (2021).mkv").write_text("video")
+    (folder / "._Dune (2021).mkv").write_bytes(b"\0\5\26\7" + b"\0" * 60)
+    (folder / "poster.jpg").write_text("image")
+    (folder / "._poster.jpg").write_bytes(b"\0\5\26\7" + b"\0" * 60)
+
+    companions = find_companions(folder / "Dune (2021).mkv")
+
+    assert [c.path.name for c in companions] == ["poster.jpg"]
+
+
 def test_les_jaquettes_peuvent_etre_refusees(release: Path) -> None:
     companions = find_companions(video_of(release), artwork=False)
     assert all(c.kind is CompanionKind.SUBTITLE for c in companions)

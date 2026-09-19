@@ -13,24 +13,34 @@ dans le conteneur.
 **Les requetes par plage sont indispensables**, pas un raffinement : sans
 elles, deplacer le curseur d'une video de trois gigaoctets impose de tout
 telecharger depuis le debut. Le navigateur ne propose meme pas la barre de
-progression tant que le serveur n'annonce pas les accepter.
+progression tant que le serveur n'annonce pas les accepter — et Safari refuse
+purement et simplement de lire.
+
+Le lecteur de l'interface passe par un PLAN DE LECTURE (voir ``core/lecture``) :
+lecture directe du fichier, ou HLS reemballe ou converti, servi segment par
+segment comme des fichiers. Et quand la lecture echoue, un controle de
+decodage cote serveur dit si c'est le fichier ou le navigateur.
 """
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import logging
 import mimetypes
 import re
 import shutil
 import subprocess
+import threading
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import Response, StreamingResponse
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from . import review
+from ..core import lecture
+from . import deps, review
 from . import transcode as transcode_api
 from .deps import DATA_DIR
 
@@ -77,13 +87,17 @@ def stream_plan(plan_id: str, request: Request) -> StreamingResponse:
     return _serve_range(plan.source, request)
 
 
-def _serve_range(source: Path, request: Request) -> StreamingResponse:
+def _serve_range(
+    source: Path, request: Request, media_type: str | None = None
+) -> StreamingResponse:
     """Sert un fichier en acceptant les requetes par plage.
 
     Extrait de la route des plans pour servir aussi les fichiers reencodes en
-    attente de verification : c'est exactement le meme besoin — regarder un
-    fichier avant de decider de son sort — et le dupliquer aurait fait diverger
-    la gestion des plages, qui est la partie delicate.
+    attente de verification, puis les segments HLS du lecteur : c'est
+    exactement le meme besoin — regarder un fichier avant de decider de son
+    sort — et le dupliquer aurait fait diverger la gestion des plages, qui est
+    la partie delicate. ``media_type`` sert aux segments ``.m4s``, que
+    ``mimetypes`` ne connait pas : servis en « octet-stream », Safari les refuse.
     """
     if not source.is_file():
         raise HTTPException(status_code=404, detail="Fichier introuvable.")
@@ -103,7 +117,7 @@ def _serve_range(source: Path, request: Request) -> StreamingResponse:
             end = max(start, min(end, size - 1))
             status = 206
 
-    media_type = mimetypes.guess_type(source.name)[0] or "application/octet-stream"
+    media_type = media_type or mimetypes.guess_type(source.name)[0] or "application/octet-stream"
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Length": str(end - start + 1),
@@ -227,73 +241,72 @@ def purge_thumbnails() -> int:
     return supprimees
 
 
+def _capacites(
+    hevc: str = Query("0", pattern=r"^(main10|main|0)$"),
+    vp9: str = Query("0", pattern=r"^(10|8|0)$"),
+    av1: str = Query("0", pattern=r"^(10|8|0)$"),
+) -> dict[str, str]:
+    """Ce que le navigateur declare decoder, tel qu'il l'a mesure lui-meme.
+
+    ``hevc`` : « main10 », « main » ou « 0 » ; ``vp9`` et ``av1`` : « 10 »,
+    « 8 » ou « 0 ». Le lecteur les mesure (``MediaSource.isTypeSupported``) ;
+    le serveur ne peut pas les deviner. Firefox sur Mac decode le HEVC par le
+    materiel, le VP9 et l'AV1 en logiciel : c'est ce qui evite de faire
+    convertir par le NAS un apercu que le navigateur lit tres bien. Toute autre
+    valeur est refusee (422) : ces chaines finissent dans une decision, jamais
+    dans une commande, mais on ne laisse rien entrer d'inattendu.
+    """
+    return {"hevc": hevc, "vp9": vp9, "av1": av1}
+
+
+_CAPACITES = Depends(_capacites)
+
+
 # Codecs video que les navigateurs decodent nativement une fois dans un
-# conteneur MP4. Le H.264 couvre l'ecrasante majorite des releases 1080p ; le
-# HEVC, lui, n'est lu que par Safari et sous conditions.
+# conteneur MP4. Le NOM du codec ne suffit pas : un H.264 High 10 s'appelle
+# « h264 » lui aussi, et aucun navigateur ne le decode — c'est ce qui a fait
+# annoncer « corrompu » un reencodage sain. La decision reelle est
+# ``lecture.h264_8_bits`` ; cet ensemble ne sert plus qu'a nommer la famille.
 REMUXABLE_VIDEO = {"h264", "avc1"}
 
-# Pistes audio lisibles telles quelles. L'AC-3 et le DTS sont courants dans les
-# MKV et ne passent nulle part : ils sont reencodes en AAC, ce qui coute peu
-# compare a une video.
+# Pistes audio lisibles telles quelles dans le MP4 fragmente de la route
+# ``/remux``. L'AC-3 et le DTS sont courants dans les MKV et ne passent nulle
+# part : ils sont reencodes en AAC, ce qui coute peu compare a une video.
 COPYABLE_AUDIO = {"aac", "mp3", "opus", "vorbis", "flac"}
 
 
-def _streams(path: Path) -> tuple[str, str]:
-    """Codecs (video, audio) du fichier. Chaines vides si illisible."""
-    ffprobe = shutil.which("ffprobe")
-    if ffprobe is None:
-        return "", ""
-    try:
-        out = subprocess.run(  # noqa: S603 - argv fixe, pas de shell
-            [
-                ffprobe,
-                "-v",
-                "error",
-                "-show_entries",
-                "stream=codec_type,codec_name",
-                "-of",
-                "csv=p=0",
-                str(path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=THUMB_TIMEOUT,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return "", ""
-
-    video = audio = ""
-    for ligne in out.stdout.splitlines():
-        champs = ligne.strip().split(",")
-        if len(champs) < 2:
-            continue
-        nom, genre = champs[0], champs[1]
-        if genre == "video" and not video:
-            video = nom
-        elif genre == "audio" and not audio:
-            audio = nom
-    return video, audio
-
-
-def _remux_plan(path: Path) -> dict[str, object]:
+def _remux_plan(path: Path, capacites: dict[str, str] | None = None) -> dict[str, object]:
     """Ce qu'il faudrait faire pour que ce fichier soit lisible au navigateur.
 
     Le MKV n'est lu par aucun navigateur courant, mais le CONTENEUR n'est pas
-    le contenu : une release H.264 dans un MKV redevient lisible en changeant
-    simplement d'emballage, sans retoucher a une seule image. C'est le point
-    que j'avais neglige en concluant trop vite qu'il fallait tout reencoder.
+    le contenu : une release H.264 8 bits dans un MKV redevient lisible en
+    changeant simplement d'emballage, sans retoucher a une seule image.
 
-    Reencoder la video, lui, couterait un ordre de grandeur de plus et ferait
-    chauffer le NAS pour verifier trois secondes de film. On refuse donc, et on
-    le dit — les vignettes repondent deja a la question dans ce cas.
+    « possible » ne se decide plus sur le nom du codec : il fallait aussi le
+    format de pixel, faute de quoi un H.264 10 bits etait « reemballe » vers un
+    navigateur incapable de le decoder. La decision est celle du lecteur
+    (``core/lecture``), pour que la mediatheque et l'ecran de verification ne
+    disent jamais deux choses differentes du meme fichier — AVEC les capacites
+    que le navigateur a declarees (``capacites``) : decidee sans elles, la
+    mediatheque privait de lecteur un HEVC en MKV que Firefox lit tres bien, et
+    faisait convertir par le NAS un WebM VP9 ou un MP4 AV1 qu'il lit tels quels.
     """
-    video, audio = _streams(path)
+    analyse = lecture.analyser(path)
+    decision = lecture.decider(
+        analyse,
+        ffmpeg=_ffmpeg_available(),
+        filtres=lecture.filtres_ffmpeg(),
+        **(capacites or {}),
+    )
+    piste = analyse.piste_audio_principale
+    audio = analyse.audio[piste].codec if piste is not None else ""
     return {
-        "video": video,
+        "video": analyse.libelle_video if analyse.a_video else "",
         "audio": audio,
-        "possible": video in REMUXABLE_VIDEO,
+        "possible": decision.mode in (lecture.Mode.DIRECT, lecture.Mode.REMUX),
         "audio_copiable": audio in COPYABLE_AUDIO,
+        "mode": str(decision.mode),
+        "motif": decision.motif,
     }
 
 
@@ -432,6 +445,11 @@ def stream_remuxed(plan_id: str, at: float = 0.0) -> StreamingResponse:
     faudrait remuxer le fichier entier avant la premiere image. En contrepartie
     la barre de progression ne permet pas de sauter — d'ou ``at``, qui redemarre
     le flux plus loin.
+
+    Garde pour les clients de l'API. L'interface ne s'en sert plus : un flux
+    sans plages d'octets, Safari le refuse, et un H.264 10 bits, Firefox le dit
+    « corrompu ». Elle passe par les sessions HLS plus bas, servies comme des
+    fichiers.
     """
     plan = next((p for p in review.current_plans() if p.id == plan_id), None)
     if plan is None or not plan.source.is_file():
@@ -449,9 +467,9 @@ def _serve_remuxed(source: Path, at: float) -> StreamingResponse:
         raise HTTPException(
             status_code=415,
             detail=(
-                f"Video en {infos['video'] or 'codec inconnu'} : la reemballer ne suffirait "
-                "pas, il faudrait la reencoder. Les apercus repondent a la question sans "
-                "faire chauffer le NAS."
+                f"Vidéo en {infos['video'] or 'codec inconnu'} : la réemballer ne suffirait "
+                "pas, aucun navigateur ne la décode. Le lecteur de l'interface la convertit "
+                "pour l'aperçu."
             ),
         )
 
@@ -525,8 +543,10 @@ def stream_transcoded_remuxed(job_id: str, at: float = 0.0) -> StreamingResponse
     """Le meme, reemballe en MP4 pour les navigateurs.
 
     Le resultat est un MKV — le seul conteneur qui accepte toutes les pistes
-    recopiees — et aucun navigateur courant ne le lit. L'image etant en H.264
-    par construction, la reemballer suffit.
+    recopiees — et aucun navigateur courant ne le lit. L'image est en H.264,
+    mais PAS forcement en 8 bits : une source HDR 10 bits donne un H.264 High
+    10, que le reemballage ne rendrait pas plus lisible. C'est refuse (415), et
+    le lecteur de l'interface convertit l'apercu a la place.
     """
     sortie = transcode_api.job_output(job_id)
     if sortie is None:
@@ -535,11 +555,13 @@ def stream_transcoded_remuxed(job_id: str, at: float = 0.0) -> StreamingResponse
 
 
 @router.get("/plan/{plan_id}/positions")
-def thumb_positions(plan_id: str) -> dict[str, object]:
+def thumb_positions(plan_id: str, capacites: dict[str, str] = _CAPACITES) -> dict[str, object]:
     """Ou placer les vignettes, et si l'on peut en produire.
 
     Repondre AVANT d'extraire evite a l'interface d'afficher cinq images
-    cassees quand ffmpeg manque ou que le fichier est illisible.
+    cassees quand ffmpeg manque ou que le fichier est illisible. ``remux``
+    porte la decision du lecteur, prise avec les capacites du navigateur :
+    c'est elle, et non l'extension, qui dit si l'on montre le lecteur.
     """
     plan = next((p for p in review.current_plans() if p.id == plan_id), None)
     if plan is None:
@@ -554,5 +576,339 @@ def thumb_positions(plan_id: str) -> dict[str, object]:
         "playable_in_browser": plan.source.suffix.lower() in BROWSER_FRIENDLY,
         # Ce qu'on peut faire quand le conteneur n'est pas lisible : reemballer
         # sans reencoder, ou seulement montrer des images.
-        "remux": _remux_plan(plan.source) if available else None,
+        "remux": _remux_plan(plan.source, capacites) if available else None,
+    }
+
+
+# --- Le lecteur stable : plan de lecture, sessions HLS, controle -------------
+#
+# Le lecteur de l'interface ne devine plus : il demande d'abord au serveur ce
+# qu'est le fichier et comment le montrer (``/lecture``), ouvre une session si
+# le fichier doit etre reemballe ou converti (``/session``), lit les segments
+# comme des FICHIERS (plages d'octets, longueur, type MIME), et quand la
+# lecture echoue, fait decoder le fichier par le serveur (``/controle``) pour
+# dire si c'est lui ou le navigateur.
+
+_sessions: lecture.Sessions | None = None
+_sessions_verrou = threading.Lock()
+
+controles = lecture.Controles()
+"""Un seul controle de decodage a la fois pour tout le serveur."""
+
+
+def gestionnaire() -> lecture.Sessions:
+    """Les sessions de lecture, creees a la premiere demande.
+
+    Le dossier est lu dans ``deps`` AU MOMENT de la creation, pas a l'import :
+    les tests detournent le dossier de donnees apres avoir importe l'application,
+    et un chemin fige a l'import ecrirait des segments dans le depot.
+    """
+    global _sessions
+    with _sessions_verrou:
+        if _sessions is None:
+            _sessions = lecture.Sessions(deps.DATA_DIR / "lecture")
+            # Filet de securite seulement : ``atexit`` ne passe pas quand le
+            # processus est tue. L'arret normal est ``arreter_sessions``,
+            # appele par le cycle de vie de l'application.
+            atexit.register(_sessions.arreter_tout)
+        return _sessions
+
+
+def arreter_sessions() -> None:
+    """Tue toutes les conversions du lecteur. Appele a l'extinction du serveur.
+
+    Aucun ffmpeg ne doit survivre au serveur : une conversion 4K orpheline
+    tournerait jusqu'a la fin du film, et un reemballage SUSPENDU (SIGSTOP)
+    resterait en memoire indefiniment. Hors de Docker, rien d'autre ne les
+    ramasse — ``atexit`` ne s'execute pas quand uvicorn est interrompu.
+    """
+    with _sessions_verrou:
+        sessions = _sessions
+    if sessions is not None:
+        sessions.arreter_tout()
+
+
+@dataclass(frozen=True)
+class _Cible:
+    """Un fichier que le lecteur peut montrer, designe sans chemin venu du client."""
+
+    cle: str
+    chemin: Path
+    url_directe: str
+    original: Path | None = None
+    duree_originale: float | None = None
+
+
+def _cible_plan(plan_id: str) -> _Cible:
+    plan = next((p for p in review.current_plans() if p.id == plan_id), None)
+    if plan is None or not plan.source.is_file():
+        raise HTTPException(status_code=404, detail="Fichier introuvable.")
+    return _Cible(f"plan:{plan_id}", plan.source, f"/api/media/plan/{plan_id}")
+
+
+def _cible_reencodage(job_id: str) -> _Cible:
+    """Le fichier reencode, et son ORIGINAL : c'est a lui qu'on le compare.
+
+    ``_jobs`` est lu directement : l'API de reencodage n'expose que la sortie,
+    et c'est ici seulement qu'on a besoin des deux cotes.
+    """
+    sortie = transcode_api.job_output(job_id)
+    job = transcode_api._jobs.get(job_id)
+    if sortie is None or job is None:
+        raise HTTPException(status_code=404, detail="Réencodage introuvable.")
+    original = job.source if job.source.is_file() else None
+    duree = job.source_duration or None
+    if duree is None and original is not None:
+        duree = lecture.analyser(original).duree
+    return _Cible(
+        f"transcode:{job_id}",
+        sortie,
+        f"/api/media/transcode/{job_id}",
+        original=original,
+        duree_originale=duree,
+    )
+
+
+def _decision(
+    cible: _Cible, *, conversion: bool = False, capacites: dict[str, str] | None = None
+) -> tuple[lecture.Analyse, lecture.Decision]:
+    analyse = lecture.analyser(cible.chemin)
+    decision = lecture.decider(
+        analyse,
+        ffmpeg=_ffmpeg_available(),
+        filtres=lecture.filtres_ffmpeg(),
+        conversion=conversion,
+        **(capacites or {}),
+    )
+    return analyse, decision
+
+
+def _plan_de_lecture(cible: _Cible, capacites: dict[str, str]) -> dict[str, object]:
+    analyse, decision = _decision(cible, capacites=capacites)
+    return {
+        **decision.en_dict(),
+        "duree": analyse.duree,
+        "url_directe": cible.url_directe if decision.mode is lecture.Mode.DIRECT else None,
+        # Un fichier que ffprobe ne lit pas merite le controle de decodage
+        # d'emblee : c'est la seule facon de savoir s'il est abime.
+        "controler": (
+            decision.mode is lecture.Mode.IMPOSSIBLE
+            and not analyse.lue
+            and analyse.motif_illisible != "ffprobe absent"
+        ),
+        "analyse": analyse.en_dict(),
+    }
+
+
+def _ouvrir(
+    cible: _Cible, at: float, conversion: bool, capacites: dict[str, str]
+) -> dict[str, object]:
+    analyse, decision = _decision(cible, conversion=conversion, capacites=capacites)
+    if decision.mode is lecture.Mode.IMPOSSIBLE:
+        raise HTTPException(status_code=415, detail=decision.motif)
+    if analyse.duree:
+        # Un saut « a 90 % » d'un fichier dont la duree est fausse ne doit pas
+        # demander a ffmpeg une position au-dela de la fin.
+        at = min(max(0.0, at), max(0.0, analyse.duree - 5))
+    else:
+        at = max(0.0, at)
+    if decision.mode is lecture.Mode.DIRECT:
+        return {**decision.en_dict(), "url": cible.url_directe, "at": at, "session": None}
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise HTTPException(status_code=503, detail="ffmpeg absent de l'image.")
+    session = gestionnaire().ouvrir(
+        cle=cible.cle,
+        source=cible.chemin,
+        analyse=analyse,
+        decision=decision,
+        at=at,
+        ffmpeg=ffmpeg,
+    )
+    return {**decision.en_dict(), **session.en_dict()}
+
+
+def _session_finie(exc: lecture.SessionInconnue) -> JSONResponse:
+    """410 quand on sait pourquoi la session a fini, 404 sinon.
+
+    Le lecteur a besoin de la difference : une session mise en veille se
+    relance d'un clic, une session inconnue ne dit rien du fichier — ni l'une
+    ni l'autre ne doit le faire soupconner d'etre abime.
+    """
+    if exc.raison is None:
+        return JSONResponse(status_code=404, content={"detail": exc.motif})
+    return JSONResponse(status_code=410, content={"detail": exc.motif, "raison": str(exc.raison)})
+
+
+@router.get("/plan/{plan_id}/lecture")
+def plan_de_lecture_plan(plan_id: str, capacites: dict[str, str] = _CAPACITES) -> dict[str, object]:
+    """Ce qu'est le fichier d'un plan, et comment le lecteur va le montrer."""
+    return _plan_de_lecture(_cible_plan(plan_id), capacites)
+
+
+@router.get("/transcode/{job_id}/lecture")
+def plan_de_lecture_reencodage(
+    job_id: str, capacites: dict[str, str] = _CAPACITES
+) -> dict[str, object]:
+    return _plan_de_lecture(_cible_reencodage(job_id), capacites)
+
+
+@router.post("/plan/{plan_id}/session")
+def session_plan(
+    plan_id: str,
+    at: float = 0.0,
+    conversion: bool = False,
+    capacites: dict[str, str] = _CAPACITES,
+) -> dict[str, object]:
+    """Ouvre une session de lecture a ``at`` secondes.
+
+    ``conversion`` force la conversion de l'apercu : c'est le recours quand le
+    navigateur echoue sur un fichier que le serveur decode sans erreur.
+    """
+    return _ouvrir(_cible_plan(plan_id), at, conversion, capacites)
+
+
+@router.post("/transcode/{job_id}/session")
+def session_reencodage(
+    job_id: str,
+    at: float = 0.0,
+    conversion: bool = False,
+    capacites: dict[str, str] = _CAPACITES,
+) -> dict[str, object]:
+    return _ouvrir(_cible_reencodage(job_id), at, conversion, capacites)
+
+
+@router.get("/lecture/{sid}", response_model=None)
+def etat_session(sid: str) -> dict[str, object] | JSONResponse:
+    try:
+        return gestionnaire().etat(sid)
+    except lecture.SessionInconnue as exc:
+        return _session_finie(exc)
+
+
+@router.post("/lecture/{sid}/ping", response_model=None)
+def signe_de_vie(sid: str) -> dict[str, object] | JSONResponse:
+    """Le lecteur est toujours la. Sans ce signe, la session s'arrete au bout d'une minute."""
+    try:
+        return gestionnaire().toucher(sid)
+    except lecture.SessionInconnue as exc:
+        return _session_finie(exc)
+
+
+@router.post("/lecture/{sid}/stop")
+def arreter_session(sid: str) -> dict[str, object]:
+    """Fermer le lecteur tue ffmpeg tout de suite, sans attendre la minute d'inactivite.
+
+    En POST : c'est ce que ``navigator.sendBeacon`` sait envoyer quand l'onglet
+    se ferme.
+    """
+    if not lecture.NOM_SESSION.fullmatch(sid):
+        return {"arrete": False}
+    return {"arrete": gestionnaire().arreter(sid)}
+
+
+@router.get("/lecture/{sid}/{nom}", response_model=None)
+def fichier_de_session(sid: str, nom: str, request: Request) -> Response:
+    """Liste de lecture, segment d'initialisation ou segment : servis comme des fichiers.
+
+    Le nom est verifie contre la liste de ce qu'une session produit AVANT tout
+    le reste (voir ``Sessions.fichier``) : aucun chemin ne vient du client.
+    """
+    sessions = gestionnaire()
+    try:
+        if nom == "index.m3u8":
+            texte = sessions.liste(sid)
+            return Response(
+                content=texte,
+                media_type="application/vnd.apple.mpegurl",
+                headers={"Cache-Control": "no-store"},
+            )
+        chemin = sessions.fichier(sid, nom)
+    except lecture.NomRefuse:
+        raise HTTPException(status_code=404, detail="Fichier inconnu dans cette session.") from None
+    except lecture.SessionInconnue as exc:
+        return _session_finie(exc)
+    except lecture.FichierAbsent:
+        if nom == "index.m3u8":
+            return JSONResponse(
+                status_code=503,
+                content={"detail": "Aperçu encore en préparation."},
+                headers={"Retry-After": "2"},
+            )
+        return JSONResponse(
+            status_code=410,
+            content={"detail": "Segment libéré du cache de lecture.", "raison": "segment"},
+        )
+    except lecture.ConversionEchouee as exc:
+        raise HTTPException(
+            status_code=502, detail=f"La préparation de l'aperçu a échoué : {exc}"
+        ) from None
+    return _serve_range(chemin, request, media_type="video/mp4")
+
+
+def _cle_controle(cible: _Cible) -> str:
+    """L'empreinte du fichier, plus la duree de reference quand il y en a une :
+    le meme fichier compare a un autre original n'a pas le meme verdict."""
+    return f"{lecture.empreinte(cible.chemin)}|{cible.duree_originale or ''}"
+
+
+def _lancer_controle(cible: _Cible) -> dict[str, object]:
+    try:
+        return controles.lancer(
+            _cle_controle(cible),
+            cible.chemin,
+            analyse=lecture.analyser(cible.chemin),
+            duree_originale=cible.duree_originale,
+        )
+    except lecture.Occupe:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Un contrôle de décodage tourne déjà sur un autre fichier : un seul à la fois, "
+                "pour ménager le NAS. Nouvel essai dans quelques secondes."
+            ),
+        ) from None
+
+
+@router.post("/plan/{plan_id}/controle")
+def controler_plan(plan_id: str) -> dict[str, object]:
+    """Decode le fichier a cinq endroits. Rend tout de suite ; le resultat se lit en GET."""
+    return _lancer_controle(_cible_plan(plan_id))
+
+
+@router.get("/plan/{plan_id}/controle")
+def controle_plan(plan_id: str) -> dict[str, object]:
+    return controles.etat(_cle_controle(_cible_plan(plan_id)))
+
+
+@router.post("/transcode/{job_id}/controle")
+def controler_reencodage(job_id: str) -> dict[str, object]:
+    return _lancer_controle(_cible_reencodage(job_id))
+
+
+@router.get("/transcode/{job_id}/controle")
+def controle_reencodage(job_id: str) -> dict[str, object]:
+    return controles.etat(_cle_controle(_cible_reencodage(job_id)))
+
+
+@router.get("/transcode/{job_id}/comparaison")
+def comparaison(job_id: str) -> dict[str, object]:
+    """ORIGINAL | REENCODE, cote a cote, et ce qu'il faut savoir avant de remplacer.
+
+    C'est l'ecran ou l'utilisateur jette un original de vingt gigaoctets. Un
+    H.264 10 bits, un HDR perdu, une piste disparue ne se voient pas dans un
+    apercu de trente secondes : ils se lisent ici.
+    """
+    cible = _cible_reencodage(job_id)
+    if cible.original is None:
+        raise HTTPException(status_code=404, detail="L'original a disparu : rien à comparer.")
+    original = lecture.analyser(cible.original)
+    reencode = lecture.analyser(cible.chemin)
+    cle = _cle_controle(cible)
+    resultat = lecture.comparer(original, reencode, controles.resultat(cle))
+    return {
+        "original": original.en_dict(),
+        "reencode": reencode.en_dict(),
+        "controle": controles.etat(cle),
+        **resultat.en_dict(),
     }

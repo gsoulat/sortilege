@@ -108,3 +108,19 @@ jobs:
           echo "Le conteneur n'a jamais repondu :"
           docker logs sortilege-ci
           exit 1
+
+      # Le reencodage et le lecteur passent a ffmpeg des options qui n'existent
+      # pas dans toutes ses versions (-dolbyvision, master-display, bwdif,
+      # frag_discont, fps_mode, zscale...). Les tests unitaires verifient les
+      # commandes, jamais le ffmpeg de l'image qui les recoit : c'est lui qui
+      # tourne sur le NAS. De vraies videos passent ici par le vrai chemin de
+      # l'application, avec CE ffmpeg ; --strict exige aussi zscale et tonemap.
+      #
+      # --entrypoint : l'entrypoint ne fait qu'ajuster PUID/PGID aux dossiers
+      # montes, sans objet ici. --user reprend l'identite par defaut qu'il aurait
+      # donnee (1000:1000) ; le script n'ecrit que dans un dossier temporaire.
+      - name: Verifier ffmpeg dans l'image
+        timeout-minutes: 5
+        run: |
+          docker run --rm --user 1000:1000 --entrypoint python sortilege:ci \
+            -m sortilege.outils.verifier_ffmpeg --strict

@@ -104,10 +104,13 @@ def test_l_audio_et_les_sous_titres_sont_copies() -> None:
 
 def test_la_largeur_est_forcee_paire() -> None:
     """Les encodeurs H.264 et HEVC refusent une largeur impaire : l'encodage
-    echouerait des la premiere image."""
+    echouerait des la premiere image. L'image tient dans une boite 16:9 de la
+    hauteur visee (voir ``filtre_echelle`` et tests/test_reencodage_hevc.py)."""
     commande = build_command(Path("/a.mkv"), Path("/b.mkv"), 720)
 
-    assert commande[commande.index("-vf") + 1] == "scale=-2:720"
+    filtre = commande[commande.index("-vf") + 1]
+    assert "force_divisible_by=2" in filtre
+    assert "min(iw,1280)" in filtre and "min(ih,720)" in filtre
 
 
 def test_les_pistes_optionnelles_ne_font_pas_echouer() -> None:
@@ -351,12 +354,12 @@ def test_sans_budget_on_reste_a_qualite_constante() -> None:
 
 def test_le_mode_debit_borne_les_pics() -> None:
     """Sans maxrate, une scene chargee ferait depasser le budget que la moyenne
-    respectait."""
+    respectait. En HEVC, debit et plafond passent par les parametres x265."""
     commande = build_command(Path("/a.mkv"), Path("/b.mkv"), 720, bitrate_kbps=1500)
 
-    assert "-b:v" in commande
-    assert commande[commande.index("-b:v") + 1] == "1500k"
-    assert "-maxrate" in commande
+    parametres = commande[commande.index("-x265-params") + 1].split(":")
+    assert "bitrate=1500" in parametres
+    assert "vbv-maxrate=2250" in parametres
     assert "-crf" not in commande, "les deux modes s'excluent"
 
 

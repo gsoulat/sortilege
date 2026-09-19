@@ -5,6 +5,7 @@ import ImageZoom from './ImageZoom.vue'
 import BookReader from './BookReader.vue'
 import ConfirmAction from './ConfirmAction.vue'
 import ExtrasCleanup from './ExtrasCleanup.vue'
+import VideoPlayer, { capacitesDecodage } from './VideoPlayer.vue'
 import {
   accord,
   constatServeur,
@@ -1115,7 +1116,13 @@ async function togglePlayer(id) {
   // Les confondre accusait le fichier d'un défaut qui venait du réseau, et
   // envoyait chercher la panne au mauvais endroit. Le message de `fetch`, lui,
   // est en anglais : il ne traverse pas jusqu'à l'écran.
-  const res = await fetch(`/api/media/plan/${id}/positions`).catch(() => null)
+  //
+  // Les capacités de décodage du navigateur partent avec la question : c'est
+  // la décision du lecteur, avec les MÊMES capacités, qui dit si l'on montre
+  // le lecteur. Posée sans elles, un HEVC en MKV que Firefox lit très bien
+  // n'avait plus de lecteur, et un WebM VP9 était converti par le NAS.
+  const capacites = new URLSearchParams(capacitesDecodage())
+  const res = await fetch(`/api/media/plan/${id}/positions?${capacites}`).catch(() => null)
   let panne = 'Sortilège ne répond pas'
   if (res) {
     panne = `Sortilège a répondu une erreur (réponse ${res.status})`
@@ -1833,20 +1840,17 @@ onUnmounted(() => {
                   <code>{{ p.failure.message }}</code>
                 </li>
                 <li v-if="playing === p.id" class="player">
-                  <template v-if="preview?.playable_in_browser">
-                    <video controls preload="metadata" :src="`/api/media/plan/${p.id}`"></video>
-                  </template>
-                  <!-- Conteneur illisible mais image lisible : on réemballe à la
-                       volée, sans réencoder. Une release H.264 dans un MKV est
-                       parfaitement lisible une fois dans un MP4. -->
-                  <template v-else-if="preview?.remux?.possible">
-                    <video controls preload="none" :src="`/api/media/plan/${p.id}/remux`"></video>
-                    <p class="thumb-note">
-                      Réemballé en MP4 à la volée — l'image n'est pas réencodée. La barre de
-                      progression ne permet pas de sauter : le flux est produit au fil de la
-                      lecture.
-                    </p>
-                  </template>
+                  <!-- Lisible tel quel, ou à réemballer sans toucher à l'image —
+                       c'est la décision du lecteur, prise avec les capacités de
+                       ce navigateur, qui le dit, pas l'extension du fichier. Sans
+                       ffmpeg, pas de décision possible : l'extension reste le seul
+                       indice. Le lecteur partagé le dit en une ligne, et propose
+                       des sauts dans le fichier. -->
+                  <VideoPlayer
+                    v-if="preview?.remux ? preview.remux.possible : preview?.playable_in_browser"
+                    genre="plan"
+                    :ident="p.id"
+                  />
                   <template v-else-if="preview?.available">
                     <div class="thumbs">
                       <!-- Déclarées boutons et atteignables au Tab : ces
@@ -1952,20 +1956,17 @@ onUnmounted(() => {
                   <code>{{ p.failure.message }}</code>
                 </li>
                 <li v-if="playing === p.id" class="player">
-                  <template v-if="preview?.playable_in_browser">
-                    <video controls preload="metadata" :src="`/api/media/plan/${p.id}`"></video>
-                  </template>
-                  <!-- Conteneur illisible mais image lisible : on réemballe à la
-                       volée, sans réencoder. Une release H.264 dans un MKV est
-                       parfaitement lisible une fois dans un MP4. -->
-                  <template v-else-if="preview?.remux?.possible">
-                    <video controls preload="none" :src="`/api/media/plan/${p.id}/remux`"></video>
-                    <p class="thumb-note">
-                      Réemballé en MP4 à la volée — l'image n'est pas réencodée. La barre de
-                      progression ne permet pas de sauter : le flux est produit au fil de la
-                      lecture.
-                    </p>
-                  </template>
+                  <!-- Lisible tel quel, ou à réemballer sans toucher à l'image —
+                       c'est la décision du lecteur, prise avec les capacités de
+                       ce navigateur, qui le dit, pas l'extension du fichier. Sans
+                       ffmpeg, pas de décision possible : l'extension reste le seul
+                       indice. Le lecteur partagé le dit en une ligne, et propose
+                       des sauts dans le fichier. -->
+                  <VideoPlayer
+                    v-if="preview?.remux ? preview.remux.possible : preview?.playable_in_browser"
+                    genre="plan"
+                    :ident="p.id"
+                  />
                   <template v-else-if="preview?.available">
                     <div class="thumbs">
                       <!-- Déclarées boutons et atteignables au Tab : ces
@@ -2503,7 +2504,7 @@ button.small.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 2
 button.small.play { color: var(--text-faint); }
 
 .files li.player { display: block; margin: 6px 0 10px; }
-.files li.player video { width: 100%; max-width: 620px; border-radius: 6px; background: #000; display: block; }
+.files li.player .video-player { max-width: 620px; }
 .format-warn { margin: 6px 0 0; font-size: 11.5px; color: var(--warn); max-width: 620px; line-height: 1.5; }
 .thumbs { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
 .thumbs img { height: 118px; width: auto; border-radius: 4px; background: #000; flex: none; }

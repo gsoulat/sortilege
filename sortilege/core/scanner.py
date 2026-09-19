@@ -196,6 +196,14 @@ def collect(
 
             if any(_should_skip_dir(part, rules) for part in path.relative_to(root).parts[:-1]):
                 continue
+            # « ._Film.mkv » : les metadonnees que macOS depose a cote de
+            # chaque fichier sur un volume qui n'est pas au format Apple (disque
+            # exFAT, partage SMB). Quatre kilo-octets, une extension video : sans
+            # ce filtre, chacun passait pour un second exemplaire du film — un
+            # doublon fantome par fichier. Ce n'est pas un choix de l'utilisateur,
+            # donc pas compte parmi les fichiers « sautes ».
+            if path.name.startswith("._"):
+                continue
             if not path.is_file() or not is_media(path):
                 continue
             if _should_skip_file(path, rules):

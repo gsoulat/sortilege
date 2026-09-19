@@ -41,6 +41,18 @@ class Settings(BaseSettings):
 
     Vide = les sources et la bibliotheque, comme avant."""
 
+    external_root: Path = Path("/externes")
+    """Ou chercher les disques externes USB, pour y copier des oeuvres.
+
+    Le dossier PARENT sous lequel le NAS monte ses disques USB, monte dans le
+    conteneur avec la propagation ``rslave`` : sans elle, un disque branche
+    apres le demarrage du conteneur n'y apparait jamais. Seuls les VRAIS points
+    de montage trouves dessous sont proposes — le point de montage d'un disque
+    debranche est un dossier vide sur la partition systeme du NAS, et y copier
+    des centaines de gigaoctets le ferait tomber. Voir ``core/copie.py``.
+
+    Absent du conteneur = la fonction dit quoi monter, rien d'autre ne change."""
+
     # --- Fournisseurs (hors prefixe SORTILEGE_) ---
     tmdb_api_key: str = Field(default="", alias="TMDB_API_KEY")
     """Repli seulement : la cle se saisit dans les preferences.

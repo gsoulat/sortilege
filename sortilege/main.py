@@ -7,6 +7,7 @@ directe : aucune configuration CORS, aucun second port a publier.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import stat
@@ -25,6 +26,7 @@ from .api import (
     backup,
     books,
     collection,
+    copie,
     integration,
     library,
     media,
@@ -179,6 +181,18 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     yield
 
+    # La copie vers un disque USB d'abord : c'est la seule chose ici qui perd
+    # du travail a chaque seconde. Son fil est un demon, tue net avec le
+    # processus : sans cet arret, la reprise repartait du point de controle
+    # precedent (jusqu'a 256 Mio a recopier). L'arret pose un dernier point
+    # de controle, dans un delai borne — Docker n'attend que dix secondes
+    # avant SIGKILL. Dans un fil, pour ne pas figer la boucle pendant le fsync.
+    await asyncio.to_thread(copie.arreter_a_l_extinction)
+    # Les conversions du lecteur ensuite : aucun ffmpeg d'apercu ne doit
+    # survivre au serveur. ``atexit`` ne suffisait pas — il ne s'execute pas
+    # quand uvicorn est interrompu hors de Docker, et un reemballage suspendu
+    # (SIGSTOP) restait alors en memoire indefiniment.
+    await asyncio.to_thread(media.arreter_sessions)
     await automation.stop()
     # Un declenchement externe encore en attente n'a plus personne pour le
     # recevoir : le laisser tourner ferait scanner un conteneur qui s'arrete.
@@ -220,6 +234,7 @@ app.include_router(books.router)
 app.include_router(transcode.router)
 app.include_router(backup.router)
 app.include_router(integration.router)
+app.include_router(copie.router)
 
 # Routes accessibles sans session. Liste blanche et non liste noire : oublier
 # d'ajouter une exception rend une page inaccessible, ce qui se voit
