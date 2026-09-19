@@ -259,6 +259,125 @@ reprendre) et `remaining` (ce qui reste après ce lot). Rappeler la route avec
 `offset=<next_offset>` jusqu'à ce que `remaining` vaille `0` traite tout, sans
 repasser sur un lot déjà fait.
 
+## Copier vers un disque externe
+
+Choisir des films et des séries dans la médiathèque, choisir un disque USB :
+Sortilège le parcourt, dit ce qui y est déjà (même sous un autre nom), et copie
+ce qui manque **un fichier à la fois**, pour ne pas saturer le port USB. Une
+série déjà présente sur le disque reçoit ses nouveaux épisodes dans son propre
+dossier de saison (« Saison 1 » sur le disque, même si la médiathèque dit
+« Season 01 »). Rien n'est jamais écrasé : un fichier de même nom mais de
+taille différente est signalé, pas remplacé.
+
+**Le montage — une seule configuration prise en charge.** Monte dans le
+conteneur le dossier *parent* sous lequel ton NAS monte ses disques USB, avec
+la propagation `rslave`, dans un **sous-dossier** de `/externes` (modifiable
+par `SORTILEGE_EXTERNAL_ROOT`) — par exemple `/externes/usb` :
+
+```yaml
+    volumes:
+      - /chemin/du/parent/des/disques:/externes/usb:rslave
+```
+
+Sortilège ne propose comme disque qu'un point de montage trouvé *à
+l'intérieur* d'un dossier de `/externes` (un ou deux niveaux plus bas :
+`/externes/usb/<disque>` ou `/externes/usb/<port>/<disque>`). Sans `rslave`, un
+disque branché après le démarrage du conteneur n'apparaît jamais. **Le chemin
+exact dépend du NAS et de son système** : branche le disque, puis en SSH sur le
+NAS
+
+```bash
+df -h                 # la ligne du disque USB donne son point de montage
+mount | grep -i usb   # ou, selon le NAS, grep -i sd
+```
+
+et monte le dossier qui *contient* ce point de montage.
+
+**Un disque monté directement est refusé.** Un disque relié seul
+(`/chemin/du/disque:/externes/USB1`) apparaît dans la liste, mais n'est jamais
+proposé : débranché, son point de montage reste en place dans le conteneur et
+montre un dossier de la partition système du NAS, et rien ne distingue alors le
+disque absent d'un dossier vide qu'un autre service aurait rempli. Monté par son
+parent en `rslave`, un disque débranché disparaît avec son montage : il n'y a
+plus rien à confondre.
+
+**Pourquoi Sortilège est si méfiant.** Un disque débranché laisse derrière lui
+son point de montage : un dossier vide sur la partition système du NAS. Y
+copier 500 Go remplirait cette partition et ferait tomber le NAS. Seuls les
+vrais points de montage sont donc proposés ; un dossier vide est listé, mais
+refusé, tout comme le volume de la médiathèque elle-même. Pendant la copie,
+chaque fichier vérifie d'abord que le disque est toujours monté, et tout
+s'écrit à travers le disque ouvert au départ, sans suivre aucun lien : un
+disque arraché arrête toute la file, sans qu'aucune écriture n'atteigne le
+dossier resté à sa place. Un lien symbolique posé sur le disque n'est jamais
+suivi, ni pour écrire ni pour dire qu'un fichier « y est déjà » : l'analyse le
+signale.
+
+**Le repère du disque.** Au départ d'une copie, Sortilège pose à la racine du
+disque un petit fichier `.sortilege-disque` qui contient un identifiant
+aléatoire (il le garde s'il y est déjà). C'est ainsi qu'il reconnaît le disque
+pour reprendre une copie : rebranché sur un autre port, un disque change de
+point de montage, et un autre disque peut prendre sa place. Le supprimer rend
+impossible la reprise d'une copie interrompue vers ce disque (il faudra
+l'oublier). Un disque cloné porte le même repère : s'ils sont branchés
+ensemble, la reprise refuse de choisir.
+
+**Interrompre et reprendre.** Un fichier s'écrit sous `<nom>.sortilege-part` et
+ne prend son nom qu'une fois complet (taille contrôlée) et forcé sur le disque.
+Tous les 256 Mio, un point de contrôle est enregistré (`data/copie-reprise.json`),
+après avoir forcé sur le disque ce qui précède. Après un arrêt, un disque
+débranché, un disque repassé en lecture seule ou un redémarrage du conteneur,
+« Reprendre la copie » garantit exactement ceci :
+
+- la copie ne reprend que vers le disque qui porte le repère enregistré, où
+  qu'il soit monté ; si aucun disque branché ne le porte, elle refuse (« le
+  disque de cette copie n'est pas branché ») et n'écrit nulle part ailleurs ;
+- ce qui a été terminé n'est pas recopié : l'analyse est refaite, et un fichier
+  déjà sur le disque sous son nom et à la bonne taille est sauté ;
+- le fichier interrompu ne reprend à son point de contrôle que si la source a
+  la même identité (taille, date, inode, `ctime`), si le fichier partiel est au
+  moins aussi long que le point de contrôle (ce qui le dépasse est coupé : rien
+  ne garantit que c'était écrit), et si son contenu est égal à la source sur
+  **tout le dernier segment** avant le point de contrôle (jusqu'à 256 Mio, là
+  où frappe une coupure) et sur **cinq échantillons** d'un Mio avant lui. Un
+  seul écart, et le fichier repart de zéro, en le disant ;
+- ce qui n'est **pas** garanti : un octet du fichier partiel modifié par autre
+  chose que Sortilège, avant le dernier segment et hors des échantillons, n'est
+  pas vu — le fichier publié porterait cette différence. Relire 40 Go sur un
+  port USB pour s'en assurer coûterait plus que de les recopier : si le disque
+  a été manipulé ailleurs pendant l'interruption, abandonne la copie et
+  relance-la.
+
+Tant qu'une copie interrompue attend, aucune autre ne part. Trois gestes la
+tranchent :
+
+- **Reprendre la copie**, comme ci-dessus ;
+- **Abandonner** : son fichier partiel est retiré du disque, qui doit être
+  branché, puis la copie est oubliée. Si le fichier ne peut pas être retiré
+  (disque en lecture seule, accès refusé, disque qui ne répond pas), rien n'est
+  oublié et l'écran dit pourquoi : le fichier ne reste jamais sur le disque sans
+  que rien ne le désigne. Une suppression commencée est toujours menée à son
+  terme avant de répondre ; une suppression qui n'a pas commencé à temps ne
+  commencera plus ;
+- **Oublier cette copie**, proposé quand son disque n'est pas branché (un
+  disque qui ne reviendra pas) : la copie est oubliée, rien n'est supprimé, et
+  l'écran nomme le fichier partiel resté sur le disque, à supprimer à la main.
+  Si le disque est en fait branché, Sortilège refuse d'oublier et propose de
+  reprendre.
+
+FAT32 limite un fichier à 4 Go, et exFAT/NTFS refusent
+`\ : * ? " < > |` dans un nom : l'analyse le dit avant de copier, sans rien
+renommer en silence.
+
+| Route | Effet |
+|---|---|
+| `GET /api/copy/disks` | Les disques montés, et les dossiers refusés avec leur motif (dont les montages directs) |
+| `POST /api/copy/analyze` | Ce qui est déjà sur le disque, ce qui manque, la place nécessaire |
+| `POST /api/copy/start` | Refait l'analyse, pose le repère du disque puis lance la copie (`409` si elle ne tient pas, ou si une copie interrompue attend) |
+| `GET /api/copy/status` | Avancement, débits, file à venir, copie à reprendre (`disk_available`, `disk_found` : le disque qui porte son repère) |
+| `POST /api/copy/pause` · `resume` · `stop` | Piloter la copie en cours |
+| `POST /api/copy/continue` · `discard` | Reprendre, ou abandonner, une copie interrompue (`discard` refuse — et garde la copie — si le disque est absent ou si le fichier partiel ne peut pas être retiré ; `{"forget": true}` l'oublie sans rien supprimer, seulement si son disque est absent, et le dit) |
+
 ## Sauvegarde et restauration
 
 Tout l'état vit dans un seul volume : un conteneur recréé sans lui repart de

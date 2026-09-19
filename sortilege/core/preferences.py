@@ -38,6 +38,8 @@ from .quality import QualitySettings
 from .safety import PathConfinementError, resolve_within
 from .subtitles import is_language_code, normalise_language
 from .template import PRESETS, TemplateError, validate
+from .transcode import CRF_DEFAUT, CRF_MAX, CRF_MIN, PRESET_DEFAUT
+from .transcode import PRESETS as PRESETS_X265
 from .vpn import Policy as VpnPolicy
 
 logger = logging.getLogger(__name__)
@@ -349,20 +351,86 @@ class TranscodeSettings:
     Un encodage DEJA COMMENCE va a son terme meme si la plage se ferme :
     l'interrompre a six heures du matin jetterait une nuit de calcul."""
 
-    codec: str = "libx264"
-    """H.264 par defaut, pas HEVC : il gagne moins de place mais se lit
-    partout, y compris sur les televiseurs et boitiers anciens. Une
-    bibliotheque qu'on ne peut plus lire n'a pas gagne de place, elle a perdu
-    des films."""
+    # Plus de choix de codec : tout reencodage est en HEVC 10 bits (voir
+    # core/transcode). L'ancien H.264 sortait en 10 bits des sources 10 bits,
+    # et aucun appareil de la maison ne le decodait par le materiel. Les
+    # fichiers ecrits avant ce choix sont relus par ``lire_reencodage``.
 
-    crf: int = 21
-    """Qualite constante. Plus bas = meilleure image et fichier plus gros. 21
-    est le compromis courant pour un reencodage qu'on ne veut pas voir."""
+    crf: int = CRF_DEFAUT
+    """Qualite constante du HEVC jusqu'au 1080p ; au-dela, un cran de plus (22
+    par defaut). Plus bas = meilleure image et fichier plus gros."""
 
-    preset: str = "medium"
-    """Compromis vitesse/compression de x264. « slow » gagne environ dix pour
-    cent de place pour deux fois plus de temps — rarement rentable sur un NAS
-    qui a des nuits, pas des semaines."""
+    preset: str = PRESET_DEFAUT
+    """Compromis vitesse/compression de x265. « slow » gagne encore quelques
+    pour cent de place pour environ deux fois plus de temps — sur un Celeron a
+    quatre coeurs, cela se compte en nuits."""
+
+    compress_audio: bool = False
+    """Convertir les pistes sans perte (TrueHD, DTS-HD MA, DTS, PCM, FLAC
+    multicanal) en E-AC-3 640 kbit/s. Desactive par defaut : l'Atmos et le
+    DTS:X y sont perdus, et ce n'est pas a Sortilege de le decider."""
+
+
+def _migrer_reencodage(brut: object) -> object:
+    """Bloc « transcode » ecrit avant le passage en HEVC -> forme actuelle.
+
+    Ces fichiers portent un champ ``codec`` (« libx264 » par defaut, ecrit meme
+    sans choix de l'utilisateur) : c'est ce qui les reconnait. Le champ
+    disparait, et le CRF est GARDE tel quel, borne a la plage du HEVC.
+
+    Pourquoi pas une « conversion » d'echelle : l'equivalence usuelle (x265 ≈
+    x264 + 5 a qualite visuelle egale) changerait le 21 par defaut en 26, une
+    image visiblement moins bonne que celle qu'on avait. A nombre egal, x265
+    donne une image au moins aussi bonne pour un fichier plus petit : garder le
+    nombre ne peut qu'ameliorer les deux. Seules les extremites du H.264 (14,
+    30) sont ramenees dans les bornes, ou le HEVC n'aurait plus de sens.
+    """
+    if not isinstance(brut, dict) or "codec" not in brut:
+        return brut
+    migre = {cle: valeur for cle, valeur in brut.items() if cle != "codec"}
+    ancien = brut.get("crf")
+    if isinstance(ancien, int) and not isinstance(ancien, bool):
+        migre["crf"] = min(CRF_MAX, max(CRF_MIN, ancien))
+    logger.info(
+        "preferences : reencodage passe en HEVC 10 bits (ancien codec %s, CRF %s -> %s)",
+        brut.get("codec"),
+        ancien,
+        migre.get("crf", CRF_DEFAUT),
+    )
+    return migre
+
+
+def lire_reencodage(brut: object) -> TranscodeSettings:
+    """Relit les reglages de reencodage, anciens compris, dans des bornes sures.
+
+    Un CRF ou un preset hors bornes (fichier edite a la main) est ramene au
+    plus proche plutot que refuse : ffmpeg echouerait sinon chaque nuit, sur
+    chaque fichier, pour une faute de frappe. Les heures de la plage aussi,
+    comme le fait l'API : une heure a 99 ou a -3 n'arrive jamais, et le
+    reencodage n'avait tout simplement jamais lieu, sans rien pour le dire.
+    """
+    reglages = _bloc(TranscodeSettings, _migrer_reencodage(brut))
+    bornes = replace(
+        reglages,
+        crf=min(CRF_MAX, max(CRF_MIN, reglages.crf)),
+        preset=reglages.preset if reglages.preset in PRESETS_X265 else PRESET_DEFAUT,
+        start_hour=min(23, max(0, reglages.start_hour)),
+        end_hour=min(23, max(0, reglages.end_hour)),
+    )
+    if bornes != reglages:
+        logger.warning(
+            "preferences : reencodage ramene dans les bornes (CRF %s -> %s, preset %s -> %s, "
+            "plage %s-%s h -> %s-%s h)",
+            reglages.crf,
+            bornes.crf,
+            reglages.preset,
+            bornes.preset,
+            reglages.start_hour,
+            reglages.end_hour,
+            bornes.start_hour,
+            bornes.end_hour,
+        )
+    return bornes
 
 
 @dataclass
@@ -711,7 +779,7 @@ class PreferenceStore:
                 metadata=_bloc(MetadataSettings, raw.get("metadata")),
                 scan=_bloc(ScanSettings, raw.get("scan")),
                 quality=_bloc(QualitySettings, raw.get("quality")),
-                transcode=_bloc(TranscodeSettings, raw.get("transcode")),
+                transcode=lire_reencodage(raw.get("transcode")),
                 integration=_bloc(IntegrationSettings, raw.get("integration")),
                 local_metadata=_bloc(LocalMetadataSettings, raw.get("local_metadata")),
                 subtitles=_bloc(SubtitleSettings, raw.get("subtitles")),

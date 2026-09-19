@@ -92,6 +92,34 @@ jobs:
             type=semver,pattern={{major}}.{{minor}},value=${{ steps.target.outputs.version }}
             type=raw,value=latest
 
+      # Le test de fumee de la CI (voir ci.yml), refait sur CETTE image avant de
+      # la publier : une image dont le ffmpeg refuse une option du reencodage ou
+      # du lecteur ne doit atteindre aucun NAS. Un echec ici arrete tout, tag et
+      # commit de version compris : la meme version sera recalculee au suivant.
+      #
+      # amd64 seulement, chargee dans le docker local : une image
+      # multi-architecture ne peut pas l'etre, et encoder en HEVC sous emulation
+      # arm64 prendrait de longues minutes. Le ffmpeg arm64 est le meme paquet
+      # Debian, de meme version. Les couches construites ici sont reprises par
+      # la construction publiee, qui suit.
+      - name: Construire l'image a verifier (amd64)
+        if: steps.target.outputs.publish == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: sortilege:verification
+          cache-from: type=gha
+
+      - name: Verifier ffmpeg dans l'image
+        if: steps.target.outputs.publish == 'true'
+        timeout-minutes: 5
+        run: |
+          docker run --rm --user 1000:1000 --entrypoint python sortilege:verification \
+            -m sortilege.outils.verifier_ffmpeg --strict
+
       - name: Construire et publier
         if: steps.target.outputs.publish == 'true'
         uses: docker/build-push-action@v6

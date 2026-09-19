@@ -1,5 +1,7 @@
 <script setup>
-defineProps({
+import { computed } from 'vue'
+
+const props = defineProps({
   transcode: { type: Object, required: true },
 })
 const emit = defineEmits(['change'])
@@ -9,6 +11,26 @@ function patch(fields) {
 }
 
 const HEURES = Array.from({ length: 24 }, (_, h) => h)
+
+// Bornes et cran 4K viennent du serveur, qui les applique de toute façon :
+// les valeurs de repli ne servent que le temps du premier chargement.
+const crfMin = computed(() => props.transcode.crf_min ?? 16)
+const crfMax = computed(() => props.transcode.crf_max ?? 28)
+const crfUhd = computed(() => props.transcode.crf_uhd ?? props.transcode.crf + 1)
+const format = computed(() => props.transcode.format || 'HEVC 10 bits')
+
+function changerCrf(event) {
+  const saisie = event.target.value
+  const n = Math.round(Number(saisie))
+  // Un champ vidé ne doit rien enregistrer : Number('') vaut 0, que le serveur
+  // ramenait à 16 — le réglage changeait sans qu'on l'ait choisi. On remet la
+  // valeur en place.
+  if (saisie.trim() === '' || !Number.isFinite(n)) {
+    event.target.value = props.transcode.crf
+    return
+  }
+  patch({ crf: n })
+}
 </script>
 
 <template>
@@ -59,39 +81,72 @@ const HEURES = Array.from({ length: 24 }, (_, h) => h)
       </span>
     </div>
 
+    <div class="format">
+      <p class="ligne">
+        <span class="puce">{{ format }}</span>
+        <span class="details">Main 10 · MKV · sous-titres et polices copiés</span>
+      </p>
+      <p class="note">
+        La télévision (Jellyfin sur Android TV), l'iPad, l'iPhone et Firefox à partir de la
+        version 136 décodent ce format par le matériel : Jellyfin le leur envoie tel quel, sans
+        le convertir à la volée. Le HDR de la source est conservé — HDR10, HLG, et la base
+        HDR10 des Dolby Vision 7 et 8.1 — au lieu d'être aplati. Le débit est plafonné à
+        20 Mbit/s jusqu'au 1080p et 40 Mbit/s au-delà, pour que la lecture tienne en wifi sans
+        s'arrêter pour charger.
+      </p>
+      <p class="hint">
+        Un Dolby Vision profil 5 n'est jamais réencodé : il n'a pas de couche HDR10, et le
+        résultat aurait des couleurs violettes et vertes. Il est signalé une fois, puis n'est
+        plus proposé.
+      </p>
+    </div>
+
     <div class="row">
-      <label>
-        Codec
-        <select :value="transcode.codec" @change="patch({ codec: $event.target.value })">
-          <option value="libx264">H.264 — lu partout</option>
-          <option value="libx265">HEVC — plus petit, moins compatible</option>
-        </select>
-      </label>
       <label>
         Qualité (CRF)
         <input
           type="number"
-          min="14"
-          max="30"
+          :min="crfMin"
+          :max="crfMax"
           :value="transcode.crf"
-          @change="patch({ crf: Number($event.target.value) })"
+          @change="changerCrf"
         />
       </label>
       <label>
         Vitesse
         <select :value="transcode.preset" @change="patch({ preset: $event.target.value })">
-          <option value="veryfast">Très rapide</option>
+          <option value="veryfast">Très rapide — fichiers plus gros</option>
           <option value="fast">Rapide</option>
-          <option value="medium">Moyenne</option>
+          <option value="medium">Moyenne — recommandée</option>
           <option value="slow">Lente — un peu plus compact</option>
         </select>
       </label>
     </div>
     <p class="hint">
-      H.264 gagne moins de place que le HEVC mais se lit partout, y compris sur les téléviseurs
-      et boîtiers anciens — une médiathèque qu'on ne peut plus lire n'a pas gagné de place,
-      elle a perdu des films. CRF plus bas = meilleure image et fichier plus gros ; 21 est le
-      compromis courant pour un réencodage qu'on ne veut pas voir.
+      CRF {{ transcode.crf }} jusqu'au 1080p, {{ crfUhd }} au-delà : le 4K masque davantage ce
+      cran, et il vaut plusieurs gigaoctets par film. Plus bas, l'image est plus fidèle et le
+      fichier plus gros ; à 21, on ne distingue pas le résultat de la source à distance normale
+      d'un téléviseur.
+    </p>
+    <p class="hint">
+      « Lente » gagne encore quelques pour cent de place, pour environ deux fois plus de temps.
+      Sur un Celeron à 4 cœurs, un film de deux heures peut déjà occuper une nuit entière en
+      « Moyenne » : en « Lente », compte le double.
+    </p>
+
+    <label class="switch audio">
+      <input
+        type="checkbox"
+        :checked="transcode.compress_audio"
+        @change="patch({ compress_audio: $event.target.checked })"
+      />
+      Compresser l'audio sans perte audible
+    </label>
+    <p class="hint">
+      Les pistes TrueHD, DTS-HD MA, DTS, PCM et FLAC multicanal deviennent de l'E-AC-3 à
+      640 kbit/s (5.1 au plus) ; les autres pistes sont copiées. Gain typique : 3 à 4 Go par
+      film. Le prix, franchement : <strong>l'Atmos et le DTS:X sont perdus</strong>, et un 7.1
+      devient un 5.1. Désactivé, l'audio est copié à l'identique.
     </p>
   </section>
 </template>
@@ -105,16 +160,38 @@ h3 {
   margin: 0 0 10px; font-size: var(--t-xs); font-weight: 600;
   text-transform: uppercase; letter-spacing: .07em; color: var(--text-title);
 }
-.note { margin: 0 0 12px; font-size: 12px; color: var(--text-faint); line-height: 1.6; max-width: 660px; }
+.note { margin: 0 0 12px; font-size: var(--t-sm); color: var(--text-faint); line-height: 1.6; max-width: 660px; }
+.note strong { color: var(--text-dim); }
 .note.attention { color: var(--warn); opacity: .85; }
-.switch { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 12px; }
-.switch input { accent-color: var(--accent); }
-.row { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
-.row label { font-size: 12px; color: var(--text-dim); display: flex; gap: 6px; align-items: center; }
-select, input[type='number'] {
-  font-size: 12px; padding: 4px 8px; background: var(--surface-2);
-  border: 1px solid var(--border); border-radius: 6px; color: var(--text);
+.switch { display: flex; align-items: center; gap: 8px; font-size: var(--t-sm); margin-bottom: 12px; }
+.switch input { accent-color: var(--accent); flex: none; }
+.switch.audio { margin: 16px 0 6px; }
+.row { display: flex; gap: 10px 14px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+.row label {
+  font-size: var(--t-sm); color: var(--text-dim);
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center; min-width: 0;
 }
-input[type='number'] { width: 64px; }
-.hint { margin: 0; font-size: 11.5px; color: var(--text-faint); line-height: 1.6; max-width: 660px; }
+select, input[type='number'] {
+  font-size: var(--t-sm); padding: 4px 8px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 6px; color: var(--text);
+  max-width: 100%;
+}
+input[type='number'] { width: 68px; }
+.hint { margin: 0 0 8px; font-size: var(--t-xs); color: var(--text-faint); line-height: 1.6; max-width: 660px; }
+.hint strong { color: var(--text-dim); }
+
+/* Le format n'est plus un choix : il se lit, avec sa raison juste dessous. */
+.format {
+  margin: 14px 0; padding: 12px 14px; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--surface-2);
+}
+.format .note { margin-bottom: 8px; }
+.format .hint { margin: 0; }
+.ligne { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 8px; }
+.puce {
+  font-size: var(--t-xs); font-weight: 600; padding: 2px 8px; border-radius: 999px;
+  color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent);
+  border: 1px solid var(--accent-dim);
+}
+.details { font-size: var(--t-xs); color: var(--text-faint); }
 </style>

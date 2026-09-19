@@ -40,6 +40,26 @@ services:
       - ./data:/app/data
       # Parent commun : adapte a ton arborescence.
       - ${MEDIA_ROOT:-/volume1}:/storage
+      # Disques externes USB (facultatif) : pour copier des films et des
+      # series de la mediatheque vers un disque qu'on emporte. Monte le dossier
+      # PARENT sous lequel ton NAS monte ses disques USB — pas un disque en
+      # particulier —, dans un SOUS-DOSSIER de /externes (ici « usb »). Le
+      # chemin depend du NAS : branche le disque, puis en SSH « df -h » ou
+      # « mount | grep -i usb » montre ou il apparait ; monte le dossier qui
+      # CONTIENT ce point de montage.
+      #
+      # C'est la seule configuration prise en charge. Sortilege ne propose
+      # comme disque qu'un point de montage trouve A L'INTERIEUR d'un dossier
+      # de /externes. Un disque monte directement (« /disque:/externes/USB1 »)
+      # est refuse : debranche, son point de montage reste et montre un dossier
+      # de la partition systeme du NAS, que rien ne distingue d'un disque —
+      # y copier des centaines de gigaoctets la remplirait.
+      #
+      # « :rslave » est indispensable : sans cette propagation, un disque
+      # branche APRES le demarrage du conteneur n'y apparait jamais, et un
+      # disque debranche peut y rester visible sous la forme d'un dossier vide.
+      #
+      #   - /chemin/du/parent/des/disques:/externes/usb:rslave
     ports:
       - "${SORTILEGE_PORT:-8117}:8117"
     restart: unless-stopped
