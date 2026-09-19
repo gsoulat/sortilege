@@ -1295,9 +1295,13 @@ def commande_hls(
             "0",
             # Les images gardent leurs horodatages : en cadence fixe, ffmpeg
             # jetterait celles d'avant le point demande — toutes, quand le
-            # fichier s'arrete avant.
+            # fichier s'arrete avant. « vfr » et non « passthrough » : meme
+            # passage tel quel, mais une image dont l'horodatage est deja pris
+            # est ecartee. Sous le ffmpeg 7.1 de l'image, la conversion HDR
+            # produisait des temps de decodage en double (« 219 >= 219 »), que
+            # « passthrough » laissait arriver jusqu'au segment.
             "-fps_mode",
-            "passthrough",
+            "vfr",
             # Une image cle toutes les six secondes, comptees depuis la
             # premiere : sans elle, les segments suivraient les images cles de
             # l'encodeur et leur duree varierait. Comptees depuis la premiere
