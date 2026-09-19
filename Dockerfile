@@ -1,5 +1,10 @@
 # --- Etage 1 : compilation de l'interface -----------------------------------
-FROM node:22-alpine AS ui
+# Construite sur la plate-forme de la MACHINE DE CONSTRUCTION, jamais sous
+# emulation : l'interface ne produit que des fichiers statiques, identiques
+# pour amd64 et arm64. Sous QEMU, `npm ci` pour arm64 a tourne plus d'une heure
+# sans finir lors de la publication de la v0.54 (ajout de hls.js), la ou la
+# construction native prend quelques secondes.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS ui
 
 WORKDIR /ui
 COPY ui/package.json ui/package-lock.json* ./
