@@ -950,7 +950,11 @@ def test_apres_un_saut_les_segments_gardent_la_position_reelle() -> None:
     argv = lecture.commande_hls("ffmpeg", Path("/f.mkv"), Path("/s"), a, lecture.decider(a), 108)
 
     assert argv[argv.index("-output_ts_offset") + 1] == "108.000"
-    assert argv[argv.index("-hls_segment_options") + 1] == "movflags=+frag_discont"
+    options = argv[argv.index("-hls_segment_options") + 1].split(":")
+    assert "movflags=+frag_discont" in options
+    # Base de temps fine : la base calquee sur la cadence donnait, sous le
+    # ffmpeg 7.1 de l'image, des temps de decodage en double.
+    assert "video_track_timescale=90000" in options
     assert "-noaccurate_seek" not in argv
 
 
@@ -1218,3 +1222,14 @@ def test_une_analyse_incomplete_n_est_pas_gardee_en_memoire(monkeypatch, tmp_pat
     assert lecture.analyser(fichier).premiere_image_lue is True
     assert lecture.analyser(fichier).premiere_image_lue is True
     assert len(appels) == 2
+
+
+def test_l_apercu_converti_n_a_pas_d_images_b() -> None:
+    """Trouve par le test de fumee DANS l'image : sous ffmpeg 7.1, le
+    reordonnancement des images B de l'apercu, avec les horodatages d'origine,
+    donnait des temps de decodage en double (« 219 >= 219 »)."""
+    a = analyse(_hevc())
+    argv = lecture.commande_hls("ffmpeg", Path("/f.mkv"), Path("/s"), a, lecture.decider(a), 0)
+
+    assert argv[argv.index("-c:v") + 1] == "libx264", "c'est bien une conversion"
+    assert argv[argv.index("-bf") + 1] == "0"
